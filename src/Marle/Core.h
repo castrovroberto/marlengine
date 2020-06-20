@@ -12,7 +12,3 @@
     #define IMPORT
     #pragma warning Unknown dynamic link import/export semantics.
 #endif
-
-namespace Marle {
-    EXPORT void Print();
-}
