@@ -1,7 +1,7 @@
 #!/bin/bash
 
 vendor/premake5 gmake
-make config=debug clean
+make clean
 make config=debug all
 
 exit 0

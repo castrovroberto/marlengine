@@ -16,7 +16,7 @@ ifeq ($(config),debug)
   TARGET = $(TARGETDIR)/libMarle.so
   OBJDIR = ../bin-int/Debug-linux-x86_64/Marle
   DEFINES +=
-  INCLUDES += -Ivendor/spdlog/include
+  INCLUDES += -Isrc -Ivendor/spdlog/include
   FORCE_INCLUDE +=
   ALL_CPPFLAGS += $(CPPFLAGS) -MMD -MP $(DEFINES) $(INCLUDES)
   ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -fPIC -g
@@ -43,7 +43,7 @@ ifeq ($(config),release)
   TARGET = $(TARGETDIR)/libMarle.so
   OBJDIR = ../bin-int/Release-linux-x86_64/Marle
   DEFINES +=
-  INCLUDES += -Ivendor/spdlog/include
+  INCLUDES += -Isrc -Ivendor/spdlog/include
   FORCE_INCLUDE +=
   ALL_CPPFLAGS += $(CPPFLAGS) -MMD -MP $(DEFINES) $(INCLUDES)
   ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC
@@ -70,7 +70,7 @@ ifeq ($(config),dist)
   TARGET = $(TARGETDIR)/libMarle.so
   OBJDIR = ../bin-int/Dist-linux-x86_64/Marle
   DEFINES +=
-  INCLUDES += -Ivendor/spdlog/include
+  INCLUDES += -Isrc -Ivendor/spdlog/include
   FORCE_INCLUDE +=
   ALL_CPPFLAGS += $(CPPFLAGS) -MMD -MP $(DEFINES) $(INCLUDES)
   ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC

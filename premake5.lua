@@ -25,6 +25,7 @@ project "Marle"
 
     includedirs
     {
+        "%{prj.name}/src",
         "%{prj.name}/vendor/spdlog/include"
     }
 
@@ -52,6 +53,9 @@ project "Sandbox"
     location "Sandbox"
     kind "ConsoleApp"
     language "C++"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
 
     files 
     {

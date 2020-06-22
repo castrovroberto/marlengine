@@ -12,9 +12,9 @@ endif
 
 ifeq ($(config),debug)
   RESCOMP = windres
-  TARGETDIR = bin/Debug
+  TARGETDIR = ../bin/Debug-linux-x86_64/Sandbox
   TARGET = $(TARGETDIR)/Sandbox
-  OBJDIR = obj/Debug
+  OBJDIR = ../bin-int/Debug-linux-x86_64/Sandbox
   DEFINES +=
   INCLUDES += -I../Marle/vendor/spdlog/include -I../Marle/src
   FORCE_INCLUDE +=
@@ -24,7 +24,7 @@ ifeq ($(config),debug)
   ALL_RESFLAGS += $(RESFLAGS) $(DEFINES) $(INCLUDES)
   LIBS += ../bin/Debug-linux-x86_64/Marle/libMarle.so
   LDDEPS += ../bin/Debug-linux-x86_64/Marle/libMarle.so
-  ALL_LDFLAGS += $(LDFLAGS) -L/usr/lib64 -Wl,-rpath,'$$ORIGIN/../../../bin/Debug-linux-x86_64/Marle' -m64
+  ALL_LDFLAGS += $(LDFLAGS) -L/usr/lib64 -Wl,-rpath,'$$ORIGIN/../Marle' -m64
   LINKCMD = $(CXX) -o "$@" $(OBJECTS) $(RESOURCES) $(ALL_LDFLAGS) $(LIBS)
   define PREBUILDCMDS
   endef
@@ -39,9 +39,9 @@ endif
 
 ifeq ($(config),release)
   RESCOMP = windres
-  TARGETDIR = bin/Release
+  TARGETDIR = ../bin/Release-linux-x86_64/Sandbox
   TARGET = $(TARGETDIR)/Sandbox
-  OBJDIR = obj/Release
+  OBJDIR = ../bin-int/Release-linux-x86_64/Sandbox
   DEFINES +=
   INCLUDES += -I../Marle/vendor/spdlog/include -I../Marle/src
   FORCE_INCLUDE +=
@@ -51,7 +51,7 @@ ifeq ($(config),release)
   ALL_RESFLAGS += $(RESFLAGS) $(DEFINES) $(INCLUDES)
   LIBS += ../bin/Release-linux-x86_64/Marle/libMarle.so
   LDDEPS += ../bin/Release-linux-x86_64/Marle/libMarle.so
-  ALL_LDFLAGS += $(LDFLAGS) -L/usr/lib64 -Wl,-rpath,'$$ORIGIN/../../../bin/Release-linux-x86_64/Marle' -m64 -s
+  ALL_LDFLAGS += $(LDFLAGS) -L/usr/lib64 -Wl,-rpath,'$$ORIGIN/../Marle' -m64 -s
   LINKCMD = $(CXX) -o "$@" $(OBJECTS) $(RESOURCES) $(ALL_LDFLAGS) $(LIBS)
   define PREBUILDCMDS
   endef
@@ -66,9 +66,9 @@ endif
 
 ifeq ($(config),dist)
   RESCOMP = windres
-  TARGETDIR = bin/Dist
+  TARGETDIR = ../bin/Dist-linux-x86_64/Sandbox
   TARGET = $(TARGETDIR)/Sandbox
-  OBJDIR = obj/Dist
+  OBJDIR = ../bin-int/Dist-linux-x86_64/Sandbox
   DEFINES +=
   INCLUDES += -I../Marle/vendor/spdlog/include -I../Marle/src
   FORCE_INCLUDE +=
@@ -78,7 +78,7 @@ ifeq ($(config),dist)
   ALL_RESFLAGS += $(RESFLAGS) $(DEFINES) $(INCLUDES)
   LIBS += ../bin/Dist-linux-x86_64/Marle/libMarle.so
   LDDEPS += ../bin/Dist-linux-x86_64/Marle/libMarle.so
-  ALL_LDFLAGS += $(LDFLAGS) -L/usr/lib64 -Wl,-rpath,'$$ORIGIN/../../../bin/Dist-linux-x86_64/Marle' -m64 -s
+  ALL_LDFLAGS += $(LDFLAGS) -L/usr/lib64 -Wl,-rpath,'$$ORIGIN/../Marle' -m64 -s
   LINKCMD = $(CXX) -o "$@" $(OBJECTS) $(RESOURCES) $(ALL_LDFLAGS) $(LIBS)
   define PREBUILDCMDS
   endef
