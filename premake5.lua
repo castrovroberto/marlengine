@@ -23,6 +23,9 @@ project "Marle"
         "%{prj.name}/src/**.cpp",
     }
 
+    pchheader "mrlpch.h"
+    pchsource "Marle/src/mrlpch.h"
+
     includedirs
     {
         "%{prj.name}/src",

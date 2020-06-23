@@ -2,8 +2,6 @@
 
 #include "Event.h"
 
-#include <sstream>
-
 namespace Marle {
 
 	class EXPORT KeyEvent : public Event

@@ -1,18 +1,6 @@
 #pragma once
 
 /*
- * <memory>
- * Standard library header <memory>
- * This header is part of the dynamic memory management library.
- * https://en.cppreference.com/w/cpp/header/memory
- * 
- * memory::shared_ptr
- * smart pointer with shared object ownership semantics
- * 
-/**/
-#include <memory>
-
-/*
  * Core.h
  * Marle Core library header
 /**/

@@ -2,24 +2,6 @@
 
 #include "Marle/Core.h"
 
-// These imports should be included in a precompiled header.
-
-/*
- * Standard library header <string>
- * This header is part of the strings library.
- * https://en.cppreference.com/w/cpp/header/string
- * 
-/**/
-#include <string>
-
-/*
- * Standard library header <functional>
- * This header is part of the function objects library and provides the standard hash function.
- * https://en.cppreference.com/w/cpp/header/functional
- * 
-/**/
-#include <functional>
-
 namespace Marle 
 {
 	/*
@@ -89,6 +71,16 @@ namespace Marle
 	/**/
     class EXPORT Event
 	{
+		/*
+		 * friend 
+		 * friend class declaration
+		 * https://en.cppreference.com/w/cpp/language/friend
+		 * 
+		 * The friend declaration appears in a class body and grants a function 
+		 * or another class access to private and protected members of the class 
+		 * where the friend declaration appears.
+		 * 
+		/**/
 		friend class EventDispatcher;
 	    public:
 			/*
@@ -127,7 +119,58 @@ namespace Marle
 
 	class EventDispatcher
 	{
-		template<typename T>
+		/*
+		 * Function template
+		 * A function template defines a family of functions.
+		 * https://en.cppreference.com/w/cpp/language/function_template
+		 * 
+		 * Function templates are special functions that can operate with generic types. 
+		 * This allows us to create a function template whose functionality can be adapted 
+		 * to more than one type or class without repeating the entire code for each type.
+		 * 
+		 * In C++ this can be achieved using template parameters. 
+		 * A template parameter is a special kind of parameter that can be used to pass a type as argument: 
+		 * just like regular function parameters can be used to pass values to a function, 
+		 * template parameters allow to pass also types to a function. 
+		 * These function templates can use these parameters as if they were any other regular type.
+		 * 
+		 * The format for declaring function templates with type parameters is:
+		 * 		template <class identifier> function_declaration;
+		 * 		template <typename identifier> function_declaration;
+		 * 
+		 * The only difference between both prototypes is the use of either the keyword class or the keyword typename. 
+		 * Its use is indistinct, since both expressions have exactly the same meaning and behave exactly the same way.
+		 * 
+		/**/
+		
+		/*
+		 * using EventFn
+		 * Type alias, alias template (since C++11)
+		 * Type alias is a name that refers to a previously defined type (similar to typedef).
+		 * Alias template is a name that refers to a family of types.
+		 * https://en.cppreference.com/w/cpp/language/type_alias
+		 * 
+		/**/
+
+		/*
+		 * std::function
+		 * Defined in header <functional>
+		 * Class template std::function is a general-purpose polymorphic function wrapper.
+		 * https://en.cppreference.com/w/cpp/utility/functional/function
+		 * 
+		 * template< class R, class... Args >
+		 * class function<R(Args...)>;
+		 * 
+		 * In my own words: 
+		 * Is a template function recieves a class/typename T reference aliased as EventFn
+		 * or event function. And returns a boolean type.
+		 * 
+		 * Event dispatcher class will be instantiated with an Event
+		 * Then if the event is dispatched the dispatcher will know if 
+		 * the event got handled by a certain function type.
+		 * 
+		/**/
+		template<typename T> 
 		using EventFn = std::function<bool(T&)>;
 
 	    public:
@@ -141,6 +184,20 @@ namespace Marle
 			{
 				if (m_Event.GetEventType() == T::GetStaticType())
 				{
+					/*
+					 * This line is intended to know if a dispatched event got handled 
+					 * &m_Event -> address of m_Event
+					 * T* -> pointer to Event object
+					 * *(T*) -> Event object pointer pointed to by T*
+					 * 
+					 * '*(T*)&m_Event' is behaving in the same way as 'T&'
+					 * 
+					 * Basically it depends on the EventFn template declaration.
+					 * 
+					 * EventDispatcher can access m_Handled field because of 
+					 * friend modifier declaration inside Event class.
+					 * 
+					/**/
 					m_Event.m_Handled = func(*(T*)&m_Event);
 					return true;
 				}
@@ -150,6 +207,12 @@ namespace Marle
 			Event& m_Event;
 	};
 
+	/*
+	 * std::ostream::operator<<
+	 * Insert formatted output
+	 * This operator (<<) applied to an output stream is known as insertion operator.
+	 * 
+	/**/
 	inline std::ostream& operator<<(std::ostream& os, const Event& e)
 	{
 		return os << e.ToString();

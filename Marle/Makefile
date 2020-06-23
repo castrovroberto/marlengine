@@ -15,9 +15,11 @@ ifeq ($(config),debug)
   TARGETDIR = ../bin/Debug-linux-x86_64/Marle
   TARGET = $(TARGETDIR)/libMarle.so
   OBJDIR = ../bin-int/Debug-linux-x86_64/Marle
+  PCH = src/mrlpch.h
+  GCH = $(OBJDIR)/$(notdir $(PCH)).gch
   DEFINES +=
   INCLUDES += -Isrc -Ivendor/spdlog/include
-  FORCE_INCLUDE +=
+  FORCE_INCLUDE += -include $(OBJDIR)/$(notdir $(PCH))
   ALL_CPPFLAGS += $(CPPFLAGS) -MMD -MP $(DEFINES) $(INCLUDES)
   ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -fPIC -g
   ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -fPIC -g
@@ -42,9 +44,11 @@ ifeq ($(config),release)
   TARGETDIR = ../bin/Release-linux-x86_64/Marle
   TARGET = $(TARGETDIR)/libMarle.so
   OBJDIR = ../bin-int/Release-linux-x86_64/Marle
+  PCH = src/mrlpch.h
+  GCH = $(OBJDIR)/$(notdir $(PCH)).gch
   DEFINES +=
   INCLUDES += -Isrc -Ivendor/spdlog/include
-  FORCE_INCLUDE +=
+  FORCE_INCLUDE += -include $(OBJDIR)/$(notdir $(PCH))
   ALL_CPPFLAGS += $(CPPFLAGS) -MMD -MP $(DEFINES) $(INCLUDES)
   ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC
   ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC
@@ -69,9 +73,11 @@ ifeq ($(config),dist)
   TARGETDIR = ../bin/Dist-linux-x86_64/Marle
   TARGET = $(TARGETDIR)/libMarle.so
   OBJDIR = ../bin-int/Dist-linux-x86_64/Marle
+  PCH = src/mrlpch.h
+  GCH = $(OBJDIR)/$(notdir $(PCH)).gch
   DEFINES +=
   INCLUDES += -Isrc -Ivendor/spdlog/include
-  FORCE_INCLUDE +=
+  FORCE_INCLUDE += -include $(OBJDIR)/$(notdir $(PCH))
   ALL_CPPFLAGS += $(CPPFLAGS) -MMD -MP $(DEFINES) $(INCLUDES)
   ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC
   ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC
@@ -94,6 +100,7 @@ endif
 OBJECTS := \
 	$(OBJDIR)/Application.o \
 	$(OBJDIR)/Log.o \
+	$(OBJDIR)/mrlpch.o \
 
 RESOURCES := \
 
@@ -156,6 +163,9 @@ $(OBJDIR)/Application.o: src/Marle/Application.cpp
 	@echo $(notdir $<)
 	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
 $(OBJDIR)/Log.o: src/Marle/Log.cpp
+	@echo $(notdir $<)
+	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
+$(OBJDIR)/mrlpch.o: src/mrlpch.cpp
 	@echo $(notdir $<)
 	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
 
