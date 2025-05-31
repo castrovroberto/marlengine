@@ -27,6 +27,10 @@
 // Input
 #include "Marle/Core/KeyCodes.h"
 
+// Renderer
+#include "Marle/Renderer/Renderer2D.h"
+#include "Marle/Platform/OpenGL/OpenGLTexture.h"
+
 // Entry point ==START==
 #include "Marle/EntryPoint.h"
 // Entry point == END ==

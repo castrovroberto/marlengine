@@ -6,11 +6,16 @@ private:
     double m_TotalTimeElapsed = 0.0;
     int m_UpdateCount = 0;
     float m_RectPositionX = 0.0f; // Example value to change in OnUpdate
+    float m_RectPositionY = 100.0f; // Y position for the sprite
+    std::unique_ptr<Marle::OpenGLTexture2D> m_TestTexture;
 
 public:
-    Sandbox() : Marle::Application({"Glass - The Sunken Orangerie - Keyboard Input Test", 1024, 768})
+    Sandbox() : Marle::Application({"Glass - The Sunken Orangerie - Sprite Rendering Test", 1024, 768})
     {
         printf("Sandbox Application created.\n");
+        
+        // Load test texture
+        m_TestTexture = std::make_unique<Marle::OpenGLTexture2D>("Assets/Textures/test_sprite.tga");
     }
 
     ~Sandbox()
@@ -89,9 +94,17 @@ protected:
         // Call base if it does anything important
         Marle::Application::OnRender(interpolation_alpha);
         
-        // In the future, you'd render your game scene here.
-        // For example, rendering a rectangle at m_RectPositionX (interpolated with alpha if implemented)
-        // printf("Sandbox::OnRender - Alpha: %.2f\n", interpolation_alpha);
+        // Begin scene for 2D rendering
+        Marle::Renderer2D::BeginScene();
+        
+        // Draw the test sprite
+        if (m_TestTexture) {
+            // Draw sprite at current position with 64x64 size
+            Marle::Renderer2D::DrawQuad({m_RectPositionX + 512.0f, m_RectPositionY + 384.0f}, {64.0f, 64.0f}, m_TestTexture.get());
+        }
+        
+        // End scene
+        Marle::Renderer2D::EndScene();
     }
 };
 

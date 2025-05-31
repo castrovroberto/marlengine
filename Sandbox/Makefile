@@ -29,7 +29,7 @@ ifeq ($(origin AR), default)
 endif
 RESCOMP = windres
 DEFINES += -DMRL_PLATFORM_MACOS
-INCLUDES += -I../Marle/vendor/spdlog/include -I../Marle/src -I/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1
+INCLUDES += -I../Marle/vendor/spdlog/include -I../Marle/src -I../Marle/vendor/glad/include -I../Marle/vendor -I../Marle/vendor/glm -I/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1
 FORCE_INCLUDE +=
 ALL_CPPFLAGS += $(CPPFLAGS) -MD -MP $(DEFINES) $(INCLUDES)
 ALL_RESFLAGS += $(RESFLAGS) $(DEFINES) $(INCLUDES)

@@ -29,7 +29,7 @@ ifeq ($(origin AR), default)
 endif
 RESCOMP = windres
 DEFINES += -DMRL_PLATFORM_MACOS
-INCLUDES += -Isrc -Ivendor/spdlog/include -Ivendor/glad/include -I/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1
+INCLUDES += -Isrc -Ivendor/spdlog/include -Ivendor/glad/include -Ivendor -Ivendor/glm -I/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1
 FORCE_INCLUDE +=
 ALL_CPPFLAGS += $(CPPFLAGS) -MD -MP $(DEFINES) $(INCLUDES)
 ALL_RESFLAGS += $(RESFLAGS) $(DEFINES) $(INCLUDES)
@@ -81,12 +81,18 @@ GENERATED += $(OBJDIR)/Application.o
 GENERATED += $(OBJDIR)/Log.o
 GENERATED += $(OBJDIR)/MacOSKeyCodes.o
 GENERATED += $(OBJDIR)/MarleGameView.o
+GENERATED += $(OBJDIR)/OpenGLShader.o
+GENERATED += $(OBJDIR)/OpenGLTexture.o
+GENERATED += $(OBJDIR)/Renderer2D.o
 GENERATED += $(OBJDIR)/gl.o
 GENERATED += $(OBJDIR)/mrlpch.o
 OBJECTS += $(OBJDIR)/Application.o
 OBJECTS += $(OBJDIR)/Log.o
 OBJECTS += $(OBJDIR)/MacOSKeyCodes.o
 OBJECTS += $(OBJDIR)/MarleGameView.o
+OBJECTS += $(OBJDIR)/OpenGLShader.o
+OBJECTS += $(OBJDIR)/OpenGLTexture.o
+OBJECTS += $(OBJDIR)/Renderer2D.o
 OBJECTS += $(OBJDIR)/gl.o
 OBJECTS += $(OBJDIR)/mrlpch.o
 
@@ -158,10 +164,19 @@ $(OBJDIR)/Application.o: src/Marle/Application.mm
 $(OBJDIR)/Log.o: src/Marle/Log.cpp
 	@echo "$(notdir $<)"
 	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
+$(OBJDIR)/OpenGLShader.o: src/Marle/Platform/OpenGL/OpenGLShader.cpp
+	@echo "$(notdir $<)"
+	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
+$(OBJDIR)/OpenGLTexture.o: src/Marle/Platform/OpenGL/OpenGLTexture.cpp
+	@echo "$(notdir $<)"
+	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
 $(OBJDIR)/MacOSKeyCodes.o: src/Marle/Platform/macOS/MacOSKeyCodes.mm
 	@echo "$(notdir $<)"
 	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
 $(OBJDIR)/MarleGameView.o: src/Marle/Platform/macOS/MarleGameView.mm
+	@echo "$(notdir $<)"
+	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
+$(OBJDIR)/Renderer2D.o: src/Marle/Renderer/Renderer2D.cpp
 	@echo "$(notdir $<)"
 	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
 $(OBJDIR)/mrlpch.o: src/mrlpch.cpp

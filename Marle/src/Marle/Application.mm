@@ -2,6 +2,7 @@
 #include "Application.h"
 #include "Events/KeyEvent.h"
 #include "Events/ApplicationEvent.h"
+#include "Renderer/Renderer2D.h"
 
 #ifdef MRL_PLATFORM_MACOS
 #define GL_SILENCE_DEPRECATION
@@ -168,11 +169,17 @@ namespace Marle {
         glViewport(0, 0, m_WindowProps.Width, m_WindowProps.Height);
         glClearColor(0.1f, 0.1f, 0.15f, 1.0f); // Dark moody blue/gray
         
+        // Initialize Renderer2D
+        Renderer2D::Init();
+        
         printf("OpenGL context initialization complete\n");
     }
 
     void Application::ShutdownGraphics()
     {
+        // Shutdown Renderer2D first
+        Renderer2D::Shutdown();
+        
         if (m_GLContext) {
             NSOpenGLContext* context = (__bridge NSOpenGLContext*)m_GLContext;
             [NSOpenGLContext clearCurrentContext];

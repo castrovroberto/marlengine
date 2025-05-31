@@ -32,7 +32,9 @@ project "Marle"
     {
         "%{prj.name}/src",
         "%{prj.name}/vendor/spdlog/include",
-        "%{prj.name}/vendor/glad/include"
+        "%{prj.name}/vendor/glad/include",
+        "%{prj.name}/vendor",
+        "%{prj.name}/vendor/glm"
     }
 
     filter "system:windows"
@@ -109,7 +111,10 @@ project "Sandbox"
     includedirs
     {
         "Marle/vendor/spdlog/include",
-        "Marle/src"
+        "Marle/src",
+        "Marle/vendor/glad/include",
+        "Marle/vendor",
+        "Marle/vendor/glm"
     }
 
     links 
