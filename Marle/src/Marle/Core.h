@@ -30,14 +30,21 @@
  *      MinGW 32                            __MINGW32__
  *      MinGW-w64 32bit                     __MINGW32__
  *      MinGW-w64 64bit                     __MINGW64__
-/**/
-#if defined(_MSC_VER)
-    //  Microsoft 
+ */
+#if defined(_WIN32) || defined(_WIN64)
+    //  Microsoft Windows
     #define EXPORT __declspec(dllexport)
     #define IMPORT __declspec(dllimport)
     #define MRL_PLATFORM_WINDOWS
-#elif defined(__GNUC__)
-    //  GCC
+#elif defined(__APPLE__)
+    //  Apple macOS/iOS
+    #define EXPORT __attribute__((visibility("default")))
+    #define IMPORT
+    #ifndef MRL_PLATFORM_MACOS
+        #define MRL_PLATFORM_MACOS
+    #endif
+#elif defined(__linux__)
+    //  Linux
     #define EXPORT __attribute__((visibility("default")))
     #define IMPORT
     #define MRL_PLATFORM_LINUX

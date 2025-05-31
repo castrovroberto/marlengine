@@ -1,42 +1,19 @@
 #pragma once
 
-/*
- * <memory>
- * Standard library header <memory>
- * This header is part of the dynamic memory management library.
- * https://en.cppreference.com/w/cpp/header/memory
- * 
- * memory::shared_ptr
- * smart pointer with shared object ownership semantics
- * 
-/**/
-#include <memory>
+// Basic C headers that should work
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
+// Try basic C++ headers
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#include <iostream>
-#include <utility>
-#include <algorithm>
+// Basic functionality without STL for now
+typedef unsigned int uint32_t;
+typedef unsigned long long uint64_t;
 
-/*
- * Standard library header <functional>
- * This header is part of the function objects library and provides the standard hash function.
- * https://en.cppreference.com/w/cpp/header/functional
- * 
-/**/
-#include <functional>
-
-/*
- * Standard library header <string>
- * This header is part of the strings library.
- * https://en.cppreference.com/w/cpp/header/string
- * 
-/**/
-#include <string>
-#include <sstream>
-#include <vector>
-#include <unordered_map>
-#include <unordered_set>
-
-#ifdef MRL_PLATFORM_WINDOWS
-    #inclide <Windows.h>
+#ifdef __cplusplus
+}
 #endif

@@ -3,14 +3,14 @@
 class Sandbox : public Marle::Application
 {
     public:
-        Sandbox()
+        Sandbox() : Marle::Application({"Glass - The Sunken Orangerie", 1024, 768})
         {
-
+            printf("Sandbox Application created.\n");
         }
 
         ~Sandbox()
         {
-
+            printf("Sandbox Application destroyed.\n");
         }
 };
 

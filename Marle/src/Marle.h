@@ -11,11 +11,12 @@
  *
  * A __has_include result of 1 only means that a header or source file with the specified name exists. 
  * It does not mean that the header or source file, when included, would not cause an error or would contain anything useful.
-/**/
+ */
 
 // For use by Marle applications
 #include "Marle/Application.h"
 #include "Marle/Log.h"
+#include "Marle/Window.h"
 
 // Entry point ==START==
 #include "Marle/EntryPoint.h"

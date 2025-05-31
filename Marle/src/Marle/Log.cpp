@@ -1,20 +1,11 @@
 #include "mrlpch.h"
 #include "Log.h"
 
-#include <spdlog/sinks/stdout_color_sinks.h>
+namespace Marle {
 
-namespace Marle 
-{
-    std::shared_ptr<spdlog::logger> Log::s_CoreLogger;
-    std::shared_ptr<spdlog::logger> Log::s_ClientLogger;
-
-    void Log::Init()
+    void Log::Init() 
     {
-        spdlog::set_pattern("%^[%T] %n: %v%$");
-        s_CoreLogger = spdlog::stdout_color_mt("MARLE");
-        s_CoreLogger->set_level(spdlog::level::trace);
-
-        s_ClientLogger = spdlog::stdout_color_mt("APP");
-        s_ClientLogger->set_level(spdlog::level::trace);
+        printf("Log system initialized (stub implementation)\n");
     }
+
 }

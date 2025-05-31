@@ -15,7 +15,7 @@
  * If it appears in a header file, it indicates that it is only to be parsed once, 
  * even if it is (directly or indirectly) included multiple times in the same source file.
  * 
-/**/
+ */
 #pragma once
 
 /*
@@ -24,10 +24,10 @@
  * The preprocessor supports conditional compilation of parts of source file.
  * https://en.cppreference.com/w/cpp/preprocessor/conditional
  * 
- * Evaluation of MRL_PLATFORM_LINUX definition will depend on Core.h definition of variable.
+ * Evaluation of platform definitions will depend on Core.h definition of variable.
  * 
-/**/
-#ifdef MRL_PLATFORM_LINUX
+ */
+#if defined(MRL_PLATFORM_LINUX) || defined(MRL_PLATFORM_MACOS) || defined(MRL_PLATFORM_WINDOWS)
 
 /*
  * extern Marle::Application* Marle::CreateApplication()
@@ -51,11 +51,11 @@
  * that it finds in one of the compiled source files. 
  * 
  * For it to work, the definition of the Marle::CreateApplication pointer variable 
- * needs to have what's called “external linkage”, which basically means that 
- * it needs to be declared outside of a function (at what's usually called “the file scope”) 
+ * needs to have what's called "external linkage", which basically means that 
+ * it needs to be declared outside of a function (at what's usually called "the file scope") 
  * and without the static keyword.
  *    
-/**/
+ */
 extern Marle::Application* Marle::CreateApplication();
 
 int main(int argc, char** argv) {
@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
      * In this case the variable app will be infered by the compiler
      * as a variable of Marle::Application* type.
      * 
-    /**/
+     */
     auto app = Marle::CreateApplication();
     app->Run();
     delete app;

@@ -21,26 +21,58 @@ project "Marle"
     {
         "%{prj.name}/src/**.h",
         "%{prj.name}/src/**.cpp",
+        "%{prj.name}/src/**.mm",
+        "%{prj.name}/vendor/glad/src/**.c"
     }
 
-    pchheader "mrlpch.h"
-    pchsource "Marle/src/mrlpch.h"
+    -- pchheader "mrlpch.h"
+    -- pchsource "Marle/src/mrlpch.h"
 
     includedirs
     {
         "%{prj.name}/src",
-        "%{prj.name}/vendor/spdlog/include"
+        "%{prj.name}/vendor/spdlog/include",
+        "%{prj.name}/vendor/glad/include"
     }
 
-    filter "system:Unix"
-        system "linux"
-        cppdialect "Default"
+    filter "system:windows"
+        cppdialect "C++17"
         staticruntime "On"
         systemversion "latest"
 
         defines 
         {
-            MRL_PLATFORM_LINUX
+            "MRL_PLATFORM_WINDOWS"
+        }
+
+        links
+        {
+            "opengl32"
+        }
+
+    filter "system:macosx"
+        cppdialect "C++17"
+        staticruntime "On"
+
+        defines 
+        {
+            "MRL_PLATFORM_MACOS"
+        }
+
+        links
+        {
+            "OpenGL.framework",
+            "Cocoa.framework"
+        }
+
+    filter "system:linux"
+        cppdialect "C++17"
+        staticruntime "On"
+        systemversion "latest"
+
+        defines 
+        {
+            "MRL_PLATFORM_LINUX"
         }
 
     filter "configurations:Debug"
@@ -77,17 +109,34 @@ project "Sandbox"
         "Marle"
     }
 
-    filter "system:Unix"
-        system "linux"
-        cppdialect "Default"
+    filter "system:windows"
+        cppdialect "C++17"
         staticruntime "On"
         systemversion "latest"
 
         defines 
         {
-            MRL_PLATFORM_LINUX
+            "MRL_PLATFORM_WINDOWS"
         }
 
+    filter "system:macosx"
+        cppdialect "C++17"
+        staticruntime "On"
+
+        defines 
+        {
+            "MRL_PLATFORM_MACOS"
+        }
+
+    filter "system:linux"
+        cppdialect "C++17"
+        staticruntime "On"
+        systemversion "latest"
+
+        defines 
+        {
+            "MRL_PLATFORM_LINUX"
+        }
 
     filter "configurations:Debug"
         symbols "On"
