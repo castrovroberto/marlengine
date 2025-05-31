@@ -5,6 +5,7 @@
 #define GL_SILENCE_DEPRECATION
 #include <glad/gl.h>
 #include <dlfcn.h>
+#include <mach/mach_time.h>
 #import <Cocoa/Cocoa.h>
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl3.h>
@@ -12,6 +13,20 @@
 // Function to get OpenGL proc address on macOS
 void* GetProcAddress(const char* name) {
     return dlsym(RTLD_DEFAULT, name);
+}
+
+// Helper function to get current time in seconds
+double GetCurrentTimeSeconds() {
+    static mach_timebase_info_data_t timebaseInfo;
+    static bool initialized = false;
+    
+    if (!initialized) {
+        mach_timebase_info(&timebaseInfo);
+        initialized = true;
+    }
+    
+    uint64_t absoluteTime = mach_absolute_time();
+    return (double)absoluteTime * timebaseInfo.numer / timebaseInfo.denom / 1000000000.0;
 }
 #endif
 
@@ -26,6 +41,13 @@ namespace Marle {
         printf("Creating Marle Application: %s\n", m_WindowProps.Title);
         InitWindow();
         InitGraphics();
+        
+        // Initialize last frame time
+    #ifdef MRL_PLATFORM_MACOS
+        m_LastFrameTime = GetCurrentTimeSeconds();
+    #else
+        m_LastFrameTime = 0.0;
+    #endif
     }
 
     Application::~Application()
@@ -33,6 +55,16 @@ namespace Marle {
         printf("Destroying Marle Application\n");
         ShutdownGraphics();
         ShutdownWindow();
+    }
+
+    void Application::OnUpdate(double fixed_dt) {
+        // Base implementation can be empty or provide some core engine update logic if needed in the future.
+    }
+
+    void Application::OnRender(double interpolation_alpha) {
+        // This is where rendering commands specific to the application/game state will go.
+        // For now, we'll keep the clear color and buffer swap in the main Run() loop,
+        // but eventually, those might move into a more structured rendering system called from here.
     }
 
 #ifdef MRL_PLATFORM_MACOS
@@ -157,7 +189,7 @@ namespace Marle {
         
         while (m_Running)
         {
-            // Process events
+            // 1. Process events
             NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
                                                 untilDate:[NSDate distantPast]
                                                    inMode:NSDefaultRunLoopMode
@@ -175,13 +207,46 @@ namespace Marle {
                 break;
             }
             
-            // Render
+            // 2. Calculate Frame Time
+            double current_time = GetCurrentTimeSeconds();
+            double frame_time = current_time - m_LastFrameTime;
+            m_LastFrameTime = current_time;
+
+            // Optional: Clamp frame_time to avoid spiral of death if debugging or extreme stalls
+            if (frame_time > 0.25) { // Max frame time step e.g. 0.25s
+                frame_time = 0.25;
+            }
+
+            m_Accumulator += frame_time;
+
+            // 3. Fixed Updates for Game Logic
+            while (m_Accumulator >= m_FixedDeltaTime) {
+                // --- Input Polling could go here if needed (e.g., IsKeyPressed) ---
+                
+                // --- Core Engine Subsystem Updates (e.g., Physics, Animation) ---
+                // (None yet)
+
+                // --- Game Specific Update ---
+                OnUpdate(m_FixedDeltaTime); // Call the virtual update method
+
+                m_Accumulator -= m_FixedDeltaTime;
+                // m_TotalGameTime += m_FixedDeltaTime; // Optional: track total game time
+            }
+
+            // 4. Rendering
+            double interpolation_alpha = m_Accumulator / m_FixedDeltaTime; // For smooth rendering between states
+
+            // --- Clear Screen ---
             [context makeCurrentContext];
             glClear(GL_COLOR_BUFFER_BIT);
+
+            // --- Call Game Specific Render ---
+            OnRender(interpolation_alpha); // Call the virtual render method
+
+            // --- UI Rendering / Debug Rendering could go here ---
+
+            // --- Swap Buffers ---
             [context flushBuffer];
-            
-            // Sleep for ~16ms to simulate 60 FPS
-            usleep(16000);
         }
         
         printf("Application Run loop ended\n");

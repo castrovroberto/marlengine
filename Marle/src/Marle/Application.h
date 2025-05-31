@@ -13,6 +13,10 @@ namespace Marle
             
             void Run();
 
+        protected:
+            virtual void OnUpdate(double fixed_dt); // To be overridden by SandboxApp for game logic
+            virtual void OnRender(double interpolation_alpha); // For rendering, alpha for interpolation
+
         private:
             void InitWindow();
             void ShutdownWindow();
@@ -21,6 +25,11 @@ namespace Marle
 
             WindowProps m_WindowProps;
             bool m_Running = true;
+
+            // Time management for the game loop
+            double m_LastFrameTime;
+            double m_FixedDeltaTime = 1.0 / 60.0; // Target 60 updates per second
+            double m_Accumulator = 0.0;
 
         #ifdef MRL_PLATFORM_MACOS
             void* m_Window;  // NSWindow* but avoiding Objective-C headers
