@@ -29,13 +29,13 @@ ifeq ($(origin AR), default)
 endif
 RESCOMP = windres
 DEFINES += -DMRL_PLATFORM_MACOS
-INCLUDES += -Isrc -Ivendor/spdlog/include -Ivendor/glad/include
+INCLUDES += -Isrc -Ivendor/spdlog/include -Ivendor/glad/include -I/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1
 FORCE_INCLUDE +=
 ALL_CPPFLAGS += $(CPPFLAGS) -MD -MP $(DEFINES) $(INCLUDES)
 ALL_RESFLAGS += $(RESFLAGS) $(DEFINES) $(INCLUDES)
-LIBS += -framework OpenGL -framework Cocoa
+LIBS += -framework OpenGL -framework Cocoa -framework Carbon
 LDDEPS +=
-ALL_LDFLAGS += $(LDFLAGS) -m64 -dynamiclib -Wl,-install_name,@rpath/libMarle.dylib
+ALL_LDFLAGS += $(LDFLAGS) -m64 -dynamiclib -Wl,-install_name,@rpath/libMarle.dylib -stdlib=libc++
 LINKCMD = $(CXX) -o "$@" $(OBJECTS) $(RESOURCES) $(ALL_LDFLAGS) $(LIBS)
 define PREBUILDCMDS
 endef
@@ -48,22 +48,22 @@ ifeq ($(config),debug)
 TARGETDIR = ../bin/Debug-macosx-x86_64/Marle
 TARGET = $(TARGETDIR)/libMarle.dylib
 OBJDIR = ../bin-int/Debug-macosx-x86_64/Marle
-ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -fPIC -g
-ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -fPIC -g -std=c++17
+ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -fPIC -g -stdlib=libc++
+ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -fPIC -g -std=c++17 -stdlib=libc++
 
 else ifeq ($(config),release)
 TARGETDIR = ../bin/Release-macosx-x86_64/Marle
 TARGET = $(TARGETDIR)/libMarle.dylib
 OBJDIR = ../bin-int/Release-macosx-x86_64/Marle
-ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC
-ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC -std=c++17
+ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC -stdlib=libc++
+ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC -std=c++17 -stdlib=libc++
 
 else ifeq ($(config),dist)
 TARGETDIR = ../bin/Dist-macosx-x86_64/Marle
 TARGET = $(TARGETDIR)/libMarle.dylib
 OBJDIR = ../bin-int/Dist-macosx-x86_64/Marle
-ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC
-ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC -std=c++17
+ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC -stdlib=libc++
+ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -fPIC -std=c++17 -stdlib=libc++
 
 endif
 
@@ -79,10 +79,14 @@ OBJECTS :=
 
 GENERATED += $(OBJDIR)/Application.o
 GENERATED += $(OBJDIR)/Log.o
+GENERATED += $(OBJDIR)/MacOSKeyCodes.o
+GENERATED += $(OBJDIR)/MarleGameView.o
 GENERATED += $(OBJDIR)/gl.o
 GENERATED += $(OBJDIR)/mrlpch.o
 OBJECTS += $(OBJDIR)/Application.o
 OBJECTS += $(OBJDIR)/Log.o
+OBJECTS += $(OBJDIR)/MacOSKeyCodes.o
+OBJECTS += $(OBJDIR)/MarleGameView.o
 OBJECTS += $(OBJDIR)/gl.o
 OBJECTS += $(OBJDIR)/mrlpch.o
 
@@ -152,6 +156,12 @@ $(OBJDIR)/Application.o: src/Marle/Application.mm
 	@echo "$(notdir $<)"
 	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
 $(OBJDIR)/Log.o: src/Marle/Log.cpp
+	@echo "$(notdir $<)"
+	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
+$(OBJDIR)/MacOSKeyCodes.o: src/Marle/Platform/macOS/MacOSKeyCodes.mm
+	@echo "$(notdir $<)"
+	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
+$(OBJDIR)/MarleGameView.o: src/Marle/Platform/macOS/MarleGameView.mm
 	@echo "$(notdir $<)"
 	$(SILENT) $(CXX) $(ALL_CXXFLAGS) $(FORCE_INCLUDE) -o "$@" -MF "$(@:%.o=%.d)" -c "$<"
 $(OBJDIR)/mrlpch.o: src/mrlpch.cpp

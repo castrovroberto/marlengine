@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+#include <sstream>
 #include "Event.h"
 
 namespace Marle {
@@ -51,5 +53,21 @@ namespace Marle {
             }
 
             EVENT_CLASS_TYPE(KeyReleased)
+	};
+
+	class EXPORT KeyTypedEvent : public KeyEvent
+	{
+        public:
+            KeyTypedEvent(int keycode)
+                : KeyEvent(keycode) {}
+
+            std::string ToString() const override
+            {
+                std::stringstream ss;
+                ss << "KeyTypedEvent: " << m_KeyCode;
+                return ss.str();
+            }
+
+            EVENT_CLASS_TYPE(KeyTyped)
 	};
 }

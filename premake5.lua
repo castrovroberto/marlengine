@@ -53,16 +53,24 @@ project "Marle"
     filter "system:macosx"
         cppdialect "C++17"
         staticruntime "On"
+        buildoptions { "-stdlib=libc++" }
+        linkoptions { "-stdlib=libc++" }
 
         defines 
         {
             "MRL_PLATFORM_MACOS"
         }
 
+        includedirs
+        {
+            "/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1"
+        }
+
         links
         {
             "OpenGL.framework",
-            "Cocoa.framework"
+            "Cocoa.framework",
+            "Carbon.framework"
         }
 
     filter "system:linux"
@@ -122,10 +130,17 @@ project "Sandbox"
     filter "system:macosx"
         cppdialect "C++17"
         staticruntime "On"
+        buildoptions { "-stdlib=libc++" }
+        linkoptions { "-stdlib=libc++" }
 
         defines 
         {
             "MRL_PLATFORM_MACOS"
+        }
+
+        includedirs
+        {
+            "/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1"
         }
 
     filter "system:linux"

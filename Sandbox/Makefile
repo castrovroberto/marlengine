@@ -29,11 +29,11 @@ ifeq ($(origin AR), default)
 endif
 RESCOMP = windres
 DEFINES += -DMRL_PLATFORM_MACOS
-INCLUDES += -I../Marle/vendor/spdlog/include -I../Marle/src
+INCLUDES += -I../Marle/vendor/spdlog/include -I../Marle/src -I/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1
 FORCE_INCLUDE +=
 ALL_CPPFLAGS += $(CPPFLAGS) -MD -MP $(DEFINES) $(INCLUDES)
 ALL_RESFLAGS += $(RESFLAGS) $(DEFINES) $(INCLUDES)
-ALL_LDFLAGS += $(LDFLAGS) -Wl,-rpath,'@loader_path/../Marle' -m64
+ALL_LDFLAGS += $(LDFLAGS) -Wl,-rpath,'@loader_path/../Marle' -m64 -stdlib=libc++
 LINKCMD = $(CXX) -o "$@" $(OBJECTS) $(RESOURCES) $(ALL_LDFLAGS) $(LIBS)
 define PREBUILDCMDS
 endef
@@ -46,8 +46,8 @@ ifeq ($(config),debug)
 TARGETDIR = ../bin/Debug-macosx-x86_64/Sandbox
 TARGET = $(TARGETDIR)/Sandbox
 OBJDIR = ../bin-int/Debug-macosx-x86_64/Sandbox
-ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -g
-ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -g -std=c++17
+ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -g -stdlib=libc++
+ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -g -std=c++17 -stdlib=libc++
 LIBS += ../bin/Debug-macosx-x86_64/Marle/libMarle.dylib
 LDDEPS += ../bin/Debug-macosx-x86_64/Marle/libMarle.dylib
 
@@ -55,8 +55,8 @@ else ifeq ($(config),release)
 TARGETDIR = ../bin/Release-macosx-x86_64/Sandbox
 TARGET = $(TARGETDIR)/Sandbox
 OBJDIR = ../bin-int/Release-macosx-x86_64/Sandbox
-ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2
-ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -std=c++17
+ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -stdlib=libc++
+ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -std=c++17 -stdlib=libc++
 LIBS += ../bin/Release-macosx-x86_64/Marle/libMarle.dylib
 LDDEPS += ../bin/Release-macosx-x86_64/Marle/libMarle.dylib
 
@@ -64,8 +64,8 @@ else ifeq ($(config),dist)
 TARGETDIR = ../bin/Dist-macosx-x86_64/Sandbox
 TARGET = $(TARGETDIR)/Sandbox
 OBJDIR = ../bin-int/Dist-macosx-x86_64/Sandbox
-ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2
-ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -std=c++17
+ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -stdlib=libc++
+ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -std=c++17 -stdlib=libc++
 LIBS += ../bin/Dist-macosx-x86_64/Marle/libMarle.dylib
 LDDEPS += ../bin/Dist-macosx-x86_64/Marle/libMarle.dylib
 

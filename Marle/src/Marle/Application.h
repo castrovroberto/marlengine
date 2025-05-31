@@ -2,6 +2,7 @@
 
 #include "Core.h"
 #include "Window.h"
+#include "Events/Event.h"
 
 namespace Marle 
 {
@@ -12,6 +13,7 @@ namespace Marle
             virtual ~Application();
             
             void Run();
+            virtual void OnEvent(Event& e);
 
         protected:
             virtual void OnUpdate(double fixed_dt); // To be overridden by SandboxApp for game logic

@@ -1,5 +1,9 @@
 #pragma once
 
+#include <string>
+#include <sstream>
+#include <functional>
+#include <iostream>
 #include "Marle/Core.h"
 
 namespace Marle 
@@ -23,7 +27,7 @@ namespace Marle
         None = 0,
         WindowClose, WindowResize, WindowFocus, WindowLostFocus, WindowMoved,
         AppTick, AppUpdate, AppRender,
-        KeyPressed, KeyReleased,
+        KeyPressed, KeyReleased, KeyTyped,
         MouseButtonPressed, MouseButtonReleased, MouseMoved, MouseScrolled
     };
 

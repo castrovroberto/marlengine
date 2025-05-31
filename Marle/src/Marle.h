@@ -18,6 +18,15 @@
 #include "Marle/Log.h"
 #include "Marle/Window.h"
 
+// Events
+#include "Marle/Events/Event.h"
+#include "Marle/Events/KeyEvent.h"
+#include "Marle/Events/MouseEvent.h"
+#include "Marle/Events/ApplicationEvent.h"
+
+// Input
+#include "Marle/Core/KeyCodes.h"
+
 // Entry point ==START==
 #include "Marle/EntryPoint.h"
 // Entry point == END ==

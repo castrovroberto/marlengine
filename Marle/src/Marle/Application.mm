@@ -1,5 +1,7 @@
 #include "mrlpch.h"
 #include "Application.h"
+#include "Events/KeyEvent.h"
+#include "Events/ApplicationEvent.h"
 
 #ifdef MRL_PLATFORM_MACOS
 #define GL_SILENCE_DEPRECATION
@@ -9,6 +11,7 @@
 #import <Cocoa/Cocoa.h>
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl3.h>
+#include "Platform/macOS/MarleGameView.h"
 
 // Function to get OpenGL proc address on macOS
 void* GetProcAddress(const char* name) {
@@ -55,6 +58,14 @@ namespace Marle {
         printf("Destroying Marle Application\n");
         ShutdownGraphics();
         ShutdownWindow();
+    }
+
+    void Application::OnEvent(Event& e)
+    {
+        printf("Application::OnEvent - %s\n", e.ToString().c_str());
+        
+        // Handle application-level events here
+        // For now, just log them
     }
 
     void Application::OnUpdate(double fixed_dt) {
@@ -128,8 +139,10 @@ namespace Marle {
             return;
         }
         
-        // Create OpenGL view and set it as window's content view
-        NSOpenGLView* glView = [[NSOpenGLView alloc] initWithFrame:[window.contentView bounds] pixelFormat:pixelFormat];
+        // Create custom MarleGameView and set it as window's content view
+        MarleGameView* glView = [[MarleGameView alloc] initWithFrame:[window.contentView bounds] 
+                                                         pixelFormat:pixelFormat 
+                                                         application:this];
         [glView setOpenGLContext:context];
         [window setContentView:glView];
         
