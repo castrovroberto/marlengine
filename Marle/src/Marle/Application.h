@@ -15,9 +15,16 @@ namespace Marle
             void Run();
             virtual void OnEvent(Event& e);
 
+            unsigned int GetWidth()  const { return m_WindowProps.Width; }
+            unsigned int GetHeight() const { return m_WindowProps.Height; }
+
         protected:
-            virtual void OnUpdate(double fixed_dt); // To be overridden by SandboxApp for game logic
-            virtual void OnRender(double interpolation_alpha); // For rendering, alpha for interpolation
+            virtual void OnUpdate(double fixed_dt);
+            virtual void OnRender(double interpolation_alpha);
+            virtual void OnResize(unsigned int width, unsigned int height) {}
+
+        public:
+            void HandleResize(unsigned int width, unsigned int height);
 
         private:
             void InitWindow();
@@ -28,14 +35,14 @@ namespace Marle
             WindowProps m_WindowProps;
             bool m_Running = true;
 
-            // Time management for the game loop
             double m_LastFrameTime;
-            double m_FixedDeltaTime = 1.0 / 60.0; // Target 60 updates per second
+            double m_FixedDeltaTime = 1.0 / 60.0;
             double m_Accumulator = 0.0;
 
         #ifdef MRL_PLATFORM_MACOS
-            void* m_Window;  // NSWindow* but avoiding Objective-C headers
-            void* m_GLContext; // NSOpenGLContext* but avoiding Objective-C headers
+            void* m_Window;
+            void* m_GLContext;
+            void* m_WindowDelegate;
         #endif
     };
 

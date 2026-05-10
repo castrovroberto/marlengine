@@ -133,10 +133,15 @@ namespace Marle {
 
     GLint OpenGLShader::GetUniformLocation(const std::string& name)
     {
+        auto it = m_UniformLocationCache.find(name);
+        if (it != m_UniformLocationCache.end())
+            return it->second;
+
         GLint location = glGetUniformLocation(m_RendererID, name.c_str());
-        if (location == -1) {
+        if (location == -1)
             printf("Warning: uniform '%s' not found\n", name.c_str());
-        }
+
+        m_UniformLocationCache[name] = location;
         return location;
     }
 

@@ -60,23 +60,8 @@ extern Marle::Application* Marle::CreateApplication();
 
 int main(int argc, char** argv) {
 
-    //Marle::Log::Init();
-    //MRL_CORE_WARN("Initialized Log!");
+    Marle::Log::Init();
 
-    //int a = 5;
-    //MRL_INFO("Hello! Var={0}", a);
-
-    /*
-     * auto app
-     * 
-     * Placeholder type specifiers (since C++11)
-     * https://en.cppreference.com/w/cpp/language/auto
-     * 
-     * For functions, specifies that the return type will be deduced from its return statements. (since C++14)
-     * In this case the variable app will be infered by the compiler
-     * as a variable of Marle::Application* type.
-     * 
-     */
     auto app = Marle::CreateApplication();
     app->Run();
     delete app;

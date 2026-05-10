@@ -12,7 +12,7 @@ namespace Marle {
         static void Init();
         static void Shutdown();
 
-        static void BeginScene();
+        static void BeginScene(float viewportWidth, float viewportHeight);
         static void EndScene();
 
         static void DrawQuad(const glm::vec2& position, const glm::vec2& size, OpenGLTexture2D* texture);

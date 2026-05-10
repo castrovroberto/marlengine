@@ -72,28 +72,18 @@ namespace Marle {
         printf("Renderer2D shutdown complete\n");
     }
 
-    void Renderer2D::BeginScene()
+    void Renderer2D::BeginScene(float viewportWidth, float viewportHeight)
     {
         if (!s_Data || !s_Data->TextureShader) {
             printf("Error: Renderer2D not initialized!\n");
             return;
         }
 
-        // Setup orthographic projection (using hard-coded window size for now)
-        // TODO: Get this from Application/Window
-        float windowWidth = 1024.0f;
-        float windowHeight = 768.0f;
-
         s_Data->TextureShader->Bind();
-        
-        // Create orthographic projection matrix (0,0 at bottom-left)
-        glm::mat4 proj = glm::ortho(0.0f, windowWidth, 0.0f, windowHeight, -1.0f, 1.0f);
-        
-        // View matrix (identity for now, no camera movement)
+
+        glm::mat4 proj = glm::ortho(0.0f, viewportWidth, 0.0f, viewportHeight, -1.0f, 1.0f);
         glm::mat4 view = glm::mat4(1.0f);
-        glm::mat4 viewProjectionMatrix = proj * view;
-        
-        s_Data->TextureShader->SetUniformMat4f("u_ViewProjection", viewProjectionMatrix);
+        s_Data->TextureShader->SetUniformMat4f("u_ViewProjection", proj * view);
     }
 
     void Renderer2D::EndScene()

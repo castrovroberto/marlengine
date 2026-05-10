@@ -14,6 +14,30 @@
 #import <OpenGL/gl3.h>
 #include "Platform/macOS/MarleGameView.h"
 
+@interface MarleWindowDelegate : NSObject <NSWindowDelegate>
+- (instancetype)initWithApplication:(Marle::Application*)app;
+@end
+
+@implementation MarleWindowDelegate {
+    Marle::Application* m_Application;
+}
+
+- (instancetype)initWithApplication:(Marle::Application*)app {
+    self = [super init];
+    if (self) m_Application = app;
+    return self;
+}
+
+- (void)windowDidResize:(NSNotification*)notification {
+    NSWindow* window = [notification object];
+    NSRect contentRect = [window contentRectForFrameRect:[window frame]];
+    unsigned int w = (unsigned int)contentRect.size.width;
+    unsigned int h = (unsigned int)contentRect.size.height;
+    m_Application->HandleResize(w, h);
+}
+
+@end
+
 // Function to get OpenGL proc address on macOS
 void* GetProcAddress(const char* name) {
     return dlsym(RTLD_DEFAULT, name);
@@ -36,10 +60,10 @@ double GetCurrentTimeSeconds() {
 
 namespace Marle {
 
-    Application::Application(const WindowProps& props) 
+    Application::Application(const WindowProps& props)
         : m_WindowProps(props)
     #ifdef MRL_PLATFORM_MACOS
-        , m_Window(nullptr), m_GLContext(nullptr)
+        , m_Window(nullptr), m_GLContext(nullptr), m_WindowDelegate(nullptr)
     #endif
     {
         printf("Creating Marle Application: %s\n", m_WindowProps.Title);
@@ -103,7 +127,12 @@ namespace Marle {
         [window setTitle:[NSString stringWithUTF8String:m_WindowProps.Title]];
         [window makeKeyAndOrderFront:nil];
         [window center];
-        
+
+        // Receive windowDidResize: notifications
+        MarleWindowDelegate* delegate = [[MarleWindowDelegate alloc] initWithApplication:this];
+        [window setDelegate:delegate];
+        m_WindowDelegate = (void*)CFBridgingRetain(delegate);
+
         m_Window = (void*)CFBridgingRetain(window);
         
         printf("macOS window initialization complete\n");
@@ -189,8 +218,20 @@ namespace Marle {
         printf("OpenGL context shutdown complete\n");
     }
 
+    void Application::HandleResize(unsigned int width, unsigned int height)
+    {
+        m_WindowProps.Width = width;
+        m_WindowProps.Height = height;
+        glViewport(0, 0, (GLsizei)width, (GLsizei)height);
+        OnResize(width, height);
+    }
+
     void Application::ShutdownWindow()
     {
+        if (m_WindowDelegate) {
+            CFRelease(m_WindowDelegate);
+            m_WindowDelegate = nullptr;
+        }
         if (m_Window) {
             NSWindow* window = (__bridge NSWindow*)m_Window;
             [window close];
@@ -223,6 +264,8 @@ namespace Marle {
             
             // Check if window was closed
             if (![window isVisible]) {
+                WindowCloseEvent closeEvent;
+                OnEvent(closeEvent);
                 m_Running = false;
                 break;
             }

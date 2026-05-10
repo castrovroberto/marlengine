@@ -94,8 +94,7 @@ protected:
         // Call base if it does anything important
         Marle::Application::OnRender(interpolation_alpha);
         
-        // Begin scene for 2D rendering
-        Marle::Renderer2D::BeginScene();
+        Marle::Renderer2D::BeginScene((float)GetWidth(), (float)GetHeight());
         
         // Draw the test sprite
         if (m_TestTexture) {

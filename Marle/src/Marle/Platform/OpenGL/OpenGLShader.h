@@ -1,11 +1,12 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <glad/gl.h>
 #include <glm/glm.hpp>
 
 namespace Marle {
-    
+
     class OpenGLShader {
     public:
         OpenGLShader(const std::string& vertexSrcPath, const std::string& fragmentSrcPath);
@@ -14,7 +15,6 @@ namespace Marle {
         void Bind() const;
         void Unbind() const;
 
-        // Utility functions to set uniforms
         void SetUniform1i(const std::string& name, int value);
         void SetUniformMat4f(const std::string& name, const glm::mat4& matrix);
 
@@ -25,6 +25,7 @@ namespace Marle {
         GLint GetUniformLocation(const std::string& name);
 
         GLuint m_RendererID = 0;
+        mutable std::unordered_map<std::string, GLint> m_UniformLocationCache;
     };
 
-} 
+}

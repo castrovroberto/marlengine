@@ -3,6 +3,7 @@
 #ifdef MRL_PLATFORM_MACOS
 #include "Marle/Application.h"
 #include "Marle/Events/KeyEvent.h"
+#include "Marle/Events/MouseEvent.h"
 #include "MacOSKeyCodes.h"
 #import <Cocoa/Cocoa.h>
 
@@ -31,6 +32,9 @@
 - (void)viewDidMoveToWindow {
     if ([self window]) {
         [[self window] makeFirstResponder:self];
+        NSTrackingAreaOptions opts = NSTrackingMouseMoved | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect;
+        NSTrackingArea* area = [[NSTrackingArea alloc] initWithRect:NSZeroRect options:opts owner:self userInfo:nil];
+        [self addTrackingArea:area];
     }
 }
 
@@ -66,18 +70,71 @@
 
 - (void)flagsChanged:(NSEvent *)event {
     if (!m_Application) return;
-    
-    // Handle modifier keys
-    // This is called when modifier keys change state
-    // For now, we'll just log it - proper implementation would track modifier state
-    // and generate KeyPressed/KeyReleased events for modifiers
-    NSEventModifierFlags flags = [event modifierFlags];
-    
-    // This is a simplified implementation
-    // A complete implementation would track previous modifier state
-    // and generate appropriate KeyPressed/KeyReleased events
-    
-    // TODO: Implement proper modifier key handling
+
+    static NSEventModifierFlags s_PreviousFlags = 0;
+    NSEventModifierFlags current = [event modifierFlags];
+    NSEventModifierFlags changed = current ^ s_PreviousFlags;
+
+    struct { NSEventModifierFlags flag; int keyCode; } modifiers[] = {
+        { NSEventModifierFlagShift,   Marle::Key::LeftShift   },
+        { NSEventModifierFlagControl, Marle::Key::LeftControl },
+        { NSEventModifierFlagOption,  Marle::Key::LeftAlt     },
+        { NSEventModifierFlagCommand, Marle::Key::LeftSuper   },
+    };
+
+    for (auto& m : modifiers) {
+        if (changed & m.flag) {
+            if (current & m.flag) {
+                Marle::KeyPressedEvent e(m.keyCode, 0);
+                m_Application->OnEvent(e);
+            } else {
+                Marle::KeyReleasedEvent e(m.keyCode);
+                m_Application->OnEvent(e);
+            }
+        }
+    }
+
+    s_PreviousFlags = current;
+}
+
+- (void)mouseMoved:(NSEvent *)event {
+    if (!m_Application) return;
+    NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
+    Marle::MouseMovedEvent e((float)loc.x, (float)loc.y);
+    m_Application->OnEvent(e);
+}
+
+- (void)mouseDragged:(NSEvent *)event      { [self mouseMoved:event]; }
+- (void)rightMouseDragged:(NSEvent *)event { [self mouseMoved:event]; }
+
+- (void)mouseDown:(NSEvent *)event {
+    if (!m_Application) return;
+    Marle::MouseButtonPressedEvent e(0);
+    m_Application->OnEvent(e);
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    if (!m_Application) return;
+    Marle::MouseButtonReleasedEvent e(0);
+    m_Application->OnEvent(e);
+}
+
+- (void)rightMouseDown:(NSEvent *)event {
+    if (!m_Application) return;
+    Marle::MouseButtonPressedEvent e(1);
+    m_Application->OnEvent(e);
+}
+
+- (void)rightMouseUp:(NSEvent *)event {
+    if (!m_Application) return;
+    Marle::MouseButtonReleasedEvent e(1);
+    m_Application->OnEvent(e);
+}
+
+- (void)scrollWheel:(NSEvent *)event {
+    if (!m_Application) return;
+    Marle::MouseScrolledEvent e((float)[event scrollingDeltaX], (float)[event scrollingDeltaY]);
+    m_Application->OnEvent(e);
 }
 
 @end
