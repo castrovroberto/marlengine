@@ -17,6 +17,8 @@
 #include "Marle/Application.h"
 #include "Marle/Log.h"
 #include "Marle/Window.h"
+#include "Marle/Layer.h"
+#include "Marle/LayerStack.h"
 
 // Events
 #include "Marle/Events/Event.h"

@@ -248,150 +248,68 @@ project "Sandbox"
     filter "configurations:Dist"
         optimize "On"
 
--- Pixel-readback tests for Renderer2D (needs a display; run from the repo root)
-project "Renderer2DTests"
-    location "Tests/Renderer2DTests"
-    kind "ConsoleApp"
-    language "C++"
+-- Test executables live in Tests/<name>/src and exit non-zero on failure.
+local function testProject(name)
+    project (name)
+        location ("Tests/" .. name)
+        kind "ConsoleApp"
+        language "C++"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+        targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+        objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
 
-    files 
-    {
-        "Tests/Renderer2DTests/src/**.h",
-        "Tests/Renderer2DTests/src/**.cpp",
-    }
-
-    includedirs
-    {
-        "Marle/vendor/spdlog/include",
-        "Marle/src",
-        "Marle/vendor/glad/include",
-        "Marle/vendor",
-        "Marle/vendor/glm"
-    }
-
-    links 
-    {
-        "Marle"
-    }
-
-    filter "system:windows"
-        cppdialect "C++17"
-        staticruntime "On"
-        systemversion "latest"
-
-        defines 
+        files
         {
-            "MRL_PLATFORM_WINDOWS"
+            "Tests/" .. name .. "/src/**.h",
+            "Tests/" .. name .. "/src/**.cpp"
         }
 
-    filter "system:macosx"
-        cppdialect "C++17"
-        staticruntime "On"
-        buildoptions { "-stdlib=libc++" }
-        linkoptions { "-stdlib=libc++" }
-
-        defines 
+        includedirs
         {
-            "MRL_PLATFORM_MACOS"
+            "Marle/vendor/spdlog/include",
+            "Marle/src",
+            "Marle/vendor/glad/include",
+            "Marle/vendor",
+            "Marle/vendor/glm"
         }
 
-        includedirs(macOSCxxIncludes())
+        links { "Marle" }
 
-    filter "system:linux"
-        cppdialect "C++17"
-        staticruntime "On"
-        systemversion "latest"
+        filter "system:windows"
+            cppdialect "C++17"
+            staticruntime "On"
+            systemversion "latest"
+            defines { "MRL_PLATFORM_WINDOWS" }
 
-        defines 
-        {
-            "MRL_PLATFORM_LINUX"
-        }
+        filter "system:macosx"
+            cppdialect "C++17"
+            staticruntime "On"
+            buildoptions { "-stdlib=libc++" }
+            linkoptions { "-stdlib=libc++" }
+            defines { "MRL_PLATFORM_MACOS" }
+            includedirs(macOSCxxIncludes())
 
-        -- find libMarle.so next to the Sandbox binary's sibling output dir
-        linkoptions { "-Wl,-rpath,'$$ORIGIN/../Marle'" }
+        filter "system:linux"
+            cppdialect "C++17"
+            staticruntime "On"
+            systemversion "latest"
+            defines { "MRL_PLATFORM_LINUX" }
+            -- find libMarle.so in the sibling output dir
+            linkoptions { "-Wl,-rpath,'$$ORIGIN/../Marle'" }
 
-    filter "configurations:Debug"
-        symbols "On"
-    
-    filter "configurations:Release"
-        optimize "On"
+        filter "configurations:Debug"
+            symbols "On"
 
-    filter "configurations:Dist"
-        optimize "On"
+        filter "configurations:Release"
+            optimize "On"
 
--- Polled-input state tests (headless)
-project "InputTests"
-    location "Tests/InputTests"
-    kind "ConsoleApp"
-    language "C++"
+        filter "configurations:Dist"
+            optimize "On"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+        filter {}
+end
 
-    files 
-    {
-        "Tests/InputTests/src/**.h",
-        "Tests/InputTests/src/**.cpp",
-    }
-
-    includedirs
-    {
-        "Marle/vendor/spdlog/include",
-        "Marle/src",
-        "Marle/vendor/glad/include",
-        "Marle/vendor",
-        "Marle/vendor/glm"
-    }
-
-    links 
-    {
-        "Marle"
-    }
-
-    filter "system:windows"
-        cppdialect "C++17"
-        staticruntime "On"
-        systemversion "latest"
-
-        defines 
-        {
-            "MRL_PLATFORM_WINDOWS"
-        }
-
-    filter "system:macosx"
-        cppdialect "C++17"
-        staticruntime "On"
-        buildoptions { "-stdlib=libc++" }
-        linkoptions { "-stdlib=libc++" }
-
-        defines 
-        {
-            "MRL_PLATFORM_MACOS"
-        }
-
-        includedirs(macOSCxxIncludes())
-
-    filter "system:linux"
-        cppdialect "C++17"
-        staticruntime "On"
-        systemversion "latest"
-
-        defines 
-        {
-            "MRL_PLATFORM_LINUX"
-        }
-
-        -- find libMarle.so next to the Sandbox binary's sibling output dir
-        linkoptions { "-Wl,-rpath,'$$ORIGIN/../Marle'" }
-
-    filter "configurations:Debug"
-        symbols "On"
-    
-    filter "configurations:Release"
-        optimize "On"
-
-    filter "configurations:Dist"
-        optimize "On"
+testProject "Renderer2DTests"   -- pixel readback; needs a display, run from the repo root
+testProject "InputTests"        -- headless
+testProject "LayerStackTests"   -- headless
+testProject "ApplicationTests"  -- needs a display

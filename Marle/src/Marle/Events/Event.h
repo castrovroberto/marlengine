@@ -98,6 +98,11 @@ namespace Marle
 		    virtual int GetCategoryFlags() const = 0;
 		    virtual std::string ToString() const { return GetName(); }
 
+		    // Set by an EventDispatcher handler returning true, or directly by a layer;
+		    // a handled event is not offered to layers below or to Application::OnEvent.
+		    inline bool IsHandled() const { return m_Handled; }
+		    inline void SetHandled(bool handled = true) { m_Handled = handled; }
+
 		/*
 		 * Utility function
 		 * 

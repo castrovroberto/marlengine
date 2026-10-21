@@ -3,6 +3,7 @@
 #include "Core.h"
 #include "Window.h"
 #include "Events/Event.h"
+#include "LayerStack.h"
 
 #include <memory>
 
@@ -15,7 +16,15 @@ namespace Marle
             virtual ~Application();
             
             void Run();
+            void Close() { m_Running = false; } // the loop exits after the current frame
             virtual void OnEvent(Event& e);
+
+            // Layers update and render after the application's own OnUpdate/OnRender (bottom to top)
+            // and see events before OnEvent (top to bottom, until handled). The application owns them
+            // and detaches them, with the GL context still alive, when it is destroyed.
+            Layer* PushLayer(std::unique_ptr<Layer> layer) { return m_LayerStack.PushLayer(std::move(layer)); }
+            Layer* PushOverlay(std::unique_ptr<Layer> layer) { return m_LayerStack.PushOverlay(std::move(layer)); }
+            std::unique_ptr<Layer> PopLayer(Layer* layer) { return m_LayerStack.Pop(layer); }
 
             unsigned int GetWidth()  const { return m_Window->GetWidth(); }
             unsigned int GetHeight() const { return m_Window->GetHeight(); }
@@ -34,6 +43,7 @@ namespace Marle
             void HandleResize(unsigned int width, unsigned int height);
 
             std::unique_ptr<Window> m_Window;
+            LayerStack m_LayerStack;
             bool m_Running = true;
 
             double m_FixedDeltaTime = 1.0 / 60.0;

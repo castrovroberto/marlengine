@@ -35,6 +35,7 @@ namespace Marle {
     Application::~Application()
     {
         printf("Destroying Marle Application\n");
+        m_LayerStack.Clear(); // layers may own GL resources, so go before the context
         if (m_Window) {
             ShutdownGraphics();
             m_Window.reset();
@@ -81,7 +82,9 @@ namespace Marle {
                 break;
         }
 
-        OnEvent(e);
+        m_LayerStack.DispatchEvent(e);
+        if (!e.IsHandled())
+            OnEvent(e);
     }
 
     void Application::HandleResize(unsigned int width, unsigned int height)
@@ -137,6 +140,8 @@ namespace Marle {
 
                 // --- Game Specific Update ---
                 OnUpdate(m_FixedDeltaTime); // Call the virtual update method
+                for (auto& layer : m_LayerStack)
+                    layer->OnUpdate(m_FixedDeltaTime);
 
                 m_Accumulator -= m_FixedDeltaTime;
             }
@@ -148,6 +153,8 @@ namespace Marle {
 
             // --- Call Game Specific Render ---
             OnRender(interpolation_alpha); // Call the virtual render method
+            for (auto& layer : m_LayerStack)
+                layer->OnRender(interpolation_alpha);
 
             // --- UI Rendering / Debug Rendering could go here ---
 
