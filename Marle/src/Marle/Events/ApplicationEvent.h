@@ -35,6 +35,24 @@ namespace Marle {
             EVENT_CLASS_CATEGORY(EventCategoryApplication)
 	};
 
+	class EXPORT WindowFocusEvent : public Event
+	{
+        public:
+            WindowFocusEvent() {}
+
+            EVENT_CLASS_TYPE(WindowFocus)
+            EVENT_CLASS_CATEGORY(EventCategoryApplication)
+	};
+
+	class EXPORT WindowLostFocusEvent : public Event
+	{
+        public:
+            WindowLostFocusEvent() {}
+
+            EVENT_CLASS_TYPE(WindowLostFocus)
+            EVENT_CLASS_CATEGORY(EventCategoryApplication)
+	};
+
 	class EXPORT AppTickEvent : public Event
 	{
         public:

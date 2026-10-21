@@ -10,4 +10,5 @@ Marle/Makefile
 Sandbox/Makefile
 Marle/vendor/glfw/Makefile
 *.o
-Tests/Makefile
+Tests/Renderer2DTests/Makefile
+Tests/InputTests/Makefile

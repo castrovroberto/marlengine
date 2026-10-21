@@ -24,6 +24,20 @@
     return self;
 }
 
+- (void)windowDidBecomeKey:(NSNotification*)notification {
+    if (m_Data->EventCallback) {
+        Marle::WindowFocusEvent event;
+        m_Data->EventCallback(event);
+    }
+}
+
+- (void)windowDidResignKey:(NSNotification*)notification {
+    if (m_Data->EventCallback) {
+        Marle::WindowLostFocusEvent event;
+        m_Data->EventCallback(event);
+    }
+}
+
 - (void)windowDidResize:(NSNotification*)notification {
     NSWindow* window = [notification object];
     NSRect contentRect = [window contentRectForFrameRect:[window frame]];

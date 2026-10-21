@@ -69,6 +69,12 @@ namespace Marle {
             data.EventCallback(event);
         });
 
+        glfwSetWindowFocusCallback(m_Window, [](GLFWwindow* window, int focused) {
+            auto& data = *(WindowData*)glfwGetWindowUserPointer(window);
+            if (focused) { WindowFocusEvent event; data.EventCallback(event); }
+            else         { WindowLostFocusEvent event; data.EventCallback(event); }
+        });
+
         glfwSetWindowSizeCallback(m_Window, [](GLFWwindow* window, int width, int height) {
             auto& data = *(WindowData*)glfwGetWindowUserPointer(window);
             data.Width = (unsigned int)width;

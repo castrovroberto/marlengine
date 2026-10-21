@@ -3,6 +3,7 @@
 #include "Events/KeyEvent.h"
 #include "Events/ApplicationEvent.h"
 #include "Core/KeyCodes.h"
+#include "Input.h"
 #include "Renderer/Renderer2D.h"
 
 #include <glad/gl.h>
@@ -61,6 +62,8 @@ namespace Marle {
 
     void Application::HandleEvent(Event& e)
     {
+        Input::OnEvent(e);
+
         switch (e.GetEventType()) {
             case EventType::WindowClose:
                 m_Running = false;

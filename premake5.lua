@@ -250,7 +250,7 @@ project "Sandbox"
 
 -- Pixel-readback tests for Renderer2D (needs a display; run from the repo root)
 project "Renderer2DTests"
-    location "Tests"
+    location "Tests/Renderer2DTests"
     kind "ConsoleApp"
     language "C++"
 
@@ -259,8 +259,82 @@ project "Renderer2DTests"
 
     files 
     {
-        "Tests/src/**.h",
-        "Tests/src/**.cpp",
+        "Tests/Renderer2DTests/src/**.h",
+        "Tests/Renderer2DTests/src/**.cpp",
+    }
+
+    includedirs
+    {
+        "Marle/vendor/spdlog/include",
+        "Marle/src",
+        "Marle/vendor/glad/include",
+        "Marle/vendor",
+        "Marle/vendor/glm"
+    }
+
+    links 
+    {
+        "Marle"
+    }
+
+    filter "system:windows"
+        cppdialect "C++17"
+        staticruntime "On"
+        systemversion "latest"
+
+        defines 
+        {
+            "MRL_PLATFORM_WINDOWS"
+        }
+
+    filter "system:macosx"
+        cppdialect "C++17"
+        staticruntime "On"
+        buildoptions { "-stdlib=libc++" }
+        linkoptions { "-stdlib=libc++" }
+
+        defines 
+        {
+            "MRL_PLATFORM_MACOS"
+        }
+
+        includedirs(macOSCxxIncludes())
+
+    filter "system:linux"
+        cppdialect "C++17"
+        staticruntime "On"
+        systemversion "latest"
+
+        defines 
+        {
+            "MRL_PLATFORM_LINUX"
+        }
+
+        -- find libMarle.so next to the Sandbox binary's sibling output dir
+        linkoptions { "-Wl,-rpath,'$$ORIGIN/../Marle'" }
+
+    filter "configurations:Debug"
+        symbols "On"
+    
+    filter "configurations:Release"
+        optimize "On"
+
+    filter "configurations:Dist"
+        optimize "On"
+
+-- Polled-input state tests (headless)
+project "InputTests"
+    location "Tests/InputTests"
+    kind "ConsoleApp"
+    language "C++"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files 
+    {
+        "Tests/InputTests/src/**.h",
+        "Tests/InputTests/src/**.cpp",
     }
 
     includedirs
