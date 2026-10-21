@@ -40,6 +40,12 @@ namespace Marle {
         glUniform1i(location, value);
     }
 
+    void OpenGLShader::SetUniform1iv(const std::string& name, int count, const int* values)
+    {
+        GLint location = GetUniformLocation(name);
+        glUniform1iv(location, count, values);
+    }
+
     void OpenGLShader::SetUniformMat4f(const std::string& name, const glm::mat4& matrix)
     {
         GLint location = GetUniformLocation(name);

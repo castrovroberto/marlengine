@@ -10,3 +10,4 @@ Marle/Makefile
 Sandbox/Makefile
 Marle/vendor/glfw/Makefile
 *.o
+Tests/Makefile

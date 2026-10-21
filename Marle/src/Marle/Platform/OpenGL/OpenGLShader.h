@@ -15,7 +15,10 @@ namespace Marle {
         void Bind() const;
         void Unbind() const;
 
+        bool IsValid() const { return m_RendererID != 0; }
+
         void SetUniform1i(const std::string& name, int value);
+        void SetUniform1iv(const std::string& name, int count, const int* values);
         void SetUniformMat4f(const std::string& name, const glm::mat4& matrix);
 
     private:
