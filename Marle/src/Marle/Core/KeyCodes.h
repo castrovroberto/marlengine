@@ -69,7 +69,7 @@ namespace Marle {
             Semicolon = 59,   // ;
             Equal = 61,       // =
             LeftBracket = 91, // [
-            Backslash = 92,   // \
+            Backslash = 92,   // backslash
             RBracket = 93, // ]
             GraveAccent = 96, // `
             

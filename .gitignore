@@ -5,3 +5,7 @@ bin/
 bin-int/
 project/
 claude.session
+Makefile
+Marle/Makefile
+Sandbox/Makefile
+Marle/vendor/glfw/Makefile

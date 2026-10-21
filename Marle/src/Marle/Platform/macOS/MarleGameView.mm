@@ -1,22 +1,21 @@
 #include "MarleGameView.h"
 
 #ifdef MRL_PLATFORM_MACOS
-#include "Marle/Application.h"
 #include "Marle/Events/KeyEvent.h"
 #include "Marle/Events/MouseEvent.h"
 #include "MacOSKeyCodes.h"
 #import <Cocoa/Cocoa.h>
 
 @implementation MarleGameView {
-    Marle::Application* m_Application;
+    const Marle::Window::EventCallbackFn* m_Callback;
 }
 
 - (instancetype)initWithFrame:(NSRect)frameRect 
                   pixelFormat:(NSOpenGLPixelFormat*)format 
-                  application:(Marle::Application*)app {
+                  eventCallback:(const Marle::Window::EventCallbackFn*)callback {
     self = [super initWithFrame:frameRect pixelFormat:format];
     if (self) {
-        m_Application = app;
+        m_Callback = callback;
     }
     return self;
 }
@@ -39,14 +38,14 @@
 }
 
 - (void)keyDown:(NSEvent *)event {
-    if (!m_Application) return;
+    if (!m_Callback || !*m_Callback) return;
 
     unsigned short nativeKeyCode = [event keyCode];
     int marleKeyCode = Marle::TranslateMacOSKeyCodeToMarle(nativeKeyCode);
     int repeatCount = [event isARepeat] ? 1 : 0;
 
     Marle::KeyPressedEvent keyPressedEvent(marleKeyCode, repeatCount);
-    m_Application->OnEvent(keyPressedEvent);
+    (*m_Callback)(keyPressedEvent);
 
     // Handle KeyTypedEvent
     NSString *characters = [event characters];
@@ -54,22 +53,22 @@
         // For simplicity, sending the marleKeyCode for now
         // TODO: In the future, KeyTypedEvent should handle actual character data
         Marle::KeyTypedEvent keyTypedEvent(marleKeyCode);
-        m_Application->OnEvent(keyTypedEvent);
+        (*m_Callback)(keyTypedEvent);
     }
 }
 
 - (void)keyUp:(NSEvent *)event {
-    if (!m_Application) return;
+    if (!m_Callback || !*m_Callback) return;
 
     unsigned short nativeKeyCode = [event keyCode];
     int marleKeyCode = Marle::TranslateMacOSKeyCodeToMarle(nativeKeyCode);
 
     Marle::KeyReleasedEvent keyReleasedEvent(marleKeyCode);
-    m_Application->OnEvent(keyReleasedEvent);
+    (*m_Callback)(keyReleasedEvent);
 }
 
 - (void)flagsChanged:(NSEvent *)event {
-    if (!m_Application) return;
+    if (!m_Callback || !*m_Callback) return;
 
     static NSEventModifierFlags s_PreviousFlags = 0;
     NSEventModifierFlags current = [event modifierFlags];
@@ -86,10 +85,10 @@
         if (changed & m.flag) {
             if (current & m.flag) {
                 Marle::KeyPressedEvent e(m.keyCode, 0);
-                m_Application->OnEvent(e);
+                (*m_Callback)(e);
             } else {
                 Marle::KeyReleasedEvent e(m.keyCode);
-                m_Application->OnEvent(e);
+                (*m_Callback)(e);
             }
         }
     }
@@ -98,43 +97,43 @@
 }
 
 - (void)mouseMoved:(NSEvent *)event {
-    if (!m_Application) return;
+    if (!m_Callback || !*m_Callback) return;
     NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
     Marle::MouseMovedEvent e((float)loc.x, (float)loc.y);
-    m_Application->OnEvent(e);
+    (*m_Callback)(e);
 }
 
 - (void)mouseDragged:(NSEvent *)event      { [self mouseMoved:event]; }
 - (void)rightMouseDragged:(NSEvent *)event { [self mouseMoved:event]; }
 
 - (void)mouseDown:(NSEvent *)event {
-    if (!m_Application) return;
+    if (!m_Callback || !*m_Callback) return;
     Marle::MouseButtonPressedEvent e(0);
-    m_Application->OnEvent(e);
+    (*m_Callback)(e);
 }
 
 - (void)mouseUp:(NSEvent *)event {
-    if (!m_Application) return;
+    if (!m_Callback || !*m_Callback) return;
     Marle::MouseButtonReleasedEvent e(0);
-    m_Application->OnEvent(e);
+    (*m_Callback)(e);
 }
 
 - (void)rightMouseDown:(NSEvent *)event {
-    if (!m_Application) return;
+    if (!m_Callback || !*m_Callback) return;
     Marle::MouseButtonPressedEvent e(1);
-    m_Application->OnEvent(e);
+    (*m_Callback)(e);
 }
 
 - (void)rightMouseUp:(NSEvent *)event {
-    if (!m_Application) return;
+    if (!m_Callback || !*m_Callback) return;
     Marle::MouseButtonReleasedEvent e(1);
-    m_Application->OnEvent(e);
+    (*m_Callback)(e);
 }
 
 - (void)scrollWheel:(NSEvent *)event {
-    if (!m_Application) return;
+    if (!m_Callback || !*m_Callback) return;
     Marle::MouseScrolledEvent e((float)[event scrollingDeltaX], (float)[event scrollingDeltaY]);
-    m_Application->OnEvent(e);
+    (*m_Callback)(e);
 }
 
 @end

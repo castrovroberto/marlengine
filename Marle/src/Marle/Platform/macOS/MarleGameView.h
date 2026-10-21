@@ -3,16 +3,13 @@
 #ifdef MRL_PLATFORM_MACOS
 #import <Cocoa/Cocoa.h>
 
-// Forward declaration to avoid including Application.h in the header
-namespace Marle {
-    class Application;
-}
+#include "Marle/Window.h"
 
 @interface MarleGameView : NSOpenGLView
 
 - (instancetype)initWithFrame:(NSRect)frameRect 
                   pixelFormat:(NSOpenGLPixelFormat*)format 
-                  application:(Marle::Application*)app;
+                eventCallback:(const Marle::Window::EventCallbackFn*)callback;
 
 @end
 

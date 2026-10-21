@@ -9,6 +9,61 @@ workspace "Marle"
 
 outputdir="%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 
+-- GLFW provides the window/context/input backend on Linux (macOS uses native Cocoa)
+if os.target() == "linux" then
+project "GLFW"
+    location "Marle/vendor/glfw"
+    kind "StaticLib"
+    language "C"
+    pic "On"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files
+    {
+        "Marle/vendor/glfw/include/GLFW/glfw3.h",
+        "Marle/vendor/glfw/include/GLFW/glfw3native.h",
+        "Marle/vendor/glfw/src/internal.h",
+        "Marle/vendor/glfw/src/platform.h",
+        "Marle/vendor/glfw/src/mappings.h",
+        "Marle/vendor/glfw/src/context.c",
+        "Marle/vendor/glfw/src/init.c",
+        "Marle/vendor/glfw/src/input.c",
+        "Marle/vendor/glfw/src/monitor.c",
+        "Marle/vendor/glfw/src/platform.c",
+        "Marle/vendor/glfw/src/vulkan.c",
+        "Marle/vendor/glfw/src/window.c",
+        "Marle/vendor/glfw/src/egl_context.c",
+        "Marle/vendor/glfw/src/osmesa_context.c",
+        "Marle/vendor/glfw/src/null_init.c",
+        "Marle/vendor/glfw/src/null_monitor.c",
+        "Marle/vendor/glfw/src/null_window.c",
+        "Marle/vendor/glfw/src/null_joystick.c",
+        "Marle/vendor/glfw/src/x11_init.c",
+        "Marle/vendor/glfw/src/x11_monitor.c",
+        "Marle/vendor/glfw/src/x11_window.c",
+        "Marle/vendor/glfw/src/xkb_unicode.c",
+        "Marle/vendor/glfw/src/glx_context.c",
+        "Marle/vendor/glfw/src/posix_module.c",
+        "Marle/vendor/glfw/src/posix_poll.c",
+        "Marle/vendor/glfw/src/posix_thread.c",
+        "Marle/vendor/glfw/src/posix_time.c",
+        "Marle/vendor/glfw/src/linux_joystick.c"
+    }
+
+    defines { "_GLFW_X11" }
+
+    filter "configurations:Debug"
+        symbols "On"
+
+    filter "configurations:Release"
+        optimize "On"
+
+    filter "configurations:Dist"
+        optimize "On"
+end
+
 project "Marle"
     location "Marle"
     kind "SharedLib"
@@ -42,6 +97,8 @@ project "Marle"
         staticruntime "On"
         systemversion "latest"
 
+        removefiles { "%{prj.name}/src/**.mm", "%{prj.name}/src/Marle/Platform/macOS/**", "%{prj.name}/src/Marle/Platform/Linux/**" }
+
         defines 
         {
             "MRL_PLATFORM_WINDOWS"
@@ -57,6 +114,8 @@ project "Marle"
         staticruntime "On"
         buildoptions { "-stdlib=libc++" }
         linkoptions { "-stdlib=libc++" }
+
+        removefiles { "%{prj.name}/src/Marle/Platform/Linux/**" }
 
         defines 
         {
@@ -80,9 +139,24 @@ project "Marle"
         staticruntime "On"
         systemversion "latest"
 
+        removefiles { "%{prj.name}/src/**.mm", "%{prj.name}/src/Marle/Platform/macOS/**" }
+
         defines 
         {
             "MRL_PLATFORM_LINUX"
+        }
+
+        includedirs
+        {
+            "%{prj.name}/vendor/glfw/include"
+        }
+
+        links
+        {
+            "GLFW",
+            "X11",
+            "dl",
+            "pthread"
         }
 
     filter "configurations:Debug"
@@ -157,6 +231,9 @@ project "Sandbox"
         {
             "MRL_PLATFORM_LINUX"
         }
+
+        -- find libMarle.so next to the Sandbox binary's sibling output dir
+        linkoptions { "-Wl,-rpath,'$$ORIGIN/../Marle'" }
 
     filter "configurations:Debug"
         symbols "On"

@@ -35,7 +35,9 @@
     //  Microsoft Windows
     #define EXPORT __declspec(dllexport)
     #define IMPORT __declspec(dllimport)
-    #define MRL_PLATFORM_WINDOWS
+    #ifndef MRL_PLATFORM_WINDOWS
+        #define MRL_PLATFORM_WINDOWS
+    #endif
 #elif defined(__APPLE__)
     //  Apple macOS/iOS
     #define EXPORT __attribute__((visibility("default")))
@@ -47,7 +49,9 @@
     //  Linux
     #define EXPORT __attribute__((visibility("default")))
     #define IMPORT
-    #define MRL_PLATFORM_LINUX
+    #ifndef MRL_PLATFORM_LINUX
+        #define MRL_PLATFORM_LINUX
+    #endif
 #else
     //  do nothing and hope for the best?
     #define EXPORT
