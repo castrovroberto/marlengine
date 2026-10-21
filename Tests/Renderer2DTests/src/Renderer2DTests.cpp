@@ -17,7 +17,7 @@ static int fails = 0;
 
 struct Px { int r, g, b; };
 static Px Read(int x, int y) { unsigned char p[4]; glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p); return {p[0], p[1], p[2]}; }
-static bool Near(Px a, int r, int g, int b) { return abs(a.r-r) <= 2 && abs(a.g-g) <= 2 && abs(a.b-b) <= 2; }
+static bool Near(Px a, int r, int g, int b, int tol = 2) { return abs(a.r-r) <= tol && abs(a.g-g) <= tol && abs(a.b-b) <= tol; }
 
 
 // Writes a 64x64 uncompressed 32-bit TGA made of four 32x32 cells and returns its path.
@@ -40,6 +40,17 @@ static std::string WriteSheet()
             f.write((const char*)bgra, 4);
         }
     }
+    return path;
+}
+
+// Writes an 8x8 uncompressed 32-bit TGA of white pixels at the given alpha and returns its path.
+static std::string WriteAlphaTexture(unsigned char alpha)
+{
+    std::string path = (std::filesystem::temp_directory_path() / "marle_alpha_test.tga").string();
+    unsigned char header[18] = { 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 8, 0, 32, 0x08 };
+    std::ofstream f(path, std::ios::binary);
+    f.write((const char*)header, sizeof(header));
+    for (int i = 0; i < 64; i++) { unsigned char bgra[4] = { 255, 255, 255, alpha }; f.write((const char*)bgra, 4); }
     return path;
 }
 
@@ -196,7 +207,48 @@ protected:
             CHECK(Near(Read(300, 280), 255, 0, 0) && Near(Read(300, 320), 0, 255, 0), "rotated sprite keeps its orientation (red below, green above)");
         }
 
-        // 8. GL errors
+        // 8. alpha blending (background is (26,26,38))
+        {
+            // 50% red over the background: 0.5*255 + 0.5*26 = 140, 13, 19
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(W, H);
+            Renderer2D::DrawQuad({100, 500}, {50, 50}, glm::vec4(1, 0, 0, 0.5f));
+            Renderer2D::EndScene();
+            { Px q = Read(100, 500); CHECK(Near(q, 140, 13, 19, 3), "50%% red blends with the background (%d,%d,%d)", q.r, q.g, q.b); }
+
+            // zero alpha leaves the background alone
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(W, H);
+            Renderer2D::DrawQuad({100, 500}, {50, 50}, glm::vec4(1, 0, 0, 0.0f));
+            Renderer2D::EndScene();
+            CHECK(Near(Read(100, 500), bg.r, bg.g, bg.b), "zero-alpha quad is invisible");
+
+            // order matters: translucent red over opaque blue = (127,0,127); the reverse is opaque blue
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginScene(W, H);
+            Renderer2D::DrawQuad({200, 500}, {50, 50}, glm::vec4(0, 0, 1, 1));
+            Renderer2D::DrawQuad({200, 500}, {50, 50}, glm::vec4(1, 0, 0, 0.5f));
+            Renderer2D::DrawQuad({300, 500}, {50, 50}, glm::vec4(1, 0, 0, 0.5f));
+            Renderer2D::DrawQuad({300, 500}, {50, 50}, glm::vec4(0, 0, 1, 1));
+            Renderer2D::EndScene();
+            { Px q = Read(200, 500); CHECK(Near(q, 128, 0, 128, 3), "red over blue blends (%d,%d,%d)", q.r, q.g, q.b); }
+            CHECK(Near(Read(300, 500), 0, 0, 255), "opaque blue drawn last covers red");
+            CHECK(Renderer2D::GetStats().DrawCalls == 1, "blending does not break batching");
+
+            // texture alpha (0.5) times tint alpha: white*green tint at 0.5 -> (13,140,19); at 0.5*0.5 -> (19.5,83,28.5)
+            std::string path = WriteAlphaTexture(128);
+            OpenGLTexture2D half(path);
+            std::filesystem::remove(path);
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(W, H);
+            Renderer2D::DrawQuad({400, 500}, {50, 50}, &half, glm::vec4(0, 1, 0, 1));
+            Renderer2D::DrawQuad({500, 500}, {50, 50}, &half, glm::vec4(0, 1, 0, 0.5f));
+            Renderer2D::EndScene();
+            { Px q = Read(400, 500); CHECK(Near(q, 13, 140, 19, 4), "texture alpha blends (%d,%d,%d)", q.r, q.g, q.b); }
+            { Px q = Read(500, 500); CHECK(Near(q, 19, 83, 28, 4), "texture alpha multiplies tint alpha (%d,%d,%d)", q.r, q.g, q.b); }
+        }
+
+        // 9. GL errors
         GLenum err = glGetError();
         CHECK(err == GL_NO_ERROR, "no GL error (0x%x)", err);
 

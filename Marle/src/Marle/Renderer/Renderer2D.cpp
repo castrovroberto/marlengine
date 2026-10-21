@@ -58,6 +58,10 @@ namespace Marle {
 
         data->Vertices.resize(MaxVertices);
 
+        // Standard alpha blending. There is no depth test, so quads blend in submission order.
+        glEnable(GL_BLEND);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
         // Dynamic vertex buffer, refilled every batch
         glGenVertexArrays(1, &data->QuadVAO);
         glBindVertexArray(data->QuadVAO);
@@ -114,6 +118,7 @@ namespace Marle {
     void Renderer2D::Shutdown()
     {
         if (s_Data) {
+            glDisable(GL_BLEND);
             glDeleteVertexArrays(1, &s_Data->QuadVAO);
             glDeleteBuffers(1, &s_Data->QuadVBO);
             glDeleteBuffers(1, &s_Data->QuadEBO);

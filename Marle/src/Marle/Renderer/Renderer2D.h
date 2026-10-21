@@ -14,6 +14,8 @@ namespace Marle {
     // and submitted in as few draw calls as possible (at most 16 distinct textures per call).
     // Positions are quad centers in world space. BeginScene(w, h) uses pixel space with the origin
     // at the bottom-left; BeginScene(camera) uses the camera's view and projection.
+    // Quads are alpha-blended (texture alpha * tint alpha) in the order they are submitted, so draw
+    // back to front. Textures are straight (non-premultiplied) alpha.
     // Rotations are in radians, counter-clockwise positive, about the quad center.
     class EXPORT Renderer2D {
     public:

@@ -24,6 +24,11 @@ void HudLayer::OnRender(double)
 
         // WASD cluster (arrows light the same keys)
         const float k = 30.0f, gap = 6.0f, x0 = 40.0f, y0 = 70.0f;
+
+        // Translucent backing panels go first: quads blend in submission order
+        const glm::vec4 panel(0.0f, 0.0f, 0.0f, 0.45f);
+        Renderer2D::DrawQuad({ 125.0f, 72.0f }, { 220.0f, 120.0f }, panel);
+        Renderer2D::DrawQuad({ 140.0f, (float)m_App.GetHeight() - 30.0f }, { 240.0f, 36.0f }, panel);
         Renderer2D::DrawQuad({ x0 + k + gap, y0 + k + gap }, { k, k }, lit(Input::IsKeyPressed(Key::W) || Input::IsKeyPressed(Key::Up)));
         Renderer2D::DrawQuad({ x0,           y0 },           { k, k }, lit(Input::IsKeyPressed(Key::A) || Input::IsKeyPressed(Key::Left)));
         Renderer2D::DrawQuad({ x0 + k + gap, y0 },           { k, k }, lit(Input::IsKeyPressed(Key::S) || Input::IsKeyPressed(Key::Down)));
