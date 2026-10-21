@@ -9,6 +9,16 @@ workspace "Marle"
 
 outputdir="%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 
+-- libc++ headers from the active macOS SDK (instead of a pinned SDK version path)
+local function macOSCxxIncludes()
+    if os.host() ~= "macosx" then return {} end
+    local sdk = os.outputof("xcrun --show-sdk-path")
+    if sdk and os.isdir(sdk .. "/usr/include/c++/v1") then
+        return { sdk .. "/usr/include/c++/v1" }
+    end
+    return {}
+end
+
 -- GLFW provides the window/context/input backend on Linux (macOS uses native Cocoa)
 if os.target() == "linux" then
 project "GLFW"
@@ -122,10 +132,7 @@ project "Marle"
             "MRL_PLATFORM_MACOS"
         }
 
-        includedirs
-        {
-            "/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1"
-        }
+        includedirs(macOSCxxIncludes())
 
         links
         {
@@ -217,10 +224,7 @@ project "Sandbox"
             "MRL_PLATFORM_MACOS"
         }
 
-        includedirs
-        {
-            "/Library/Developer/CommandLineTools/SDKs/MacOSX15.5.sdk/usr/include/c++/v1"
-        }
+        includedirs(macOSCxxIncludes())
 
     filter "system:linux"
         cppdialect "C++17"
