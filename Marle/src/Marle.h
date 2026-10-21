@@ -28,6 +28,7 @@
 #include "Marle/Core/KeyCodes.h"
 
 // Renderer
+#include "Marle/Renderer/OrthographicCamera.h"
 #include "Marle/Renderer/Renderer2D.h"
 #include "Marle/Platform/OpenGL/OpenGLTexture.h"
 

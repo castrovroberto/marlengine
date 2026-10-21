@@ -2,6 +2,7 @@
 #include "Renderer2D.h"
 #include "../Platform/OpenGL/OpenGLShader.h"
 #include <glm/gtc/matrix_transform.hpp>
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -121,14 +122,18 @@ namespace Marle {
 
     void Renderer2D::BeginScene(float viewportWidth, float viewportHeight)
     {
+        BeginScene(OrthographicCamera(0.0f, viewportWidth, 0.0f, viewportHeight));
+    }
+
+    void Renderer2D::BeginScene(const OrthographicCamera& camera)
+    {
         if (!s_Data) {
             printf("Error: Renderer2D not initialized!\n");
             return;
         }
 
         s_Data->TextureShader->Bind();
-        glm::mat4 proj = glm::ortho(0.0f, viewportWidth, 0.0f, viewportHeight, -1.0f, 1.0f);
-        s_Data->TextureShader->SetUniformMat4f("u_ViewProjection", proj);
+        s_Data->TextureShader->SetUniformMat4f("u_ViewProjection", camera.GetViewProjectionMatrix());
 
         s_Data->QuadCount = 0;
         s_Data->TextureSlotCount = 1;
@@ -168,7 +173,7 @@ namespace Marle {
         s_Data->TextureSlotCount = 1;
     }
 
-    void Renderer2D::SubmitQuad(const glm::vec2& position, const glm::vec2& size, uint32_t textureID, const glm::vec4& color)
+    void Renderer2D::SubmitQuad(const glm::vec2& position, const glm::vec2& size, float rotation, uint32_t textureID, const glm::vec4& color)
     {
         if (s_Data->QuadCount >= MaxQuads)
             NextBatch();
@@ -190,9 +195,13 @@ namespace Marle {
         static const glm::vec2 corners[4] = { {-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f} };
         static const glm::vec2 texCoords[4] = { {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f} };
 
+        const float c = cosf(rotation), sn = sinf(rotation);
+
         QuadVertex* v = &s_Data->Vertices[s_Data->QuadCount * 4];
         for (int i = 0; i < 4; i++) {
-            v[i].Position = glm::vec3(position + corners[i] * size, 0.0f);
+            glm::vec2 offset = corners[i] * size;
+            glm::vec2 rotated(offset.x * c - offset.y * sn, offset.x * sn + offset.y * c);
+            v[i].Position = glm::vec3(position + rotated, 0.0f);
             v[i].Color = color;
             v[i].TexCoord = texCoords[i];
             v[i].TexIndex = (float)slot;
@@ -208,20 +217,35 @@ namespace Marle {
 
     void Renderer2D::DrawQuad(const glm::vec2& position, const glm::vec2& size, OpenGLTexture2D* texture, const glm::vec4& tint)
     {
+        DrawRotatedQuad(position, size, 0.0f, texture, tint);
+    }
+
+    void Renderer2D::DrawQuad(const glm::vec2& position, const glm::vec2& size, const glm::vec4& color)
+    {
+        DrawRotatedQuad(position, size, 0.0f, color);
+    }
+
+    void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, OpenGLTexture2D* texture)
+    {
+        DrawRotatedQuad(position, size, rotation, texture, glm::vec4(1.0f));
+    }
+
+    void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, OpenGLTexture2D* texture, const glm::vec4& tint)
+    {
         if (!s_Data || !texture) {
             printf("Error: Cannot draw quad - missing components\n");
             return;
         }
-        SubmitQuad(position, size, texture->GetRendererID(), tint);
+        SubmitQuad(position, size, rotation, texture->GetRendererID(), tint);
     }
 
-    void Renderer2D::DrawQuad(const glm::vec2& position, const glm::vec2& size, const glm::vec4& color)
+    void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const glm::vec4& color)
     {
         if (!s_Data) {
             printf("Error: Cannot draw quad - renderer not initialized\n");
             return;
         }
-        SubmitQuad(position, size, 0, color);
+        SubmitQuad(position, size, rotation, 0, color);
     }
 
     Renderer2D::Statistics Renderer2D::GetStats()

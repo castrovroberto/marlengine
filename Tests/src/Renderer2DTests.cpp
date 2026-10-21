@@ -74,7 +74,55 @@ protected:
         printf("      first-slot px=(%d,%d,%d) last-batch px=(%d,%d,%d)\n", lo.r, lo.g, lo.b, hi.r, hi.g, hi.b);
         CHECK(!Near(lo, bg.r, bg.g, bg.b) && !Near(hi, bg.r, bg.g, bg.b), "textures in both batches rendered");
 
-        // 5. GL errors
+        // 5. rotation: radians, counter-clockwise positive, about the quad center
+        glClear(GL_COLOR_BUFFER_BIT);
+        Renderer2D::BeginScene(W, H);
+        Renderer2D::DrawRotatedQuad({200, 200}, {100, 20}, 1.5707963f, glm::vec4(1, 0, 0, 1));     // 90 degrees
+        Renderer2D::DrawRotatedQuad({600, 200}, {100, 20}, 0.7853982f, glm::vec4(1, 0, 0, 1));     // 45 degrees
+        Renderer2D::EndScene();
+        CHECK(Near(Read(200, 240), 255, 0, 0), "90 deg: long axis now vertical (200,240 filled)");
+        CHECK(Near(Read(240, 200), bg.r, bg.g, bg.b), "90 deg: old horizontal extent empty (240,200)");
+        CHECK(Near(Read(625, 225), 255, 0, 0), "45 deg CCW: long axis points up-right");
+        CHECK(Near(Read(625, 175), bg.r, bg.g, bg.b), "45 deg CCW: down-right is empty");
+
+        // 6. camera
+        {
+            OrthographicCamera pan(0, W, 0, H);
+            pan.SetPosition({100, 0});
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(pan);
+            Renderer2D::DrawQuad({300, 300}, {50, 50}, glm::vec4(0, 1, 0, 1));
+            Renderer2D::EndScene();
+            CHECK(Near(Read(200, 300), 0, 255, 0), "camera at x=100: world x=300 appears at screen x=200");
+            CHECK(Near(Read(300, 300), bg.r, bg.g, bg.b), "camera pan: old screen position empty");
+
+            OrthographicCamera zoom(0, W / 2, 0, H / 2);
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(zoom);
+            Renderer2D::DrawQuad({100, 100}, {50, 50}, glm::vec4(0, 0, 1, 1));
+            Renderer2D::EndScene();
+            CHECK(Near(Read(200, 200), 0, 0, 255), "2x zoom: quad center at (200,200)");
+            CHECK(Near(Read(245, 200), 0, 0, 255), "2x zoom: quad is 100px wide");
+            CHECK(Near(Read(260, 200), bg.r, bg.g, bg.b), "2x zoom: nothing past 100px");
+
+            OrthographicCamera rot(-W / 2, W / 2, -H / 2, H / 2);
+            rot.SetPosition({512, 384});
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(rot);
+            Renderer2D::DrawQuad({512, 384}, {20, 20}, glm::vec4(1, 1, 0, 1));
+            Renderer2D::EndScene();
+            CHECK(Near(Read(512, 384), 255, 255, 0), "centered camera: world point at camera sits at screen center");
+
+            rot.SetRotation(1.5707963f); // camera turned 90 deg CCW: the world appears turned 90 deg CW
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(rot);
+            Renderer2D::DrawQuad({512, 484}, {20, 20}, glm::vec4(1, 1, 0, 1)); // 100 above the camera
+            Renderer2D::EndScene();
+            CHECK(Near(Read(612, 384), 255, 255, 0), "camera rotated 90 CCW: point above camera appears to the right");
+            CHECK(Near(Read(512, 484), bg.r, bg.g, bg.b), "camera rotated: old screen position empty");
+        }
+
+        // 7. GL errors
         GLenum err = glGetError();
         CHECK(err == GL_NO_ERROR, "no GL error (0x%x)", err);
 
