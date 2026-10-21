@@ -1,4 +1,5 @@
 #include "mrlpch.h"
+#include "Marle/Log.h"
 #include "OpenGLTexture.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -15,14 +16,14 @@ namespace Marle {
         unsigned char* data = stbi_load(path.c_str(), &width, &height, &sourceChannels, 4); // Force 4 channels (RGBA)
         
         if (!data) {
-            printf("Failed to load texture: %s (%s)\n", path.c_str(), stbi_failure_reason());
+            MRL_CORE_ERROR("Failed to load texture: {} ({})", path, stbi_failure_reason());
             return;
         }
 
         m_Width = width;
         m_Height = height;
-        printf("Loaded texture: %s (%dx%d, %d source channel%s, uploaded as RGBA)\n",
-               path.c_str(), m_Width, m_Height, sourceChannels, sourceChannels == 1 ? "" : "s");
+        MRL_CORE_INFO("Loaded texture: {} ({}x{}, {} source channel{}, uploaded as RGBA)",
+                      path, m_Width, m_Height, sourceChannels, sourceChannels == 1 ? "" : "s");
 
         // Generate OpenGL texture
         glGenTextures(1, &m_RendererID);

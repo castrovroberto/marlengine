@@ -1,4 +1,5 @@
 #include "mrlpch.h"
+#include "Marle/Log.h"
 #include "MacOSWindow.h"
 #include "Marle/Events/ApplicationEvent.h"
 
@@ -90,13 +91,13 @@ namespace Marle {
             CFRelease(m_Window);
             m_Window = nullptr;
         }
-        printf("macOS window shutdown complete\n");
+        MRL_CORE_TRACE("macOS window shutdown complete");
     }
 
     bool MacOSWindow::InitWindow(const WindowProps& props)
     {
-        printf("Initializing macOS window...\n");
-        printf("Window properties: %s (%dx%d)\n", props.Title, props.Width, props.Height);
+        MRL_CORE_INFO("Initializing macOS window...");
+        MRL_CORE_INFO("Window properties: {} ({}x{})", props.Title, props.Width, props.Height);
         
         // Initialize Cocoa application
         [NSApplication sharedApplication];
@@ -123,13 +124,13 @@ namespace Marle {
 
         m_Window = (void*)CFBridgingRetain(window);
         
-        printf("macOS window initialization complete\n");
+        MRL_CORE_TRACE("macOS window initialization complete");
         return true;
     }
 
     bool MacOSWindow::InitGraphics()
     {
-        printf("Initializing OpenGL context...\n");
+        MRL_CORE_INFO("Initializing OpenGL context...");
         
         NSWindow* window = (__bridge NSWindow*)m_Window;
         
@@ -145,14 +146,14 @@ namespace Marle {
         
         NSOpenGLPixelFormat* pixelFormat = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];
         if (!pixelFormat) {
-            printf("Failed to create OpenGL pixel format!\n");
+            MRL_CORE_ERROR("Failed to create OpenGL pixel format!");
             return false;
         }
         
         // Create OpenGL context
         NSOpenGLContext* context = [[NSOpenGLContext alloc] initWithFormat:pixelFormat shareContext:nil];
         if (!context) {
-            printf("Failed to create OpenGL context!\n");
+            MRL_CORE_ERROR("Failed to create OpenGL context!");
             return false;
         }
         
@@ -171,14 +172,14 @@ namespace Marle {
         // Initialize GLAD
         int version = gladLoadGL((GLADloadfunc)GetProcAddress);
         if (version == 0) {
-            printf("Failed to initialize GLAD!\n");
+            MRL_CORE_ERROR("Failed to initialize GLAD!");
             CFRelease(m_GLContext);
             m_GLContext = nullptr;
             return false;
         }
         
-        printf("GLAD Initialized. OpenGL Version: %d.%d\n", GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
-        printf("OpenGL context initialization complete\n");
+        MRL_CORE_INFO("GLAD initialized. OpenGL version: {}.{}", GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
+        MRL_CORE_TRACE("OpenGL context initialization complete");
         return true;
     }
 

@@ -12,5 +12,6 @@ Marle/vendor/glfw/Makefile
 *.o
 Tests/Renderer2DTests/Makefile
 Tests/InputTests/Makefile
+Tests/LogTests/Makefile
 Tests/LayerStackTests/Makefile
 Tests/ApplicationTests/Makefile

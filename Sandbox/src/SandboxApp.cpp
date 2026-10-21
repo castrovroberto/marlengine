@@ -11,8 +11,7 @@ public:
         auto* world = static_cast<WorldLayer*>(PushLayer(std::make_unique<WorldLayer>(*this)));
         PushOverlay(std::make_unique<HudLayer>(*this, *world));
 
-        printf("Controls: WASD/arrows move (Shift runs), Q/E rotate camera, mouse wheel zooms,\n"
-               "          R resets, H toggles the HUD, Esc quits\n");
+        MRL_INFO("Controls: WASD/arrows move (Shift runs), Q/E rotate camera, mouse wheel zooms, R resets, H toggles the HUD, Esc quits");
     }
 };
 

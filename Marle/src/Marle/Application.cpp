@@ -1,4 +1,5 @@
 #include "mrlpch.h"
+#include "Log.h"
 #include "Application.h"
 #include "Events/KeyEvent.h"
 #include "Events/ApplicationEvent.h"
@@ -19,11 +20,11 @@ namespace Marle {
 
     Application::Application(const WindowProps& props)
     {
-        printf("Creating Marle Application: %s\n", props.Title);
+        MRL_CORE_INFO("Creating Marle Application: {}", props.Title);
 
         m_Window = Window::Create(props);
         if (!m_Window) {
-            printf("Failed to create window!\n");
+            MRL_CORE_ERROR("Failed to create window!");
             m_Running = false;
             return;
         }
@@ -34,7 +35,7 @@ namespace Marle {
 
     Application::~Application()
     {
-        printf("Destroying Marle Application\n");
+        MRL_CORE_INFO("Destroying Marle Application");
         m_LayerStack.Clear(); // layers may own GL resources, so go before the context
         if (m_Window) {
             ShutdownGraphics();
@@ -44,9 +45,9 @@ namespace Marle {
 
     void Application::InitGraphics()
     {
-        printf("  Vendor: %s\n", (const char*)glGetString(GL_VENDOR));
-        printf("  Renderer: %s\n", (const char*)glGetString(GL_RENDERER));
-        printf("  Version: %s\n", (const char*)glGetString(GL_VERSION));
+        MRL_CORE_INFO("  Vendor: {}", (const char*)glGetString(GL_VENDOR));
+        MRL_CORE_INFO("  Renderer: {}", (const char*)glGetString(GL_RENDERER));
+        MRL_CORE_INFO("  Version: {}", (const char*)glGetString(GL_VERSION));
 
         // Set initial OpenGL state
         glViewport(0, 0, m_Window->GetWidth(), m_Window->GetHeight());
@@ -95,7 +96,7 @@ namespace Marle {
 
     void Application::OnEvent(Event& e)
     {
-        printf("Application::OnEvent - %s\n", e.ToString().c_str());
+        MRL_CORE_TRACE("Application::OnEvent - {}", e.ToString());
         
         // Handle application-level events here
         // For now, just log them
@@ -113,7 +114,7 @@ namespace Marle {
 
     void Application::Run()
     {
-        printf("Application Run loop started\n");
+        MRL_CORE_INFO("Application Run loop started");
 
         double last_time = GetCurrentTimeSeconds();
 
@@ -162,7 +163,7 @@ namespace Marle {
             m_Window->OnUpdate();
         }
         
-        printf("Application Run loop ended\n");
+        MRL_CORE_INFO("Application Run loop ended");
     }
 
 }

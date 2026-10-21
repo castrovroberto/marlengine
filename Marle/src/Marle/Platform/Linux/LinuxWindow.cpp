@@ -1,4 +1,5 @@
 #include "mrlpch.h"
+#include "Marle/Log.h"
 #include "LinuxWindow.h"
 #include "LinuxKeyCodes.h"
 #include "Marle/Events/ApplicationEvent.h"
@@ -14,7 +15,7 @@ namespace Marle {
 
     static void GLFWErrorCallback(int error, const char* description)
     {
-        printf("GLFW error (%d): %s\n", error, description);
+        MRL_CORE_ERROR("GLFW error ({}): {}", error, description);
     }
 
     std::unique_ptr<Window> Window::Create(const WindowProps& props)
@@ -29,12 +30,12 @@ namespace Marle {
         m_Data.Width = props.Width;
         m_Data.Height = props.Height;
 
-        printf("Creating Linux window: %s (%ux%u)\n", props.Title, props.Width, props.Height);
+        MRL_CORE_INFO("Creating Linux window: {} ({}x{})", props.Title, props.Width, props.Height);
 
         if (s_GLFWWindowCount == 0) {
             glfwSetErrorCallback(GLFWErrorCallback);
             if (!glfwInit()) {
-                printf("Failed to initialize GLFW!\n");
+                MRL_CORE_ERROR("Failed to initialize GLFW!");
                 return;
             }
         }
@@ -45,7 +46,7 @@ namespace Marle {
 
         m_Window = glfwCreateWindow((int)props.Width, (int)props.Height, props.Title, nullptr, nullptr);
         if (!m_Window) {
-            printf("Failed to create GLFW window!\n");
+            MRL_CORE_ERROR("Failed to create GLFW window!");
             if (s_GLFWWindowCount == 0) glfwTerminate();
             return;
         }
@@ -56,10 +57,10 @@ namespace Marle {
 
         int version = gladLoadGL((GLADloadfunc)glfwGetProcAddress);
         if (version == 0) {
-            printf("Failed to initialize GLAD!\n");
+            MRL_CORE_ERROR("Failed to initialize GLAD!");
             return;
         }
-        printf("GLAD Initialized. OpenGL Version: %d.%d\n", GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
+        MRL_CORE_INFO("GLAD initialized. OpenGL version: {}.{}", GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
 
         glfwSetWindowUserPointer(m_Window, &m_Data);
 
@@ -128,7 +129,7 @@ namespace Marle {
             --s_GLFWWindowCount;
         }
         if (s_GLFWWindowCount == 0) glfwTerminate();
-        printf("Linux window shutdown complete\n");
+        MRL_CORE_TRACE("Linux window shutdown complete");
     }
 
     void LinuxWindow::OnUpdate()

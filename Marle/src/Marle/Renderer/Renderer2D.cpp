@@ -1,4 +1,5 @@
 #include "mrlpch.h"
+#include "../Log.h"
 #include "Renderer2D.h"
 #include "../Platform/OpenGL/OpenGLShader.h"
 #include <glm/gtc/matrix_transform.hpp>
@@ -20,7 +21,7 @@ namespace Marle {
     {
         static std::unordered_set<std::string> reported;
         if (reported.insert(message).second)
-            printf("%s (further occurrences not logged)\n", message);
+            MRL_CORE_ERROR("{} (further occurrences not logged)", message);
     }
 
     struct QuadVertex {
@@ -54,7 +55,7 @@ namespace Marle {
 
     void Renderer2D::Init()
     {
-        printf("Initializing Renderer2D...\n");
+        MRL_CORE_INFO("Initializing Renderer2D...");
         
         auto data = std::make_unique<RendererData>();
 
@@ -63,7 +64,7 @@ namespace Marle {
             "Assets/Shaders/Texture.frag"
         );
         if (!data->TextureShader->IsValid()) {
-            printf("Error: Renderer2D shader failed to load, renderer disabled\n");
+            MRL_CORE_ERROR("Renderer2D shader failed to load, renderer disabled");
             return;
         }
 
@@ -133,7 +134,7 @@ namespace Marle {
         data->TextureShader->Unbind();
 
         s_Data = std::move(data);
-        printf("Renderer2D initialized successfully\n");
+        MRL_CORE_INFO("Renderer2D initialized successfully");
     }
 
     void Renderer2D::Shutdown()
@@ -147,7 +148,7 @@ namespace Marle {
             glDeleteTextures(1, &s_Data->ErrorTexture);
             s_Data.reset();
         }
-        printf("Renderer2D shutdown complete\n");
+        MRL_CORE_TRACE("Renderer2D shutdown complete");
     }
 
     void Renderer2D::BeginScene(float viewportWidth, float viewportHeight)
@@ -158,7 +159,7 @@ namespace Marle {
     void Renderer2D::BeginScene(const OrthographicCamera& camera)
     {
         if (!s_Data) {
-            ReportOnce("Error: Renderer2D not initialized!");
+            ReportOnce("Renderer2D not initialized!");
             return;
         }
 
@@ -243,7 +244,7 @@ namespace Marle {
     static uint32_t ResolveTexture(OpenGLTexture2D* texture, GLuint errorTexture)
     {
         if (!texture) {
-            ReportOnce("Error: DrawQuad called with a null texture, drawing the error texture");
+            ReportOnce("DrawQuad called with a null texture, drawing the error texture");
             return errorTexture;
         }
         return texture->IsLoaded() ? texture->GetRendererID() : errorTexture;
@@ -272,7 +273,7 @@ namespace Marle {
     void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, OpenGLTexture2D* texture, const glm::vec4& tint)
     {
         if (!s_Data) {
-            ReportOnce("Error: Cannot draw quad - Renderer2D not initialized");
+            ReportOnce("Cannot draw quad - Renderer2D not initialized");
             return;
         }
         SubmitQuad(position, size, rotation, ResolveTexture(texture, s_Data->ErrorTexture), s_FullTexCoords, tint);
@@ -296,7 +297,7 @@ namespace Marle {
     void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const SubTexture2D& subTexture, const glm::vec4& tint)
     {
         if (!s_Data) {
-            ReportOnce("Error: Cannot draw quad - Renderer2D not initialized");
+            ReportOnce("Cannot draw quad - Renderer2D not initialized");
             return;
         }
         SubmitQuad(position, size, rotation, ResolveTexture(subTexture.GetTexture(), s_Data->ErrorTexture), subTexture.GetTexCoords(), tint);
@@ -305,7 +306,7 @@ namespace Marle {
     void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const glm::vec4& color)
     {
         if (!s_Data) {
-            ReportOnce("Error: Cannot draw quad - Renderer2D not initialized");
+            ReportOnce("Cannot draw quad - Renderer2D not initialized");
             return;
         }
         SubmitQuad(position, size, rotation, 0, s_FullTexCoords, color);

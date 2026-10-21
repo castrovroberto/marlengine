@@ -58,7 +58,7 @@ void HudLayer::OnRender(double)
     if (m_UpdateCount >= 60) {
         m_UpdateCount = 0;
         auto stats = Renderer2D::GetStats();
-        printf("Renderer2D: %u quads in %u draw calls (last second)\n", stats.QuadCount, stats.DrawCalls);
+        MRL_INFO("Renderer2D: {} quads in {} draw calls (last second)", stats.QuadCount, stats.DrawCalls);
         Renderer2D::ResetStats();
     }
 }

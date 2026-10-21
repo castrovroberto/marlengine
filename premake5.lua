@@ -311,5 +311,6 @@ end
 
 testProject "Renderer2DTests"   -- pixel readback; needs a display, run from the repo root
 testProject "InputTests"        -- headless
+testProject "LogTests"          -- headless
 testProject "LayerStackTests"   -- headless
 testProject "ApplicationTests"  -- needs a display

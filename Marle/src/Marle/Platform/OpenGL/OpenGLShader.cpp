@@ -1,4 +1,5 @@
 #include "mrlpch.h"
+#include "Marle/Log.h"
 #include "OpenGLShader.h"
 #include <fstream>
 #include <sstream>
@@ -12,7 +13,7 @@ namespace Marle {
         std::string fragmentSource = ReadFile(fragmentSrcPath);
         
         if (vertexSource.empty() || fragmentSource.empty()) {
-            printf("Failed to read shader files!\n");
+            MRL_CORE_ERROR("Failed to read shader files: {}, {}", vertexSrcPath, fragmentSrcPath);
             return;
         }
 
@@ -56,7 +57,7 @@ namespace Marle {
     {
         std::ifstream file(filepath);
         if (!file.is_open()) {
-            printf("Failed to open shader file: %s\n", filepath.c_str());
+            MRL_CORE_ERROR("Failed to open shader file: {}", filepath);
             return "";
         }
 
@@ -83,8 +84,8 @@ namespace Marle {
             char* message = new char[length];
             glGetShaderInfoLog(shader, length, &length, message);
             
-            printf("Failed to compile %s shader:\n%s\n", 
-                   (type == GL_VERTEX_SHADER ? "vertex" : "fragment"), message);
+            MRL_CORE_ERROR("Failed to compile {} shader:\n{}",
+                           (type == GL_VERTEX_SHADER ? "vertex" : "fragment"), message);
             
             delete[] message;
             glDeleteShader(shader);
@@ -119,7 +120,7 @@ namespace Marle {
             char* message = new char[length];
             glGetProgramInfoLog(program, length, &length, message);
             
-            printf("Failed to link shader program:\n%s\n", message);
+            MRL_CORE_ERROR("Failed to link shader program:\n{}", message);
             
             delete[] message;
             glDeleteProgram(program);
@@ -133,7 +134,7 @@ namespace Marle {
         glDeleteShader(vs);
         glDeleteShader(fs);
 
-        printf("Shader program created successfully\n");
+        MRL_CORE_INFO("Shader program created successfully");
         return program;
     }
 
@@ -145,7 +146,7 @@ namespace Marle {
 
         GLint location = glGetUniformLocation(m_RendererID, name.c_str());
         if (location == -1)
-            printf("Warning: uniform '%s' not found\n", name.c_str());
+            MRL_CORE_WARN("Uniform '{}' not found", name);
 
         m_UniformLocationCache[name] = location;
         return location;
