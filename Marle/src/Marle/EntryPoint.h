@@ -12,6 +12,9 @@
  * However, several non-standard pragmas are supported by multiple implementations.
  * 
  * #pragma once
+
+#include "Marle/Application.h"
+#include "Marle/Log.h"
  * If it appears in a header file, it indicates that it is only to be parsed once, 
  * even if it is (directly or indirectly) included multiple times in the same source file.
  * 

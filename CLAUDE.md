@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Marlengine is a personal C++17 game engine (following The Cherno's engine series). Two Premake projects: `Marle` (the engine, built as a shared library) and `Sandbox` (a console-app client that links it). The only tests are the `Tests/` projects (below); there is no linter.
+Marlengine is a personal C++17 game engine (following The Cherno's engine series). Two Premake projects: `Marle` (the engine, built as a shared library) and `Sandbox` (a demo client that links it: `WorldLayer` is a tiled world with a player, camera and sprite sheet from `Assets/Textures/test_sheet.tga`; `HudLayer` is a pixel-space input overlay; WASD/arrows move, Shift runs, Q/E rotate the camera, wheel zooms, R resets, H toggles the HUD, Esc quits). The only tests are the `Tests/` projects (below); there is no linter.
 
 ## Build & run
 
@@ -20,7 +20,7 @@ Marlengine is a personal C++17 game engine (following The Cherno's engine series
 
 ## Architecture
 
-- **Client contract**: `Marle.h` is the single include for clients. It ends by including `EntryPoint.h`, which defines `main()`; it calls `Log::Init()`, then `Marle::CreateApplication()` (which the client must define), `Run()`, and deletes the app. So include `Marle.h` in exactly one translation unit (the app file).
+- **Client contract**: `Marle.h` is the single include for clients. `Marle/EntryPoint.h` is separate and defines `main()`; include it in exactly one source file (the one defining `Marle::CreateApplication()`, which the client must provide). `main` calls `Log::Init()`, then `CreateApplication()`, `Run()`, and deletes the app.
 - **Application** (`Application.h/.cpp`): platform-neutral. Owns a `std::unique_ptr<Window>` and a fixed-timestep loop (60 Hz, accumulator + interpolation alpha, `steady_clock`). Clients subclass it and override `OnUpdate(fixed_dt)`, `OnRender(alpha)`, `OnEvent(Event&)` and `OnResize`. The window's event callback goes to a private `HandleEvent`, which handles close, resize and Escape-to-quit before calling the client's `OnEvent`.
 - **Window abstraction** (`Window.h`): abstract `Window` (`OnUpdate` pumps events and swaps buffers; `SetEventCallback`; static `Window::Create` defined once per platform). Creating a window leaves a GL 3.3+ context current with glad loaded. Mouse coordinates are bottom-left origin.
   - Linux: `Platform/Linux/LinuxWindow.cpp` (GLFW, X11 backend, vendored in `Marle/vendor/glfw`) and `LinuxKeyCodes.cpp` (GLFW key to `Marle::Key`).
