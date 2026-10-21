@@ -7,6 +7,9 @@
 #include <vector>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 using namespace Marle;
 
 static int fails = 0;
@@ -15,6 +18,30 @@ static int fails = 0;
 struct Px { int r, g, b; };
 static Px Read(int x, int y) { unsigned char p[4]; glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p); return {p[0], p[1], p[2]}; }
 static bool Near(Px a, int r, int g, int b) { return abs(a.r-r) <= 2 && abs(a.g-g) <= 2 && abs(a.b-b) <= 2; }
+
+
+// Writes a 64x64 uncompressed 32-bit TGA made of four 32x32 cells and returns its path.
+// As displayed: bottom-left red, bottom-right green, top-left blue, top-right yellow.
+static std::string WriteSheet()
+{
+    std::string path = (std::filesystem::temp_directory_path() / "marle_sheet_test.tga").string();
+    unsigned char header[18] = { 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 64, 0, 32, 0x08 }; // origin bottom-left
+    std::ofstream f(path, std::ios::binary);
+    f.write((const char*)header, sizeof(header));
+    for (int y = 0; y < 64; y++) {          // rows are stored bottom-to-top
+        for (int x = 0; x < 64; x++) {
+            bool top = y >= 32, right = x >= 32;
+            unsigned char r = 0, g = 0, b = 0;
+            if (!top && !right) r = 255;
+            else if (!top && right) g = 255;
+            else if (top && !right) b = 255;
+            else { r = 255; g = 255; }
+            unsigned char bgra[4] = { b, g, r, 255 };
+            f.write((const char*)bgra, 4);
+        }
+    }
+    return path;
+}
 
 class RendererTestApp : public Application {
     std::vector<std::unique_ptr<OpenGLTexture2D>> tex;
@@ -122,7 +149,54 @@ protected:
             CHECK(Near(Read(512, 484), bg.r, bg.g, bg.b), "camera rotated: old screen position empty");
         }
 
-        // 7. GL errors
+        // 7. sprite sheet sub-textures
+        {
+            std::string sheetPath = WriteSheet();
+            OpenGLTexture2D sheet(sheetPath);
+            std::filesystem::remove(sheetPath); // already uploaded to the GPU
+            const glm::vec2 cell(32, 32);
+            auto red   = SubTexture2D::CreateFromCoords(&sheet, {0, 0}, cell);
+            auto green = SubTexture2D::CreateFromCoords(&sheet, {1, 0}, cell);
+            auto blue  = SubTexture2D::CreateFromCoords(&sheet, {0, 1}, cell);
+            auto yellow = SubTexture2D::CreateFromCoords(&sheet, {1, 1}, cell);
+
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginScene(W, H);
+            Renderer2D::DrawQuad({100, 100}, {40, 40}, red);
+            Renderer2D::DrawQuad({200, 100}, {40, 40}, green);
+            Renderer2D::DrawQuad({300, 100}, {40, 40}, blue);
+            Renderer2D::DrawQuad({400, 100}, {40, 40}, yellow);
+            Renderer2D::EndScene();
+            CHECK(Near(Read(100, 100), 255, 0, 0), "cell (0,0) is the bottom-left (red)");
+            CHECK(Near(Read(200, 100), 0, 255, 0), "cell (1,0) is bottom-right (green)");
+            CHECK(Near(Read(300, 100), 0, 0, 255), "cell (0,1) is top-left (blue)");
+            CHECK(Near(Read(400, 100), 255, 255, 0), "cell (1,1) is top-right (yellow)");
+            CHECK(Renderer2D::GetStats().DrawCalls == 1, "4 sprites from one sheet -> 1 draw call (got %u)", Renderer2D::GetStats().DrawCalls);
+
+            // multi-cell sprite: bottom row = red | green
+            auto bottomRow = SubTexture2D::CreateFromCoords(&sheet, {0, 0}, cell, {2, 1});
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(W, H);
+            Renderer2D::DrawQuad({600, 100}, {80, 40}, bottomRow);
+            Renderer2D::EndScene();
+            CHECK(Near(Read(580, 100), 255, 0, 0) && Near(Read(620, 100), 0, 255, 0), "2x1 sprite spans red | green");
+
+            // tint multiplies the sprite color
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(W, H);
+            Renderer2D::DrawQuad({100, 300}, {40, 40}, yellow, glm::vec4(1, 0.5f, 1, 1));
+            Renderer2D::EndScene();
+            CHECK(Near(Read(100, 300), 255, 128, 0), "tinted sprite = yellow * (1,.5,1)");
+
+            // UVs rotate with the quad: 90 deg CCW sends the left (red) half down, right (green) half up
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(W, H);
+            Renderer2D::DrawRotatedQuad({300, 300}, {80, 40}, 1.5707963f, bottomRow);
+            Renderer2D::EndScene();
+            CHECK(Near(Read(300, 280), 255, 0, 0) && Near(Read(300, 320), 0, 255, 0), "rotated sprite keeps its orientation (red below, green above)");
+        }
+
+        // 8. GL errors
         GLenum err = glGetError();
         CHECK(err == GL_NO_ERROR, "no GL error (0x%x)", err);
 

@@ -36,6 +36,9 @@ namespace Marle {
         Renderer2D::Statistics Stats;
     };
 
+    // Full-texture UVs: bottom-left, bottom-right, top-right, top-left
+    static const glm::vec2 s_FullTexCoords[4] = { {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f} };
+
     std::unique_ptr<Renderer2D::RendererData> Renderer2D::s_Data = nullptr;
 
     void Renderer2D::Init()
@@ -173,7 +176,7 @@ namespace Marle {
         s_Data->TextureSlotCount = 1;
     }
 
-    void Renderer2D::SubmitQuad(const glm::vec2& position, const glm::vec2& size, float rotation, uint32_t textureID, const glm::vec4& color)
+    void Renderer2D::SubmitQuad(const glm::vec2& position, const glm::vec2& size, float rotation, uint32_t textureID, const glm::vec2* texCoords, const glm::vec4& color)
     {
         if (s_Data->QuadCount >= MaxQuads)
             NextBatch();
@@ -193,7 +196,6 @@ namespace Marle {
         }
 
         static const glm::vec2 corners[4] = { {-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f} };
-        static const glm::vec2 texCoords[4] = { {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f} };
 
         const float c = cosf(rotation), sn = sinf(rotation);
 
@@ -236,7 +238,31 @@ namespace Marle {
             printf("Error: Cannot draw quad - missing components\n");
             return;
         }
-        SubmitQuad(position, size, rotation, texture->GetRendererID(), tint);
+        SubmitQuad(position, size, rotation, texture->GetRendererID(), s_FullTexCoords, tint);
+    }
+
+    void Renderer2D::DrawQuad(const glm::vec2& position, const glm::vec2& size, const SubTexture2D& subTexture)
+    {
+        DrawRotatedQuad(position, size, 0.0f, subTexture, glm::vec4(1.0f));
+    }
+
+    void Renderer2D::DrawQuad(const glm::vec2& position, const glm::vec2& size, const SubTexture2D& subTexture, const glm::vec4& tint)
+    {
+        DrawRotatedQuad(position, size, 0.0f, subTexture, tint);
+    }
+
+    void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const SubTexture2D& subTexture)
+    {
+        DrawRotatedQuad(position, size, rotation, subTexture, glm::vec4(1.0f));
+    }
+
+    void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const SubTexture2D& subTexture, const glm::vec4& tint)
+    {
+        if (!s_Data || !subTexture.GetTexture()) {
+            printf("Error: Cannot draw quad - missing components\n");
+            return;
+        }
+        SubmitQuad(position, size, rotation, subTexture.GetTexture()->GetRendererID(), subTexture.GetTexCoords(), tint);
     }
 
     void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const glm::vec4& color)
@@ -245,7 +271,7 @@ namespace Marle {
             printf("Error: Cannot draw quad - renderer not initialized\n");
             return;
         }
-        SubmitQuad(position, size, rotation, 0, color);
+        SubmitQuad(position, size, rotation, 0, s_FullTexCoords, color);
     }
 
     Renderer2D::Statistics Renderer2D::GetStats()
