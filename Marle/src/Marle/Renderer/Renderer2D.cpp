@@ -4,6 +4,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <cstddef>
+#include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Marle {
@@ -12,6 +14,14 @@ namespace Marle {
     static constexpr uint32_t MaxVertices = MaxQuads * 4;
     static constexpr uint32_t MaxIndices = MaxQuads * 6;
     static constexpr uint32_t MaxTextureSlots = 16; // guaranteed by GL 3.3; slot 0 is the white texture
+
+    // Programmer/asset errors can repeat for every quad of every frame; report each only once.
+    static void ReportOnce(const char* message)
+    {
+        static std::unordered_set<std::string> reported;
+        if (reported.insert(message).second)
+            printf("%s (further occurrences not logged)\n", message);
+    }
 
     struct QuadVertex {
         glm::vec3 Position;
@@ -25,6 +35,7 @@ namespace Marle {
         GLuint QuadVBO = 0;
         GLuint QuadEBO = 0;
         GLuint WhiteTexture = 0;
+        GLuint ErrorTexture = 0;   // magenta/black checker, drawn in place of missing textures
         std::unique_ptr<OpenGLShader> TextureShader;
 
         std::vector<QuadVertex> Vertices;   // CPU-side staging, sized MaxVertices
@@ -105,6 +116,16 @@ namespace Marle {
         glBindTexture(GL_TEXTURE_2D, 0);
         data->TextureSlots[0] = data->WhiteTexture;
 
+        // 2x2 magenta/black checker (bottom row first), the classic "missing texture" look
+        const uint32_t magenta = 0xffff00ff, black = 0xff000000;
+        const uint32_t checker[4] = { magenta, black, black, magenta };
+        glGenTextures(1, &data->ErrorTexture);
+        glBindTexture(GL_TEXTURE_2D, data->ErrorTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, checker);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
         int samplers[MaxTextureSlots];
         for (uint32_t i = 0; i < MaxTextureSlots; i++) samplers[i] = (int)i;
         data->TextureShader->Bind();
@@ -123,6 +144,7 @@ namespace Marle {
             glDeleteBuffers(1, &s_Data->QuadVBO);
             glDeleteBuffers(1, &s_Data->QuadEBO);
             glDeleteTextures(1, &s_Data->WhiteTexture);
+            glDeleteTextures(1, &s_Data->ErrorTexture);
             s_Data.reset();
         }
         printf("Renderer2D shutdown complete\n");
@@ -136,7 +158,7 @@ namespace Marle {
     void Renderer2D::BeginScene(const OrthographicCamera& camera)
     {
         if (!s_Data) {
-            printf("Error: Renderer2D not initialized!\n");
+            ReportOnce("Error: Renderer2D not initialized!");
             return;
         }
 
@@ -186,7 +208,7 @@ namespace Marle {
         if (s_Data->QuadCount >= MaxQuads)
             NextBatch();
 
-        // Slot 0 is the white texture; textureID 0 (white or an invalid texture) maps to it.
+        // Slot 0 is the white texture; textureID 0 (flat-colored quads) and the white texture map to it.
         uint32_t slot = 0;
         if (textureID != 0 && textureID != s_Data->WhiteTexture) {
             for (uint32_t i = 1; i < s_Data->TextureSlotCount; i++) {
@@ -217,6 +239,16 @@ namespace Marle {
         s_Data->Stats.QuadCount++;
     }
 
+    // GL texture id to draw with; null or failed-to-load textures become the error checker.
+    static uint32_t ResolveTexture(OpenGLTexture2D* texture, GLuint errorTexture)
+    {
+        if (!texture) {
+            ReportOnce("Error: DrawQuad called with a null texture, drawing the error texture");
+            return errorTexture;
+        }
+        return texture->IsLoaded() ? texture->GetRendererID() : errorTexture;
+    }
+
     void Renderer2D::DrawQuad(const glm::vec2& position, const glm::vec2& size, OpenGLTexture2D* texture)
     {
         DrawQuad(position, size, texture, glm::vec4(1.0f));
@@ -239,11 +271,11 @@ namespace Marle {
 
     void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, OpenGLTexture2D* texture, const glm::vec4& tint)
     {
-        if (!s_Data || !texture) {
-            printf("Error: Cannot draw quad - missing components\n");
+        if (!s_Data) {
+            ReportOnce("Error: Cannot draw quad - Renderer2D not initialized");
             return;
         }
-        SubmitQuad(position, size, rotation, texture->GetRendererID(), s_FullTexCoords, tint);
+        SubmitQuad(position, size, rotation, ResolveTexture(texture, s_Data->ErrorTexture), s_FullTexCoords, tint);
     }
 
     void Renderer2D::DrawQuad(const glm::vec2& position, const glm::vec2& size, const SubTexture2D& subTexture)
@@ -263,17 +295,17 @@ namespace Marle {
 
     void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const SubTexture2D& subTexture, const glm::vec4& tint)
     {
-        if (!s_Data || !subTexture.GetTexture()) {
-            printf("Error: Cannot draw quad - missing components\n");
+        if (!s_Data) {
+            ReportOnce("Error: Cannot draw quad - Renderer2D not initialized");
             return;
         }
-        SubmitQuad(position, size, rotation, subTexture.GetTexture()->GetRendererID(), subTexture.GetTexCoords(), tint);
+        SubmitQuad(position, size, rotation, ResolveTexture(subTexture.GetTexture(), s_Data->ErrorTexture), subTexture.GetTexCoords(), tint);
     }
 
     void Renderer2D::DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const glm::vec4& color)
     {
         if (!s_Data) {
-            printf("Error: Cannot draw quad - renderer not initialized\n");
+            ReportOnce("Error: Cannot draw quad - Renderer2D not initialized");
             return;
         }
         SubmitQuad(position, size, rotation, 0, s_FullTexCoords, color);

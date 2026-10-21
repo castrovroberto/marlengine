@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <type_traits>
 using namespace Marle;
 
 static int fails = 0;
@@ -248,7 +249,58 @@ protected:
             { Px q = Read(500, 500); CHECK(Near(q, 19, 83, 28, 4), "texture alpha multiplies tint alpha (%d,%d,%d)", q.r, q.g, q.b); }
         }
 
-        // 9. GL errors
+        // 9. texture failure handling: missing/corrupt/null textures draw as a magenta/black checker
+        {
+            static_assert(!std::is_copy_constructible<OpenGLTexture2D>::value && !std::is_copy_assignable<OpenGLTexture2D>::value,
+                          "OpenGLTexture2D owns a GL object and must not be copyable");
+
+            OpenGLTexture2D missing("Assets/Textures/does_not_exist.tga");
+            CHECK(!missing.IsLoaded() && missing.GetWidth() == 0 && missing.GetHeight() == 0, "missing file: texture is not loaded, size 0");
+
+            std::string junkPath = (std::filesystem::temp_directory_path() / "marle_junk_test.tga").string();
+            { std::ofstream junk(junkPath, std::ios::binary); for (int i = 0; i < 200; i++) junk.put((char)(i * 37)); }
+            OpenGLTexture2D junk(junkPath);
+            std::filesystem::remove(junkPath);
+            CHECK(!junk.IsLoaded(), "corrupt file: texture is not loaded");
+
+            OpenGLTexture2D ok("Assets/Textures/test_sprite.tga");
+            CHECK(ok.IsLoaded() && ok.GetWidth() == 256, "a valid texture reports loaded");
+
+            const Px magenta = {255, 0, 255}, black = {0, 0, 0};
+            auto IsChecker = [&](float cx, float cy, const char* what) {
+                // quad of 40x40 centered on (cx,cy): quadrants (BL, BR, TR, TL) = magenta, black, magenta, black
+                Px bl = Read((int)cx - 10, (int)cy - 10), br = Read((int)cx + 10, (int)cy - 10);
+                Px tr = Read((int)cx + 10, (int)cy + 10), tl = Read((int)cx - 10, (int)cy + 10);
+                CHECK(Near(bl, magenta.r, magenta.g, magenta.b) && Near(br, black.r, black.g, black.b) &&
+                      Near(tr, magenta.r, magenta.g, magenta.b) && Near(tl, black.r, black.g, black.b), "%s draws the error checker", what);
+            };
+
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginScene(W, H);
+            Renderer2D::DrawQuad({100, 100}, {40, 40}, &missing);
+            Renderer2D::DrawQuad({200, 100}, {40, 40}, (OpenGLTexture2D*)nullptr);
+            Renderer2D::DrawQuad({300, 100}, {40, 40}, SubTexture2D::CreateFromCoords(&missing, {0, 0}, {32, 32}));
+            Renderer2D::DrawQuad({400, 100}, {40, 40}, &junk);
+            Renderer2D::DrawQuad({500, 100}, {40, 40}, &ok);
+            Renderer2D::EndScene();
+            IsChecker(100, 100, "missing texture");
+            IsChecker(200, 100, "null texture");
+            IsChecker(300, 100, "sub-texture of a missing texture");
+            IsChecker(400, 100, "corrupt texture");
+            Px good = Read(500, 100);
+            CHECK(!Near(good, magenta.r, magenta.g, magenta.b) && !Near(good, bg.r, bg.g, bg.b), "a valid texture in the same batch is unaffected (%d,%d,%d)", good.r, good.g, good.b);
+            CHECK(Renderer2D::GetStats().DrawCalls == 1, "failed textures share one slot and one draw call (got %u)", Renderer2D::GetStats().DrawCalls);
+
+            // a failed texture must not stop later quads from drawing
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginScene(W, H);
+            Renderer2D::DrawQuad({100, 100}, {40, 40}, &missing);
+            Renderer2D::DrawQuad({200, 100}, {40, 40}, glm::vec4(0, 1, 0, 1));
+            Renderer2D::EndScene();
+            CHECK(Near(Read(200, 100), 0, 255, 0), "flat quads after a failed texture still draw");
+        }
+
+        // 10. GL errors
         GLenum err = glGetError();
         CHECK(err == GL_NO_ERROR, "no GL error (0x%x)", err);
 

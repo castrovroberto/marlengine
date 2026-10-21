@@ -10,16 +10,19 @@ namespace Marle {
         : m_FilePath(path)
     {
         // Load image data
+        int width = 0, height = 0, sourceChannels = 0;
         stbi_set_flip_vertically_on_load(1); // Flip Y coordinate to match OpenGL
-        m_LocalBuffer = stbi_load(path.c_str(), &m_Width, &m_Height, &m_BPP, 4); // Force 4 channels (RGBA)
+        unsigned char* data = stbi_load(path.c_str(), &width, &height, &sourceChannels, 4); // Force 4 channels (RGBA)
         
-        if (!m_LocalBuffer) {
-            printf("Failed to load texture: %s\n", path.c_str());
-            printf("STB Error: %s\n", stbi_failure_reason());
+        if (!data) {
+            printf("Failed to load texture: %s (%s)\n", path.c_str(), stbi_failure_reason());
             return;
         }
 
-        printf("Loaded texture: %s (%dx%d, %d channels)\n", path.c_str(), m_Width, m_Height, m_BPP);
+        m_Width = width;
+        m_Height = height;
+        printf("Loaded texture: %s (%dx%d, %d source channel%s, uploaded as RGBA)\n",
+               path.c_str(), m_Width, m_Height, sourceChannels, sourceChannels == 1 ? "" : "s");
 
         // Generate OpenGL texture
         glGenTextures(1, &m_RendererID);
@@ -32,16 +35,12 @@ namespace Marle {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
         // Upload texture data
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_Width, m_Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, m_LocalBuffer);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_Width, m_Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
 
         // Unbind texture
         glBindTexture(GL_TEXTURE_2D, 0);
 
-        // Free image data
-        if (m_LocalBuffer) {
-            stbi_image_free(m_LocalBuffer);
-            m_LocalBuffer = nullptr;
-        }
+        stbi_image_free(data);
     }
 
     OpenGLTexture2D::~OpenGLTexture2D()
