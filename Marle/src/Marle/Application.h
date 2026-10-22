@@ -26,6 +26,8 @@ namespace Marle
             Layer* PushOverlay(std::unique_ptr<Layer> layer) { return m_LayerStack.PushOverlay(std::move(layer)); }
             std::unique_ptr<Layer> PopLayer(Layer* layer) { return m_LayerStack.Pop(layer); }
 
+            const LayerStack& GetLayerStack() const { return m_LayerStack; }   // e.g. to construct an ImGuiLayer
+
             unsigned int GetWidth()  const { return m_Window->GetWidth(); }
             unsigned int GetHeight() const { return m_Window->GetHeight(); }
 

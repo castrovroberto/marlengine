@@ -19,6 +19,7 @@ namespace Marle {
             virtual void OnUpdate(double fixed_dt) {}       // fixed timestep
             virtual void OnRender(double interpolation_alpha) {}
             virtual void OnEvent(Event& e) {}               // call e.SetHandled() to stop propagation
+            virtual void OnImGuiRender() {}                 // issue ImGui calls; only called while an ImGuiLayer is in the stack
 
             const std::string& GetName() const { return m_DebugName; }
 

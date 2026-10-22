@@ -87,7 +87,9 @@ project "Marle"
         "%{prj.name}/src/**.h",
         "%{prj.name}/src/**.cpp",
         "%{prj.name}/src/**.mm",
-        "%{prj.name}/vendor/glad/src/**.c"
+        "%{prj.name}/vendor/glad/src/**.c",
+        "%{prj.name}/vendor/imgui/*.cpp",
+        "%{prj.name}/vendor/imgui/backends/imgui_impl_opengl3.cpp"
     }
 
     -- pchheader "mrlpch.h"
@@ -99,7 +101,8 @@ project "Marle"
         "%{prj.name}/vendor/spdlog/include",
         "%{prj.name}/vendor/glad/include",
         "%{prj.name}/vendor",
-        "%{prj.name}/vendor/glm"
+        "%{prj.name}/vendor/glm",
+        "%{prj.name}/vendor/imgui"
     }
 
     filter "system:windows"
@@ -195,7 +198,8 @@ project "Sandbox"
         "Marle/src",
         "Marle/vendor/glad/include",
         "Marle/vendor",
-        "Marle/vendor/glm"
+        "Marle/vendor/glm",
+        "Marle/vendor/imgui"
     }
 
     links 
@@ -270,7 +274,8 @@ local function testProject(name)
             "Marle/src",
             "Marle/vendor/glad/include",
             "Marle/vendor",
-            "Marle/vendor/glm"
+            "Marle/vendor/glm",
+            "Marle/vendor/imgui"
         }
 
         links { "Marle" }
@@ -314,3 +319,4 @@ testProject "InputTests"        -- headless
 testProject "LogTests"          -- headless
 testProject "LayerStackTests"   -- headless
 testProject "ApplicationTests"  -- needs a display
+testProject "ImGuiLayerTests"   -- needs a display; pixel readback of ImGui output

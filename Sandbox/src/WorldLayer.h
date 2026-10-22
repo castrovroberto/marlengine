@@ -18,6 +18,8 @@ public:
     void OnEvent(Marle::Event& e) override;
 
     float GetZoom() const { return m_Zoom; }
+    float GetCameraRotation() const { return m_CameraRotation; }   // radians
+    glm::vec2 GetPlayerPosition() const { return m_Player; }
 
 private:
     void Reset();
