@@ -19,6 +19,7 @@
 #include "Marle/Window.h"
 #include "Marle/Layer.h"
 #include "Marle/LayerStack.h"
+#include "Marle/ImGui/ImGuiLayer.h"
 
 // Events
 #include "Marle/Events/Event.h"
