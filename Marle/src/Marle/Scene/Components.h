@@ -59,6 +59,41 @@ namespace Marle {
         int Seed = 1;
     };
 
+    // Behaviors that read the keyboard and mouse wheel through the step's InputFrame (see BuiltinBehaviors.cpp).
+
+    // Moves the entity's Transform with the keyboard: W A S D and/or the arrow keys, at a speed in world
+    // units per second, faster while the run key is held. Diagonals are not faster than straight lines.
+    struct KeyboardMove {
+        float Speed = 100.0f;                       // world units per second
+        float RunMultiplier = 2.0f;                 // speed factor while the run key is held
+        std::string RunKey = "LeftShift";           // a key name, or empty for no run key
+        std::string Keys = "both";                  // "wasd", "arrows" or "both"
+        std::string RelativeTo;                     // an entity: movement is turned by its rotation (W is up its screen); empty = world axes
+        bool TintWhenRunning = false;               // set this entity's SpriteRenderer tint to RunTint while running, IdleTint otherwise
+        glm::vec4 IdleTint = { 1.0f, 1.0f, 1.0f, 1.0f };
+        glm::vec4 RunTint = { 1.0f, 0.65f, 0.3f, 1.0f };
+    };
+
+    // Turns the entity's Transform with two keys.
+    struct KeyboardRotate {
+        float Speed = 1.0f;                         // radians per second
+        std::string CounterClockwiseKey = "Q";
+        std::string ClockwiseKey = "E";
+    };
+
+    // Zooms the entity's Camera with the mouse wheel.
+    struct WheelZoom {
+        float Factor = 1.1f;                        // zoom is multiplied by this for each wheel notch up
+        float MinZoom = 0.25f;
+        float MaxZoom = 4.0f;
+    };
+
+    // Keeps the entity's position inside a rectangle.
+    struct ClampPosition {
+        glm::vec2 Min = { 0.0f, 0.0f };
+        glm::vec2 Max = { 100.0f, 100.0f };
+    };
+
     // Views the scene from the entity's Transform.
     struct Camera {
         float Zoom = 1.0f;                     // larger shows less of the world

@@ -151,6 +151,8 @@ namespace Marle {
         return names;
     }
 
+    void RegisterBuiltinBehaviors(ComponentRegistry& registry);   // BuiltinBehaviors.cpp
+
     void ComponentRegistry::RunBehaviors(Entity entity, BehaviorContext& context) const
     {
         for (const auto& component : m_Components)
@@ -194,6 +196,8 @@ namespace Marle {
 
         registry.Register<Random>("Random", "On the scene itself: where the scene's random numbers start, so the same seed gives the same sequence on every run. Nothing is ever seeded from the clock.")
             .Field(&Random::Seed, "seed", "Any integer. The same seed always gives the same sequence of random numbers.");
+
+        RegisterBuiltinBehaviors(registry);
     }
 
 }

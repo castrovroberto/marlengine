@@ -316,7 +316,7 @@ int main(int argc, char** argv)
         ComponentRegistry registry;
         RegisterBuiltinComponents(registry);
         std::vector<std::string> names = registry.GetNames();
-        CHECK(names.size() == 5 && names[0] == "Transform" && names[1] == "SpriteRenderer" && names[2] == "Camera" && names[3] == "Tilemap" && names[4] == "Random", "the built-in components register in order");
+        CHECK(names == std::vector<std::string>({ "Transform", "SpriteRenderer", "Camera", "Tilemap", "Random", "KeyboardMove", "KeyboardRotate", "WheelZoom", "ClampPosition" }), "the built-in components register in order, the behaviors last");
 
         const ComponentInfo* transform = registry.Find("Transform");
         CHECK(transform && !transform->Description.empty() && transform->Fields.size() == 3, "a component has a description and its fields");
@@ -481,18 +481,50 @@ int main(int argc, char** argv)
         for (Entity e : example.Scene->GetEntities()) order += e.GetName() + " ";
         CHECK(order == "camera player grass_west grass_east pond spinner marker spawn_point ", "entities are created in file order");
 
-        // the first jsonc block in docs/scene-format.md is a complete, valid scene file
+        // every complete scene in a jsonc block of docs/scene-format.md is valid (the first one must exist)
         std::ifstream doc("docs/scene-format.md");
         std::stringstream docText;
         docText << doc.rdbuf();
-        std::string all = docText.str();
-        size_t begin = all.find("```jsonc\n"), end = begin == std::string::npos ? std::string::npos : all.find("\n```", begin);
-        CHECK(doc.is_open() && begin != std::string::npos && end != std::string::npos, "the spec has a jsonc example");
-        if (begin != std::string::npos && end != std::string::npos) {
-            SceneLoadResult snippet = LoadSceneFromText(all.substr(begin + 8, end - begin - 8), "docs/scene-format.md", registry);
+        const std::string all = docText.str();
+        int scenesInSpec = 0;
+        bool specScenesOk = true;
+        for (size_t at = all.find("```jsonc\n"); at != std::string::npos; at = all.find("```jsonc\n", at + 1)) {
+            size_t end = all.find("\n```", at);
+            std::string block = all.substr(at + 9, end - at - 9);
+            if (block.find("\"version\"") == std::string::npos) continue;   // a fragment of a component, not a scene
+            scenesInSpec++;
+            SceneLoadResult snippet = LoadSceneFromText(block, "docs/scene-format.md", registry);
             for (const SceneProblem& problem : snippet.Problems) printf("      %s\n", problem.ToString().c_str());
-            CHECK(snippet.Ok() && snippet.Scene->FindEntity("player").Get<Transform>().Position == glm::vec2(10.0f, 20.0f), "the spec's own example is a valid scene");
+            specScenesOk = specScenesOk && snippet.Ok();
         }
+        CHECK(doc.is_open() && scenesInSpec >= 2 && specScenesOk, "every complete scene in the spec's examples is a valid scene");
+        SceneLoadResult first;
+        size_t firstAt = all.find("```jsonc\n");
+        first = LoadSceneFromText(all.substr(firstAt + 9, all.find("\n```", firstAt) - firstAt - 9), "docs/scene-format.md", registry);
+        CHECK(first.Ok() && first.Scene->FindEntity("player").Get<Transform>().Position == glm::vec2(10.0f, 20.0f), "the first one is the short example near the top");
+        SceneLoadResult walk;
+        size_t walkAt = all.find("\"name\": \"Walk\"");
+        walk = LoadSceneFromText(all.substr(all.rfind("```jsonc\n", walkAt) + 9, all.find("\n```", walkAt) - all.rfind("```jsonc\n", walkAt) - 9), "docs/scene-format.md", registry);
+        CHECK(walk.Ok() && walk.Scene->FindEntity("player").Has<KeyboardMove>() && walk.Scene->FindEntity("camera").Has<WheelZoom>(), "and the walking example has its behaviors");
+
+        // the spec's component table lists every built-in component and field, in order
+        bool tableComplete = true;
+        for (const ComponentInfo* info : registry.GetComponents()) {
+            for (size_t i = 0; i < info->Fields.size(); i++) {
+                const std::string row = i == 0 ? "| `" + info->Name + "` | `" + info->Fields[0].Name + "` |" : "| | `" + info->Fields[i].Name + "` |";
+                if (all.find(row) == std::string::npos) { printf("      the spec's table has no row '%s'\n", row.c_str()); tableComplete = false; }
+            }
+        }
+        CHECK(tableComplete, "the spec's component table has a row for every field of every built-in component");
+
+        // the key names the spec lists are the ones the engine has
+        size_t namesAt = all.find("```keynames\n");
+        std::set<std::string> listed;
+        if (namesAt != std::string::npos) {
+            std::stringstream block(all.substr(namesAt + 12, all.find("\n```", namesAt) - namesAt - 12));
+            for (std::string word; block >> word;) listed.insert(word);
+        }
+        CHECK(!listed.empty() && listed == std::set<std::string>(KeyNames().begin(), KeyNames().end()), "the key names in the spec are exactly the ones the engine accepts");
 
         SceneLoadResult empty = LoadSceneFromText(R"({"version": 1, "name": "x", "entities": []})", "inline", registry);
         CHECK(empty.Ok() && empty.Scene->GetName() == "x" && empty.Scene->GetEntityCount() == 0, "a scene with no entities is valid");
@@ -782,13 +814,13 @@ int main(int argc, char** argv)
 
         std::string order;
         for (auto it = schema["definitions"].begin(); it != schema["definitions"].end(); ++it) order += it.key() + " ";
-        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Random ", "components are described in registration order");
+        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Random component_KeyboardMove component_KeyboardRotate component_WheelZoom component_ClampPosition ", "components are described in registration order");
         CHECK(schema["definitions"]["entity"]["properties"]["components"]["properties"]["Camera"]["$ref"] == "#/definitions/component_Camera", "an entity's components point at their definitions");
 
         bool everyField = true, described = !schema["description"].get<std::string>().empty();
         for (const ComponentInfo* info : registry.GetComponents()) {
             const Json& definition = schema["definitions"]["component_" + info->Name];
-            described = described && definition["description"] == info->Description && definition["additionalProperties"] == false;
+            described = described && definition["description"].get<std::string>().find(info->Description) == 0 && definition["additionalProperties"] == false;
             for (const FieldInfo& field : info->Fields) {
                 const Json& property = definition["properties"][field.Name];
                 everyField = everyField && !property.is_null() && property["default"] == field.Default && property["description"].get<std::string>().find(field.Description) == 0 && !field.Description.empty();
@@ -2081,6 +2113,312 @@ int main(int argc, char** argv)
         for (int i = 0; i < 40; i++) { step(*x.Scene, 1, keys); step(*y.Scene, 1); }
         step(*reference.Scene, 40, keys);
         CHECK(Simulation::Checksum(registry, *x.Scene) == Simulation::Checksum(registry, *reference.Scene) && Simulation::Checksum(registry, *y.Scene) != Simulation::Checksum(registry, *x.Scene), "stepping two scenes alternately gives each the same result as stepping it alone");
+    }
+
+    // movement behaviors: KeyboardMove
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto load = [&](const std::string& entities) { return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [)" + entities + "]}", "inline", registry); };
+        auto stepWith = [&](Scene& scene, const InputFrame& input, int n = 1) { for (int i = 0; i < n; i++) Simulation::Step(registry, scene, input, 1.0 / 60.0); };
+        const float dt = (float)(1.0 / 60.0);
+        const std::string mover = R"({"name": "p", "components": {"Transform": {"position": [100, 100]}, "KeyboardMove": {"speed": 60}}})";
+        auto positionAfter = [&](const std::string& entity, const InputFrame& input, int steps = 1) {
+            SceneLoadResult r = load(entity);
+            stepWith(*r.Scene, input, steps);
+            return r.Scene->FindEntity("p").Get<Transform>().Position;
+        };
+
+        // what it is
+        const ComponentInfo* info = registry.Find("KeyboardMove");
+        std::string fieldNames;
+        for (const FieldInfo& f : info->Fields) fieldNames += f.Name + " ";
+        CHECK(info->IsBehavior && fieldNames == "speed runMultiplier runKey keys relativeTo tintWhenRunning idleTint runTint ", "KeyboardMove is a behavior with these fields");
+        CHECK(info->Fields[0].Default == 100.0 && info->Fields[1].Default == 2.0 && info->Fields[2].Default == "LeftShift" && info->Fields[3].Default == "both" && info->Fields[4].Default == "" && info->Fields[5].Default == false, "with these defaults");
+        CHECK(info->Fields[0].Min == 0.0 && info->Fields[1].Min == 0.0 && info->Fields[3].OneOf == std::vector<std::string>({ "wasd", "arrows", "both" }) && info->Fields[2].OneOf.size() == KeyNames().size() + 1 && info->Fields[2].OneOf[0] == "" && info->Fields[4].EntityReference, "ranges, key names (or none) and the camera reference are described");
+        for (const FieldInfo& f : info->Fields) CHECK(!f.Description.empty(), ("the field '" + f.Name + "' has a description").c_str());
+
+        // each key moves by speed times the step, and nothing else does
+        struct Case { int key; glm::vec2 direction; };
+        const Case cases[] = { { Key::W, { 0, 1 } }, { Key::Up, { 0, 1 } }, { Key::S, { 0, -1 } }, { Key::Down, { 0, -1 } }, { Key::D, { 1, 0 } }, { Key::Right, { 1, 0 } }, { Key::A, { -1, 0 } }, { Key::Left, { -1, 0 } } };
+        for (const Case& c : cases) {
+            glm::vec2 expected = glm::vec2(100.0f, 100.0f);
+            expected += c.direction * 60.0f * dt;
+            CHECK(positionAfter(mover, InputFrame().Hold(c.key)) == expected, (std::string("the key ") + KeyName(c.key) + " moves one step that way").c_str());
+        }
+        CHECK(positionAfter(mover, InputFrame()) == glm::vec2(100.0f, 100.0f) && positionAfter(mover, InputFrame().Hold(Key::Q).Hold(Key::Space)) == glm::vec2(100.0f, 100.0f), "no key, or other keys, do not move it");
+
+        // which keys
+        const std::string arrowsOnly = R"({"name": "p", "components": {"Transform": {"position": [100, 100]}, "KeyboardMove": {"speed": 60, "keys": "arrows"}}})";
+        const std::string wasdOnly = R"({"name": "p", "components": {"Transform": {"position": [100, 100]}, "KeyboardMove": {"speed": 60, "keys": "wasd"}}})";
+        CHECK(positionAfter(arrowsOnly, InputFrame().Hold(Key::W).Hold(Key::A)) == glm::vec2(100.0f) && positionAfter(arrowsOnly, InputFrame().Hold(Key::Up)).y > 100.0f, "arrows only ignores W A S D");
+        CHECK(positionAfter(wasdOnly, InputFrame().Hold(Key::Up).Hold(Key::Left)) == glm::vec2(100.0f) && positionAfter(wasdOnly, InputFrame().Hold(Key::W)).y > 100.0f, "wasd only ignores the arrows");
+
+        // opposite keys, the same direction twice, and diagonals
+        CHECK(positionAfter(mover, InputFrame().Hold(Key::W).Hold(Key::S)) == glm::vec2(100.0f) && positionAfter(mover, InputFrame().Hold(Key::A).Hold(Key::D)) == glm::vec2(100.0f), "opposite keys cancel");
+        CHECK(positionAfter(mover, InputFrame().Hold(Key::W).Hold(Key::Up)) == positionAfter(mover, InputFrame().Hold(Key::W)), "W and Up together are one direction, not double speed");
+        // (positions near 100 are only resolved to about 8e-6 in float, hence the tolerance)
+        glm::vec2 diagonal = positionAfter(mover, InputFrame().Hold(Key::W).Hold(Key::D)) - glm::vec2(100.0f);
+        CHECK(std::fabs(glm::length(diagonal) - 60.0f * dt) < 3e-5f && diagonal.x == diagonal.y, "a diagonal is as fast as a straight line");
+
+        // running
+        glm::vec2 walked = positionAfter(mover, InputFrame().Hold(Key::W)) - glm::vec2(100.0f), ran = positionAfter(mover, InputFrame().Hold(Key::W).Hold(Key::LeftShift)) - glm::vec2(100.0f);
+        CHECK(ran.y == 60.0f * 2.0f * dt && std::fabs(ran.y / walked.y - 2.0f) < 1e-5f, "holding the run key doubles the speed by default");
+        const std::string fast = R"({"name": "p", "components": {"Transform": {"position": [100, 100]}, "KeyboardMove": {"speed": 60, "runMultiplier": 3, "runKey": "Space"}}})";
+        CHECK(positionAfter(fast, InputFrame().Hold(Key::W).Hold(Key::Space)).y == 100.0f + 60.0f * 3.0f * dt && positionAfter(fast, InputFrame().Hold(Key::W).Hold(Key::LeftShift)).y == 100.0f + 60.0f * dt, "the multiplier and the run key can be set");
+        const std::string noRun = R"({"name": "p", "components": {"Transform": {"position": [100, 100]}, "KeyboardMove": {"speed": 60, "runKey": ""}}})";
+        CHECK(positionAfter(noRun, InputFrame().Hold(Key::W).Hold(Key::LeftShift)).y == 100.0f + 60.0f * dt, "an empty run key means no running");
+        CHECK(positionAfter(mover, InputFrame().Hold(Key::LeftShift)) == glm::vec2(100.0f), "running without a direction goes nowhere");
+        CHECK(positionAfter(R"({"name": "p", "components": {"Transform": {"position": [100, 100]}, "KeyboardMove": {"speed": 0}}})", InputFrame().Hold(Key::W)) == glm::vec2(100.0f), "a speed of 0 does not move");
+        glm::vec2 sixty = positionAfter(mover, InputFrame().Hold(Key::D), 60);
+        glm::vec2 loop(100.0f, 100.0f);
+        for (int i = 0; i < 60; i++) loop += glm::vec2(1.0f, 0.0f) * 60.0f * dt;
+        CHECK(sixty == loop && std::fabs(sixty.x - 160.0f) < 1e-3f, "sixty steps cover sixty units at 60 units a second");
+
+        // relative to a camera
+        auto relative = [&](float rotation, const InputFrame& input) {
+            SceneLoadResult r = load(R"({"name": "camera", "components": {"Transform": {"rotation": )" + std::to_string(rotation) + R"(}}}, {"name": "p", "components": {"Transform": {"position": [100, 100]}, "KeyboardMove": {"speed": 60, "relativeTo": "camera"}}})");
+            stepWith(*r.Scene, input);
+            return r.Scene->FindEntity("p").Get<Transform>().Position;
+        };
+        const float quarter = 1.5707963f;
+        glm::vec2 up = glm::vec2(0.0f, 1.0f), turned = { up.x * cosf(quarter) - up.y * sinf(quarter), up.x * sinf(quarter) + up.y * cosf(quarter) };
+        glm::vec2 expectedUp = glm::vec2(100.0f); expectedUp += turned * 60.0f * dt;
+        CHECK(relative(quarter, InputFrame().Hold(Key::W)) == expectedUp && relative(quarter, InputFrame().Hold(Key::W)).x < 100.0f, "relative to a camera turned a quarter, W goes up the camera's screen (to the left of the world)");
+        CHECK(relative(0.0f, InputFrame().Hold(Key::W)) == glm::vec2(100.0f, 100.0f + 60.0f * dt), "relative to a camera that is not turned it is the world's axes");
+        glm::vec2 slant = relative(0.7f, InputFrame().Hold(Key::W).Hold(Key::D)) - glm::vec2(100.0f);
+        glm::vec2 d = glm::normalize(glm::vec2(1.0f, 1.0f)), rotated = { d.x * cosf(0.7f) - d.y * sinf(0.7f), d.x * sinf(0.7f) + d.y * cosf(0.7f) };
+        CHECK(std::fabs(slant.x - rotated.x * 60.0f * dt) < 1e-5f && std::fabs(slant.y - rotated.y * 60.0f * dt) < 1e-5f, "a diagonal is turned too, by any angle");
+        SceneLoadResult missing = load(R"({"name": "p", "components": {"Transform": {"position": [100, 100]}, "KeyboardMove": {"speed": 60, "relativeTo": "nobody"}}})");
+        stepWith(*missing.Scene, InputFrame().Hold(Key::W));
+        CHECK(missing.Scene->FindEntity("p").Get<Transform>().Position == glm::vec2(100.0f, 100.0f + 60.0f * dt), "a camera that does not exist means the world's axes (the loader reports it)");
+        SceneLoadResult noTransform = load(R"({"name": "camera"}, {"name": "p", "components": {"Transform": {"position": [100, 100]}, "KeyboardMove": {"speed": 60, "relativeTo": "camera"}}})");
+        stepWith(*noTransform.Scene, InputFrame().Hold(Key::W));
+        CHECK(noTransform.Scene->FindEntity("p").Get<Transform>().Position == glm::vec2(100.0f, 100.0f + 60.0f * dt), "so does one with no transform");
+
+        // a camera later in the file is read as it was after the previous step
+        SceneLoadResult later = load(R"({"name": "p", "components": {"Transform": {"position": [100, 100]}, "KeyboardMove": {"speed": 60, "relativeTo": "camera"}}}, {"name": "camera", "components": {"Transform": {}, "KeyboardRotate": {"speed": 1}}})");
+        stepWith(*later.Scene, InputFrame().Hold(Key::W).Hold(Key::Q));
+        glm::vec2 first = later.Scene->FindEntity("p").Get<Transform>().Position;
+        stepWith(*later.Scene, InputFrame().Hold(Key::W).Hold(Key::Q));
+        glm::vec2 second = later.Scene->FindEntity("p").Get<Transform>().Position - first;
+        CHECK(first == glm::vec2(100.0f, 100.0f + 60.0f * dt) && second.x < 0.0f && std::fabs(second.x + 60.0f * dt * sinf(1.0f * dt)) < 3e-5f, "a camera later in the file is one step behind: that step uses the rotation it had before turning");
+
+        // tinting while running
+        const std::string tinted = R"({"name": "p", "components": {"Transform": {}, "SpriteRenderer": {"tint": [0.2, 0.4, 0.6, 1]}, "KeyboardMove": {"tintWhenRunning": true, "idleTint": [0.2, 0.4, 0.6, 1], "runTint": [1, 0, 0, 1]}}})";
+        SceneLoadResult tint = load(tinted);
+        SpriteRenderer& sprite = tint.Scene->FindEntity("p").Get<SpriteRenderer>();
+        stepWith(*tint.Scene, InputFrame().Hold(Key::LeftShift));
+        CHECK(sprite.Tint == glm::vec4(1.0f, 0.0f, 0.0f, 1.0f), "the run tint is set while running, even standing still");
+        stepWith(*tint.Scene, InputFrame().Hold(Key::W));
+        CHECK(sprite.Tint == glm::vec4(0.2f, 0.4f, 0.6f, 1.0f), "and the idle tint when not");
+        SceneLoadResult plain = load(R"({"name": "p", "components": {"Transform": {}, "SpriteRenderer": {"tint": [0.2, 0.4, 0.6, 1]}, "KeyboardMove": {}}})");
+        stepWith(*plain.Scene, InputFrame().Hold(Key::LeftShift));
+        CHECK(plain.Scene->FindEntity("p").Get<SpriteRenderer>().Tint == glm::vec4(0.2f, 0.4f, 0.6f, 1.0f), "without tintWhenRunning the sprite's tint is left alone");
+        SceneLoadResult bare = load(R"({"name": "p", "components": {"KeyboardMove": {"tintWhenRunning": true}}})");
+        stepWith(*bare.Scene, InputFrame().Hold(Key::W).Hold(Key::LeftShift), 3);
+        CHECK(!bare.Scene->FindEntity("p").Has<Transform>() && !bare.Scene->FindEntity("p").Has<SpriteRenderer>(), "an entity without a Transform or a sprite is left as it is");
+
+        // what the loader says
+        auto problems = [&](const std::string& fields) { return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [{"name": "p", "components": {"KeyboardMove": {)" + fields + "}}}]}", "inline", registry); };
+        const std::string at = "/entities/0/components/KeyboardMove";
+        CHECK(HasProblem(problems(R"("speed": -1)"), at + "/speed", "must be at least 0") && HasProblem(problems(R"("speed": 1000000)"), at + "/speed", "must be at most 100000") && HasProblem(problems(R"("runMultiplier": -2)"), at + "/runMultiplier", "must be at least 0"), "negative or huge speeds are refused");
+        CHECK(HasProblem(problems(R"("runKey": "LeftShft")"), at + "/runKey", "did you mean 'LeftShift'?") && HasProblem(problems(R"("runKey": "LeftShft")"), at + "/runKey", "the " + std::to_string(KeyNames().size() + 1) + " allowed values") && problems(R"("runKey": "")").Ok(), "a mistyped run key is suggested, and empty is allowed");
+        CHECK(HasProblem(problems(R"("keys": "wasdd")"), at + "/keys", "expected one of 'wasd', 'arrows', 'both', got 'wasdd' (did you mean 'wasd'?)") && HasProblem(problems(R"("tintWhenRunning": "yes")"), at + "/tintWhenRunning", "expected true or false"), "the key set and flags are checked");
+        CHECK(HasProblem(problems(R"("idleTint": [2, 0, 0, 1])"), at + "/idleTint/0", "must be at most 1") && HasProblem(problems(R"("relativeTo": "cam")"), at + "/relativeTo", "no entity named 'cam' exists"), "tints are in 0 to 1, and the camera must exist");
+        const std::string golden = R"("KeyboardMove": { "speed": 100, "runMultiplier": 2, "runKey": "LeftShift", "keys": "both", "relativeTo": "", "tintWhenRunning": false, "idleTint": [1, 1, 1, 1], "runTint": [1, 0.65, 0.3, 1] })";
+        SceneLoadResult written = problems("");
+        CHECK(written.Ok() && Contains(SaveSceneToText(*written.Scene, registry).Text, golden), "it is written with every field, in this order");
+    }
+
+    // movement behaviors: KeyboardRotate, WheelZoom, ClampPosition
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto load = [&](const std::string& entities) { return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [)" + entities + "]}", "inline", registry); };
+        auto stepWith = [&](Scene& scene, const InputFrame& input, int n = 1) { for (int i = 0; i < n; i++) Simulation::Step(registry, scene, input, 1.0 / 60.0); };
+        const float dt = (float)(1.0 / 60.0);
+        auto problems = [&](const std::string& component, const std::string& fields) { return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [{"name": "p", "components": {")" + component + R"(": {)" + fields + "}}}]}", "inline", registry); };
+
+        // KeyboardRotate
+        const ComponentInfo* rotateInfo = registry.Find("KeyboardRotate");
+        CHECK(rotateInfo->IsBehavior && rotateInfo->Fields.size() == 3 && rotateInfo->Fields[0].Default == 1.0 && rotateInfo->Fields[1].Default == "Q" && rotateInfo->Fields[2].Default == "E" && rotateInfo->Fields[1].OneOf == KeyNames() && rotateInfo->Fields[0].Min == 0.0, "KeyboardRotate has a speed and two keys, Q and E by default");
+        const std::string turner = R"({"name": "p", "components": {"Transform": {}, "KeyboardRotate": {"speed": 2}}})";
+        SceneLoadResult turning = load(turner);
+        Transform& turned = turning.Scene->FindEntity("p").Get<Transform>();
+        float expected = 0.0f;
+        for (int i = 0; i < 90; i++) expected += 2.0f * dt;
+        stepWith(*turning.Scene, InputFrame().Hold(Key::Q), 90);
+        CHECK(turned.Rotation == expected && expected > 2.9f, "Q turns counter-clockwise by the speed times the step, every step");
+        stepWith(*turning.Scene, InputFrame().Hold(Key::E), 90);
+        CHECK(std::fabs(turned.Rotation) < 1e-5f, "E turns it back the other way");
+        float before = turned.Rotation;
+        stepWith(*turning.Scene, InputFrame().Hold(Key::Q).Hold(Key::E), 10);
+        CHECK(turned.Rotation == before, "both keys together are exactly no turn");
+        stepWith(*turning.Scene, InputFrame().Hold(Key::A).Hold(Key::W), 10);
+        CHECK(turned.Rotation == before, "other keys do not turn it");
+        SceneLoadResult keys = load(R"({"name": "p", "components": {"Transform": {}, "KeyboardRotate": {"speed": 1, "counterClockwiseKey": "Left", "clockwiseKey": "Right"}}})");
+        stepWith(*keys.Scene, InputFrame().Hold(Key::Left));
+        CHECK(keys.Scene->FindEntity("p").Get<Transform>().Rotation == 1.0f * dt, "the keys can be chosen");
+        stepWith(*keys.Scene, InputFrame().Hold(Key::Q));
+        CHECK(keys.Scene->FindEntity("p").Get<Transform>().Rotation == 1.0f * dt, "and then the default ones do nothing");
+        SceneLoadResult still = load(R"({"name": "p", "components": {"Transform": {}, "KeyboardRotate": {"speed": 0}}})");
+        stepWith(*still.Scene, InputFrame().Hold(Key::Q), 5);
+        CHECK(still.Scene->FindEntity("p").Get<Transform>().Rotation == 0.0f, "a speed of 0 does not turn");
+        SceneLoadResult noTransform = load(R"({"name": "p", "components": {"KeyboardRotate": {}}})");
+        stepWith(*noTransform.Scene, InputFrame().Hold(Key::Q), 3);
+        CHECK(!noTransform.Scene->FindEntity("p").Has<Transform>(), "without a Transform there is nothing to turn");
+        CHECK(HasProblem(problems("KeyboardRotate", R"("counterClockwiseKey": "Q ")"), "/entities/0/components/KeyboardRotate/counterClockwiseKey", "did you mean 'Q'?") && HasProblem(problems("KeyboardRotate", R"("clockwiseKey": "")"), "/entities/0/components/KeyboardRotate/clockwiseKey", "got ''") && HasProblem(problems("KeyboardRotate", R"("speed": -1)"), "/entities/0/components/KeyboardRotate/speed", "must be at least 0"), "mistyped keys and negative speeds are refused");
+
+        // WheelZoom
+        const ComponentInfo* zoomInfo = registry.Find("WheelZoom");
+        CHECK(zoomInfo->IsBehavior && zoomInfo->Fields.size() == 3 && zoomInfo->Fields[0].Default == 1.1 && zoomInfo->Fields[1].Default == 0.25 && zoomInfo->Fields[2].Default == 4.0 && zoomInfo->Fields[0].Min == 0.01 && zoomInfo->Fields[0].Max == 10.0, "WheelZoom has a factor and a range of zoom");
+        const std::string zoomer = R"({"name": "p", "components": {"Camera": {}, "WheelZoom": {}}})";
+        SceneLoadResult zooming = load(zoomer);
+        Camera& camera = zooming.Scene->FindEntity("p").Get<Camera>();
+        InputFrame notch; notch.Scroll = 1.0f;
+        stepWith(*zooming.Scene, notch);
+        CHECK(camera.Zoom == powf(1.1f, 1.0f), "one notch up multiplies the zoom by the factor");
+        InputFrame down; down.Scroll = -1.0f;
+        stepWith(*zooming.Scene, down);
+        CHECK(std::fabs(camera.Zoom - 1.0f) < 1e-6f, "one notch down undoes it");
+        float held = camera.Zoom;
+        stepWith(*zooming.Scene, InputFrame(), 10);
+        CHECK(camera.Zoom == held, "a step with no wheel movement leaves the zoom alone");
+        InputFrame fraction; fraction.Scroll = 2.5f;
+        SceneLoadResult fractional = load(zoomer);
+        stepWith(*fractional.Scene, fraction);
+        CHECK(fractional.Scene->FindEntity("p").Get<Camera>().Zoom == powf(1.1f, 2.5f), "several notches in a step, or part of one, are worked out together");
+        SceneLoadResult clamped = load(zoomer);
+        InputFrame many; many.Scroll = 50.0f;
+        stepWith(*clamped.Scene, many);
+        CHECK(clamped.Scene->FindEntity("p").Get<Camera>().Zoom == 4.0f, "zooming in stops at the largest zoom");
+        many.Scroll = -100.0f;
+        stepWith(*clamped.Scene, many);
+        CHECK(clamped.Scene->FindEntity("p").Get<Camera>().Zoom == 0.25f, "and zooming out at the smallest");
+        SceneLoadResult custom = load(R"({"name": "p", "components": {"Camera": {"zoom": 1}, "WheelZoom": {"factor": 2, "minZoom": 0.5, "maxZoom": 3}}})");
+        stepWith(*custom.Scene, notch);
+        CHECK(custom.Scene->FindEntity("p").Get<Camera>().Zoom == 2.0f, "the factor can be set");
+        stepWith(*custom.Scene, notch);
+        CHECK(custom.Scene->FindEntity("p").Get<Camera>().Zoom == 3.0f, "and the largest zoom held to");
+        SceneLoadResult outside = load(R"({"name": "p", "components": {"Camera": {"zoom": 10}, "WheelZoom": {}}})");
+        stepWith(*outside.Scene, InputFrame(), 3);
+        CHECK(outside.Scene->FindEntity("p").Get<Camera>().Zoom == 10.0f, "a zoom outside the range stays until the wheel moves");
+        stepWith(*outside.Scene, down);
+        CHECK(outside.Scene->FindEntity("p").Get<Camera>().Zoom == 4.0f, "and is then held to it");
+        SceneLoadResult otherCamera = load(R"({"name": "p", "components": {"WheelZoom": {}}}, {"name": "q", "components": {"Camera": {}}})");
+        stepWith(*otherCamera.Scene, notch);
+        CHECK(otherCamera.Scene->FindEntity("q").Get<Camera>().Zoom == 1.0f, "it zooms its own entity's camera and no other");
+        CHECK(HasProblem(problems("WheelZoom", R"("minZoom": 2, "maxZoom": 1)"), "/entities/0/components/WheelZoom/maxZoom", "maxZoom (1.0) must not be smaller than minZoom (2.0)") && problems("WheelZoom", R"("minZoom": 2, "maxZoom": 2)").Ok(), "a largest zoom below the smallest is refused, an equal one is fine");
+        CHECK(HasProblem(problems("WheelZoom", R"("factor": 0)"), "/entities/0/components/WheelZoom/factor", "must be at least 0.01") && HasProblem(problems("WheelZoom", R"("factor": 11)"), "/entities/0/components/WheelZoom/factor", "must be at most 10") && HasProblem(problems("WheelZoom", R"("minZoom": 0)"), "/entities/0/components/WheelZoom/minZoom", "must be at least 0.01") && HasProblem(problems("WheelZoom", R"("maxZoom": 101)"), "/entities/0/components/WheelZoom/maxZoom", "must be at most 100"), "the factor and the range are held to sensible values");
+
+        // ClampPosition
+        const ComponentInfo* clampInfo = registry.Find("ClampPosition");
+        CHECK(clampInfo->IsBehavior && clampInfo->Fields.size() == 2 && clampInfo->Fields[0].Default == Json::array({ 0.0, 0.0 }) && clampInfo->Fields[1].Default == Json::array({ 100.0, 100.0 }), "ClampPosition has a rectangle, 0 to 100 by default");
+        auto clampedTo = [&](const std::string& position, const std::string& box) {
+            SceneLoadResult r = load(R"({"name": "p", "components": {"Transform": {"position": )" + position + R"(}, "ClampPosition": )" + box + "}}");
+            stepWith(*r.Scene, InputFrame());
+            return r.Scene->FindEntity("p").Get<Transform>().Position;
+        };
+        const std::string box = R"({"min": [10, 20], "max": [50, 60]})";
+        CHECK(clampedTo("[30, 40]", box) == glm::vec2(30.0f, 40.0f) && clampedTo("[10, 60]", box) == glm::vec2(10.0f, 60.0f), "a position inside the rectangle, or on its edge, is left alone");
+        CHECK(clampedTo("[0, 40]", box) == glm::vec2(10.0f, 40.0f) && clampedTo("[99, 40]", box) == glm::vec2(50.0f, 40.0f) && clampedTo("[30, -5]", box) == glm::vec2(30.0f, 20.0f) && clampedTo("[30, 500]", box) == glm::vec2(30.0f, 60.0f), "one that is outside is brought to the nearest edge, on each axis");
+        CHECK(clampedTo("[-100, 1000]", box) == glm::vec2(10.0f, 60.0f), "and to the corner when it is outside on both");
+        CHECK(clampedTo("[7, 7]", R"({"min": [5, 5], "max": [5, 5]})") == glm::vec2(5.0f, 5.0f) && clampedTo("[-50, -50]", R"({"min": [-100, -100], "max": [-10, -10]})") == glm::vec2(-50.0f, -50.0f) && clampedTo("[-5, -5]", R"({"min": [-100, -100], "max": [-10, -10]})") == glm::vec2(-10.0f, -10.0f), "an empty rectangle pins it, and negative ones work");
+        CHECK(clampedTo("[200, 200]", "{}") == glm::vec2(100.0f, 100.0f), "the default rectangle is 0 to 100");
+        SceneLoadResult noPosition = load(R"({"name": "p", "components": {"ClampPosition": {}}})");
+        stepWith(*noPosition.Scene, InputFrame());
+        CHECK(!noPosition.Scene->FindEntity("p").Has<Transform>(), "without a Transform there is nothing to clamp");
+        CHECK(HasProblem(problems("ClampPosition", R"("min": [5, 0], "max": [1, 100])"), "/entities/0/components/ClampPosition/max/0", "max x (1.0) must not be smaller than min x (5.0)") && HasProblem(problems("ClampPosition", R"("min": [0, 9], "max": [100, 2])"), "/entities/0/components/ClampPosition/max/1", "max y (2.0) must not be smaller than min y (9.0)") && problems("ClampPosition", R"("min": [3, 3], "max": [3, 3])").Ok(), "a corner the wrong way round is refused, on each axis");
+        SceneLoadResult both = problems("ClampPosition", R"("min": [5, 9], "max": [1, 2])");
+        CHECK(HasProblem(both, "/entities/0/components/ClampPosition/max/0", "max x") && HasProblem(both, "/entities/0/components/ClampPosition/max/1", "max y") && !both.Scene->FindEntity("p").Has<ClampPosition>(), "both axes are reported, and the component is skipped");
+
+        // moving and clamping on one entity: the clamp comes after the move (registration order)
+        SceneLoadResult fenced = load(R"({"name": "p", "components": {"Transform": {"position": [99, 50]}, "ClampPosition": {"min": [0, 0], "max": [100, 100]}, "KeyboardMove": {"speed": 600}}})");
+        stepWith(*fenced.Scene, InputFrame().Hold(Key::D), 5);
+        CHECK(fenced.Scene->FindEntity("p").Get<Transform>().Position == glm::vec2(100.0f, 50.0f), "an entity pushed against its fence stops at it, whatever order the two are written in");
+
+        // the same as the movement code in the Sandbox, step for step
+        struct OldSandbox {
+            glm::vec2 player = { 1024.0f, 518.0f };
+            float cameraRotation = 0.0f, zoom = 1.0f;
+            glm::vec4 tint = { 1.0f, 1.0f, 1.0f, 1.0f };
+            void Step(const InputFrame& in, double dtSeconds)
+            {
+                glm::vec2 move(0.0f);
+                if (in.IsDown(Key::W) || in.IsDown(Key::Up))    move.y += 1.0f;
+                if (in.IsDown(Key::S) || in.IsDown(Key::Down))  move.y -= 1.0f;
+                if (in.IsDown(Key::D) || in.IsDown(Key::Right)) move.x += 1.0f;
+                if (in.IsDown(Key::A) || in.IsDown(Key::Left))  move.x -= 1.0f;
+                if (in.IsDown(Key::Q)) cameraRotation += 1.0f * (float)dtSeconds;
+                if (in.IsDown(Key::E)) cameraRotation -= 1.0f * (float)dtSeconds;
+                if (move != glm::vec2(0.0f)) {
+                    float c = cosf(cameraRotation), s = sinf(cameraRotation);
+                    glm::vec2 dir = glm::normalize(move);
+                    dir = { dir.x * c - dir.y * s, dir.x * s + dir.y * c };
+                    float speed = 300.0f * (in.IsDown(Key::LeftShift) ? 2.0f : 1.0f);
+                    player += dir * speed * (float)dtSeconds;
+                }
+                const float margin = 64.0f + 48.0f * 0.5f;
+                player.x = glm::clamp(player.x, margin, 32 * 64.0f - margin);
+                player.y = glm::clamp(player.y, margin, 24 * 64.0f - margin);
+                if (in.Scroll != 0.0f) zoom = glm::clamp(zoom * powf(1.1f, in.Scroll), 0.25f, 4.0f);
+                tint = in.IsDown(Key::LeftShift) ? glm::vec4(1.0f, 0.65f, 0.3f, 1.0f) : glm::vec4(1.0f);
+            }
+        };
+        const std::string world = R"({"version": 1, "name": "w", "entities": [
+            {"name": "camera", "components": {"Transform": {}, "Camera": {"primary": true}, "KeyboardRotate": {"speed": 1}, "WheelZoom": {}}},
+            {"name": "player", "components": {"Transform": {"position": [1024, 518], "scale": [48, 48]}, "SpriteRenderer": {},
+                "KeyboardMove": {"speed": 300, "runMultiplier": 2, "relativeTo": "camera", "tintWhenRunning": true},
+                "ClampPosition": {"min": [88, 88], "max": [1960, 1448]}}}]})";
+        SceneLoadResult now = LoadSceneFromText(world, "world", registry);
+        CHECK(now.Ok(), "the scene that replaces the Sandbox's movement code loads with no problems");
+        // keys, running, turning and the wheel, chosen by a seeded generator so the script is always the same
+        auto scriptedFrame = [](RandomGenerator& script) {
+            InputFrame in;
+            if (script.Chance(0.7f)) in.Hold(Key::W);          // mostly up and to the right, so the walls are reached
+            if (script.Chance(0.1f)) in.Hold(Key::A);
+            if (script.Chance(0.1f)) in.Hold(Key::S);
+            if (script.Chance(0.7f)) in.Hold(Key::D);
+            if (script.Chance(0.05f)) in.Hold(Key::Up);
+            if (script.Chance(0.05f)) in.Hold(Key::Down);
+            if (script.Chance(0.05f)) in.Hold(Key::Left);
+            if (script.Chance(0.05f)) in.Hold(Key::Right);
+            if (script.Chance(0.5f)) in.Hold(Key::LeftShift);
+            float turnRoll = script.NextFloat();
+            if (turnRoll < 0.12f) in.Hold(Key::Q); else if (turnRoll < 0.24f) in.Hold(Key::E);   // never both: the old code left a rounding residue then
+            float wheel = script.NextFloat();
+            in.Scroll = wheel < 0.05f ? 1.0f : wheel < 0.1f ? -1.0f : 0.0f;
+            return in;
+        };
+
+        OldSandbox then;
+        RandomGenerator script(5);
+        bool identical = true, sawMove = false, sawWall = false, sawZoom = false, sawTurn = false, sawRun = false;
+        glm::vec2 lastPlayer = then.player;
+        for (int i = 0; i < 600 && identical; i++) {
+            InputFrame in = scriptedFrame(script);
+            then.Step(in, 1.0 / 60.0);
+            Simulation::Step(registry, *now.Scene, in, 1.0 / 60.0);
+
+            Entity player = now.Scene->FindEntity("player"), cam = now.Scene->FindEntity("camera");
+            identical = player.Get<Transform>().Position == then.player && cam.Get<Transform>().Rotation == then.cameraRotation && cam.Get<Camera>().Zoom == then.zoom && player.Get<SpriteRenderer>().Tint == then.tint;
+            sawMove = sawMove || then.player != lastPlayer;
+            lastPlayer = then.player;
+            sawWall = sawWall || then.player.x == 88.0f || then.player.y == 88.0f || then.player.x == 1960.0f || then.player.y == 1448.0f;
+            sawZoom = sawZoom || then.zoom != 1.0f;
+            sawTurn = sawTurn || then.cameraRotation != 0.0f;
+            sawRun = sawRun || then.tint != glm::vec4(1.0f);
+            if (!identical) printf("      differs at step %d: player %.6f,%.6f vs %.6f,%.6f\n", i, player.Get<Transform>().Position.x, player.Get<Transform>().Position.y, then.player.x, then.player.y);
+        }
+        CHECK(identical, "600 scripted steps of keys, running, turning and wheel give exactly the same player, camera, zoom and tint as the Sandbox's old code");
+        CHECK(sawMove && sawTurn && sawZoom && sawRun && sawWall, "and the script really moves, turns, zooms, runs and drives the player into the walls");
+
+        // the same script played again, on a fresh scene, ends in the same state
+        SceneLoadResult second = LoadSceneFromText(world, "world", registry);
+        RandomGenerator script2(5);
+        for (int i = 0; i < 600; i++) Simulation::Step(registry, *second.Scene, scriptedFrame(script2), 1.0 / 60.0);
+        CHECK(Simulation::Checksum(registry, *second.Scene) == Simulation::Checksum(registry, *now.Scene), "the same script played again ends in the same state (same checksum)");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

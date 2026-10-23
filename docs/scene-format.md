@@ -66,6 +66,22 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 | | `tileSize` | vec2 | `[64, 64]` | One tile in world units. Min 0.001. |
 | | `rows` | string[] | `[]` | The tiles, one string per row (see Tilemaps). |
 | `Random` | `seed` | int | `1` | On the scene itself (its top-level `components`). Any integer; the same seed gives the same sequence of random numbers on every run. |
+| `KeyboardMove` | `speed` | float | `100` | Behavior. World units per second. 0 to 100000. |
+| | `runMultiplier` | float | `2` | How many times faster while the run key is held. 0 to 100. |
+| | `runKey` | string | `"LeftShift"` | A key name (see Key names), or `""` for no run key. |
+| | `keys` | string | `"both"` | `"wasd"`, `"arrows"` or `"both"`. |
+| | `relativeTo` | string | `""` | An entity (usually the camera) whose rotation turns the movement so W goes up its screen; `""` for the world's axes. |
+| | `tintWhenRunning` | bool | `false` | Set this entity's `SpriteRenderer` tint to `runTint` while running and `idleTint` otherwise. |
+| | `idleTint` | vec4 | `[1, 1, 1, 1]` | Used with `tintWhenRunning`: the sprite's normal tint. 0 to 1. |
+| | `runTint` | vec4 | `[1, 0.65, 0.3, 1]` | Used with `tintWhenRunning`. 0 to 1. |
+| `KeyboardRotate` | `speed` | float | `1` | Behavior. Radians per second. 0 to 100. |
+| | `counterClockwiseKey` | string | `"Q"` | A key name. |
+| | `clockwiseKey` | string | `"E"` | A key name; with both keys held it does not turn. |
+| `WheelZoom` | `factor` | float | `1.1` | Behavior, on an entity with a `Camera`. The zoom is multiplied by this for each wheel notch up. 0.01 to 10. |
+| | `minZoom` | float | `0.25` | 0.01 to 100. |
+| | `maxZoom` | float | `4` | 0.01 to 100; not smaller than `minZoom`. |
+| `ClampPosition` | `min` | vec2 | `[0, 0]` | Behavior. The lower left corner of the rectangle the position is kept in. |
+| | `max` | vec2 | `[100, 100]` | The upper right corner; not smaller than `min` on either axis. |
 
 **Tilemaps.** A `Tilemap` is a grid of tiles cut from a sprite sheet, so a whole map is data and not one entity per tile. The entity's `Transform.position` is the map's bottom-left corner in the world and `Transform.scale` multiplies `tileSize`; its rotation is not used.
 
@@ -112,6 +128,52 @@ A **behavior** is a component that does something every fixed step (60 times a s
 - **Repeatable.** A behavior knows only the fixed step, the player's input for that step, and the scene's seeded random numbers, so the same scene, seed and input always play out the same way (on the same build and platform).
 - **State lives in the scene.** What a behavior changes is ordinary component data (a `Spin` changes `Transform.rotation`), so a scene saved while it runs holds where everything got to. The one exception is the position in the random sequence, which restarts from the seed when the saved scene is loaded.
 - **Drawing between steps.** The engine remembers where each `Transform` was before the last step and draws between that and the current one, so motion stays smooth when the display and the steps do not line up. That memory is never written to a file.
+
+**The movement behaviors.** `KeyboardMove`, `KeyboardRotate`, `WheelZoom` and `ClampPosition` act on the entity they are on: they change its `Transform` (or `Camera`), so that entity needs one. Put `ClampPosition` on the same entity as `KeyboardMove`: behaviors in an entity run in the order of the component table, so the clamp always comes after the move. A complete example, a camera that turns and zooms and a player that walks relative to it and cannot leave a 1000 by 1000 area:
+
+```jsonc
+{
+  "version": 1,
+  "name": "Walk",
+  "entities": [
+    {
+      // Before the player, so the player is moved by the camera's rotation of this step
+      "name": "camera",
+      "components": {
+        "Transform": { "position": [500, 500], "rotation": 0, "scale": [1, 1] },
+        "Camera": { "zoom": 1, "primary": true },
+        "KeyboardRotate": { "speed": 1, "counterClockwiseKey": "Q", "clockwiseKey": "E" },
+        "WheelZoom": { "factor": 1.1, "minZoom": 0.25, "maxZoom": 4 }
+      }
+    },
+    {
+      "name": "player",
+      "components": {
+        "Transform": { "position": [500, 500], "rotation": 0, "scale": [48, 48] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 1, 1, 1] },
+        "KeyboardMove": { "speed": 300, "runMultiplier": 2, "runKey": "LeftShift", "keys": "both", "relativeTo": "camera", "tintWhenRunning": true, "idleTint": [1, 1, 1, 1], "runTint": [1, 0.65, 0.3, 1] },
+        "ClampPosition": { "min": [24, 24], "max": [976, 976] }
+      }
+    }
+  ]
+}
+```
+
+A camera that should also follow the player has to come after the player in the file; its rotation is then the one from the end of the previous step when the player reads it, which is one sixtieth of a second behind and not noticeable.
+
+**Key names.** Fields that name a key take one of these, spelled exactly (letters are upper case):
+
+```keynames
+A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
+0 1 2 3 4 5 6 7 8 9
+Space Up Down Left Right Enter Escape Tab Backspace Insert Delete
+F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12
+LeftShift RightShift LeftControl RightControl LeftAlt RightAlt LeftSuper RightSuper
+NumPad0 NumPad1 NumPad2 NumPad3 NumPad4 NumPad5 NumPad6 NumPad7 NumPad8 NumPad9
+NumPadDecimal NumPadDivide NumPadMultiply NumPadSubtract NumPadAdd NumPadEnter NumPadEqual
+Apostrophe Comma Minus Period Slash Semicolon Equal LeftBracket Backslash RightBracket GraveAccent
+CapsLock ScrollLock NumLock PrintScreen Pause Menu
+```
 
 ## Written form
 

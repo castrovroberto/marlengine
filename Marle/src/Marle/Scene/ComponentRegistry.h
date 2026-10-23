@@ -500,7 +500,8 @@ namespace Marle {
             std::vector<std::shared_ptr<detail::ComponentImpl>> m_Components;
     };
 
-    // Registers Transform, SpriteRenderer, Camera, Tilemap and Random.
+    // Registers Transform, SpriteRenderer, Camera, Tilemap and Random, then the built-in behaviors:
+    // KeyboardMove, KeyboardRotate, WheelZoom and ClampPosition.
     EXPORT void RegisterBuiltinComponents(ComponentRegistry& registry);
 
     template<typename T>
