@@ -26,6 +26,42 @@ namespace Marle {
                 }
             }
 
+            // A component with a list of strings (such as tile rows) is written as a block, so each string
+            // is a line of its own: every field on its own line, strings one per line.
+            //   "Tilemap": {
+            //     "texture": "...",
+            //     "rows": [
+            //       "0123",
+            //       "4567"
+            //     ]
+            //   }
+            std::string Block(const Json& data, const ComponentInfo& info, const std::string& where)
+            {
+                std::string out = "{\n";
+                size_t i = 0;
+                for (const FieldInfo& field : info.Fields) {
+                    out += "          " + Quoted(field.Name, where) + ": ";
+                    const Json& value = data[field.Name];
+                    if (field.Type == FieldType::StringArray && !value.empty()) {
+                        out += "[\n";
+                        for (size_t r = 0; r < value.size(); r++)
+                            out += "            " + Quoted(value[r].get<std::string>(), where + "/" + field.Name + "/" + std::to_string(r)) + (r + 1 < value.size() ? ",\n" : "\n");
+                        out += "          ]";
+                    } else {
+                        out += Inline(value, where + "/" + field.Name);
+                    }
+                    out += ++i < info.Fields.size() ? ",\n" : "\n";
+                }
+                return out + "        }";
+            }
+
+            static bool NeedsBlock(const ComponentInfo& info)
+            {
+                for (const FieldInfo& field : info.Fields)
+                    if (field.Type == FieldType::StringArray) return true;
+                return false;
+            }
+
             // A value on one line: { "key": value, "key": value }, [a, b]. Whole numbers have no ".0".
             std::string Inline(const Json& j, const std::string& where)
             {
@@ -112,7 +148,8 @@ namespace Marle {
                     if (!why.empty()) writer.Report(at + "/" + field.Name, why);
                 }
 
-                lines.push_back("        " + writer.Quoted(component, at) + ": " + writer.Inline(data, at));
+                const ComponentInfo* info = registry.Find(component);
+                lines.push_back("        " + writer.Quoted(component, at) + ": " + (Writer::NeedsBlock(*info) ? writer.Block(data, *info, at) : writer.Inline(data, at)));
             }
 
             if (!lines.empty()) {

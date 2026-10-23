@@ -48,6 +48,9 @@ namespace Marle {
                 case FieldType::Vec2:  schema = Numbers("number", 2, field); break;
                 case FieldType::Vec4:  schema = Numbers("number", 4, field); break;
                 case FieldType::IVec2: schema = Numbers("integer", 2, field); break;
+                case FieldType::StringArray:
+                    schema = Json::object({ { "type", "array" }, { "items", Json::object({ { "type", "string" } }) } });
+                    break;
             }
             schema["description"] = field.Description + (field.AssetPath ? " An asset file path, relative to the working directory, written with '/' and without '..'." : "");
             schema["default"] = field.Default;

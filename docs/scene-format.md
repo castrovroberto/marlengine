@@ -57,6 +57,29 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 | | `tint` | vec4 | `[1, 1, 1, 1]` | Color `[r, g, b, a]`, each 0 to 1, multiplied with the texture. |
 | `Camera` | `zoom` | float | `1` | Larger shows less of the world. 0.01 to 100. |
 | | `primary` | bool | `false` | Whether the scene is drawn through this camera. |
+| `Tilemap` | `texture` | string | `""` | The sprite sheet image path. |
+| | `cellSize` | vec2 | `[32, 32]` | One sheet cell in pixels. Min 1. |
+| | `tileSize` | vec2 | `[64, 64]` | One tile in world units. Min 0.001. |
+| | `rows` | string[] | `[]` | The tiles, one string per row (see Tilemaps). |
+
+**Tilemaps.** A `Tilemap` is a grid of tiles cut from a sprite sheet, so a whole map is data and not one entity per tile. The entity's `Transform.position` is the map's bottom-left corner in the world and `Transform.scale` multiplies `tileSize`; its rotation is not used.
+
+- `rows` lists the map **top to bottom, as it looks**, one string per row. Every row has the same number of characters.
+- Each character is one tile: the sprite sheet cell with that number, counting from the sheet's bottom-left cell, left to right and then up, in base 36 (`0`-`9`, then `a`-`z`; lowercase only). `.` means no tile.
+- The number of cells per row of the sheet is the sheet's width divided by `cellSize.x`. A cell beyond the sheet is drawn as the error checker.
+
+```jsonc
+"Tilemap": {
+  "texture": "Assets/Textures/test_sheet.tga",
+  "cellSize": [32, 32],
+  "tileSize": [64, 64],
+  "rows": [
+    "3333",
+    "3.01",
+    "3333"
+  ]
+}
+```
 
 **Units.** World coordinates have Y pointing up. Angles are radians, counter-clockwise. Colors are floats from 0 to 1.
 
@@ -67,7 +90,7 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 The engine reads any layout that follows the rules above. When it writes a scene file (`SaveScene`), the output is canonical, so loading a canonical file and writing it again gives the same bytes, and a change to one component changes exactly one line:
 
 - Entities in creation order. Components in registration order. Fields in declaration order, and **every field is written**, including ones at their default. An entity with no components has no `components` key.
-- Two-space indentation, one entity per block, **one line per component** with its fields inside `{ ... }` and vectors as `[a, b]`, LF line endings, no byte order mark, one newline at the end of the file.
+- Two-space indentation, one entity per block, **one line per component** with its fields inside `{ ... }` and vectors as `[a, b]`, LF line endings, no byte order mark, one newline at the end of the file. The exception is a component with a list of strings (a `Tilemap`'s `rows`): it is written as a block, one field per line and one string per line, so a change to one row is a change to one line.
 - Numbers are the shortest text that reads back to the same value: `0.1`, not `0.10000000149011612`, and a whole number has no decimal point (`1024`, not `1024.0`). Text is UTF-8, with only quotes, backslashes and control characters escaped.
 - The `$schema` key is written only when the caller asks for it, since loading does not keep it.
 - Comments are not kept. Writing a scene drops them, and the engine never rewrites a file on its own, so comments in a hand-written file are only lost if you ask the engine to save over it.
@@ -101,7 +124,7 @@ Problems come back as a list: repeated keys first (they are found while parsing)
 
 `Assets/Scenes/scene.schema.json` is a JSON Schema (draft-07) generated from the component registry, so it lists exactly the components and fields the engine knows, each with its type, default, range and description. Editors use it for completion and checking, and an AI can read it to learn what is allowed. It is committed, and a test fails if it is out of date after a component changes; regenerate it (and the canonical test fixture) with `MARLE_UPDATE_GOLDEN=1 ./bin/Debug-linux-x86_64/SceneTests/SceneTests`, from the repository root.
 
-The schema accepts and rejects the same files as the loader, with three exceptions that a schema cannot express: two entities with the same name, an asset file that does not exist, and a key repeated within an object. The loader is the authority. A test checks the agreement against every fixture file and against the name and asset path rules.
+The schema accepts and rejects the same files as the loader, with exceptions that a schema cannot express: two entities with the same name, an asset file that does not exist, a key repeated within an object, and rules that span fields (tile rows of equal length, tile characters that exist). The loader is the authority. A test checks the agreement against every fixture file and against the name and asset path rules.
 
 ## Command line
 

@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 #include <string>
+#include <vector>
 
 namespace Marle {
 
@@ -22,6 +23,26 @@ namespace Marle {
         glm::vec2 CellSize = { 0.0f, 0.0f };   // one cell in pixels; 0 uses the whole texture
         glm::vec4 Tint = { 1.0f, 1.0f, 1.0f, 1.0f };   // multiplied with the texture, RGBA 0 to 1
     };
+
+    // A grid of tiles cut from a sprite sheet. The entity's Transform.Position is the bottom-left corner
+    // of the map and Transform.Scale multiplies the tile size; rotation is not used. Rows are listed top
+    // to bottom, as the map looks. Each character is one tile: a cell of the sprite sheet counted from
+    // its bottom-left cell, left to right then up, in base 36 (0-9 then a-z), or '.' for no tile.
+    struct Tilemap {
+        std::string Texture;                          // the sprite sheet image path
+        glm::vec2 CellSize = { 32.0f, 32.0f };        // one sheet cell in pixels
+        glm::vec2 TileSize = { 64.0f, 64.0f };        // one tile in world units
+        std::vector<std::string> Rows;
+    };
+
+    // The sheet cell a tile character stands for: 0 and up, -1 for '.' (no tile), -2 if it is not a tile character
+    inline int TilemapCell(char c)
+    {
+        if (c == '.') return -1;
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'z') return 10 + (c - 'a');
+        return -2;
+    }
 
     // Views the scene from the entity's Transform.
     struct Camera {

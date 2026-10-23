@@ -60,6 +60,9 @@
             },
             "Camera": {
               "$ref": "#/definitions/component_Camera"
+            },
+            "Tilemap": {
+              "$ref": "#/definitions/component_Tilemap"
             }
           }
         }
@@ -177,6 +180,55 @@
           "type": "boolean",
           "description": "Whether the scene is drawn through this camera.",
           "default": false
+        }
+      }
+    },
+    "component_Tilemap": {
+      "type": "object",
+      "description": "A grid of tiles cut from a sprite sheet. The entity's Transform position is the map's bottom-left corner and its scale multiplies the tile size; rotation is not used.",
+      "additionalProperties": false,
+      "properties": {
+        "texture": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.:)(?![\\s\\S]*\\\\)(?!(?:[\\s\\S]*/)?\\.\\.(?:/|$))[\\s\\S]*$",
+          "description": "The sprite sheet image path, relative to the working directory. An asset file path, relative to the working directory, written with '/' and without '..'.",
+          "default": ""
+        },
+        "cellSize": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 1.0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "One sprite sheet cell [width, height] in pixels.",
+          "default": [
+            32.0,
+            32.0
+          ]
+        },
+        "tileSize": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0.001
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "One tile [width, height] in world units.",
+          "default": [
+            64.0,
+            64.0
+          ]
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The tiles, one string per row, listed top to bottom as the map looks. Each character is a sprite sheet cell counted from the sheet's bottom-left cell, left to right then up, in base 36 (0-9 then a-z), or '.' for no tile. Every row must be the same length.",
+          "default": []
         }
       }
     }

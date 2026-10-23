@@ -17,6 +17,7 @@ namespace Marle {
             case FieldType::Vec2:   return "vec2";
             case FieldType::IVec2:  return "ivec2";
             case FieldType::Vec4:   return "vec4";
+            case FieldType::StringArray: return "string[]";
         }
         return "unknown";
     }
@@ -166,6 +167,24 @@ namespace Marle {
         registry.Register<Camera>("Camera", "Views the scene from the entity's Transform.")
             .Field(&Camera::Zoom, "zoom", "How much to magnify the view; larger shows less of the world.").Range(0.01, 100)
             .Field(&Camera::Primary, "primary", "Whether the scene is drawn through this camera.");
+
+        registry.Register<Tilemap>("Tilemap", "A grid of tiles cut from a sprite sheet. The entity's Transform position is the map's bottom-left corner and its scale multiplies the tile size; rotation is not used.")
+            .Field(&Tilemap::Texture, "texture", "The sprite sheet image path, relative to the working directory.").AssetPath()
+            .Field(&Tilemap::CellSize, "cellSize", "One sprite sheet cell [width, height] in pixels.").Min(1)
+            .Field(&Tilemap::TileSize, "tileSize", "One tile [width, height] in world units.").Min(0.001)
+            .Field(&Tilemap::Rows, "rows", "The tiles, one string per row, listed top to bottom as the map looks. Each character is a sprite sheet cell counted from the sheet's bottom-left cell, left to right then up, in base 36 (0-9 then a-z), or '.' for no tile. Every row must be the same length.")
+            .Validate([](const Tilemap& map, std::vector<ValidationError>& errors) {
+                for (size_t i = 0; i < map.Rows.size(); i++) {
+                    const std::string& row = map.Rows[i];
+                    for (size_t x = 0; x < row.size(); x++)
+                        if (TilemapCell(row[x]) == -2) {
+                            errors.push_back({ "/rows/" + std::to_string(i), std::string("'") + row[x] + "' at position " + std::to_string(x) + " is not a tile character (use 0-9, a-z, or '.' for no tile)" });
+                            break;
+                        }
+                    if (row.size() != map.Rows[0].size())
+                        errors.push_back({ "/rows/" + std::to_string(i), "this row has " + std::to_string(row.size()) + " tiles but the first row has " + std::to_string(map.Rows[0].size()) + "; every row must be the same length" });
+                }
+            });
     }
 
 }

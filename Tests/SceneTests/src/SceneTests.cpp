@@ -265,7 +265,7 @@ int main(int argc, char** argv)
         ComponentRegistry registry;
         RegisterBuiltinComponents(registry);
         std::vector<std::string> names = registry.GetNames();
-        CHECK(names.size() == 3 && names[0] == "Transform" && names[1] == "SpriteRenderer" && names[2] == "Camera", "the built-in components register in order");
+        CHECK(names.size() == 4 && names[0] == "Transform" && names[1] == "SpriteRenderer" && names[2] == "Camera" && names[3] == "Tilemap", "the built-in components register in order");
 
         const ComponentInfo* transform = registry.Find("Transform");
         CHECK(transform && !transform->Description.empty() && transform->Fields.size() == 3, "a component has a description and its fields");
@@ -731,7 +731,7 @@ int main(int argc, char** argv)
 
         std::string order;
         for (auto it = schema["definitions"].begin(); it != schema["definitions"].end(); ++it) order += it.key() + " ";
-        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera ", "components are described in registration order");
+        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap ", "components are described in registration order");
         CHECK(schema["definitions"]["entity"]["properties"]["components"]["properties"]["Camera"]["$ref"] == "#/definitions/component_Camera", "an entity's components point at their definitions");
 
         bool everyField = true, described = !schema["description"].get<std::string>().empty();
@@ -1020,6 +1020,117 @@ int main(int argc, char** argv)
         ToolRun schema = RunProcess(tool + " schema");
         CHECK(schema.Code == 0 && schema.Out == ReadFile("Assets/Scenes/scene.schema.json"), "marle-scene schema prints the committed schema");
         CHECK(RunProcess(tool + " format --check Assets/Scenes").Code == 0 && RunProcess(tool + " schema --check Assets/Scenes/scene.schema.json").Code == 0, "marle-scene format --check and schema --check pass on the repository's scenes");
+    }
+
+    // tilemap component
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        Scene scene;
+        const std::string sheet = "Assets/Textures/test_sheet.tga";
+
+        CHECK(TilemapCell('0') == 0 && TilemapCell('9') == 9 && TilemapCell('a') == 10 && TilemapCell('z') == 35 && TilemapCell('.') == -1, "tile characters are base 36 digits, '.' is no tile");
+        CHECK(TilemapCell('A') == -2 && TilemapCell(' ') == -2 && TilemapCell('-') == -2 && TilemapCell('#') == -2 && TilemapCell('\t') == -2, "anything else is not a tile character");
+
+        Entity map = scene.CreateEntity("map");
+        auto errors = registry.Read(map, "Tilemap", Json::parse(R"({"texture": "Assets/Textures/test_sheet.tga", "cellSize": [32, 32], "tileSize": [64, 64], "rows": ["01.f", "a..z"]})"));
+        const Tilemap* t = map.TryGet<Tilemap>();
+        CHECK(errors.empty() && t && t->Texture == sheet && t->Rows.size() == 2 && t->Rows[0] == "01.f" && t->Rows[1] == "a..z" && t->TileSize == glm::vec2(64.0f, 64.0f), "a tilemap reads its sheet, sizes and rows");
+
+        Entity defaults = scene.CreateEntity("defaults");
+        CHECK(registry.Read(defaults, "Tilemap", Json::object()).empty() && defaults.Get<Tilemap>().Rows.empty() && defaults.Get<Tilemap>().Texture.empty() && defaults.Get<Tilemap>().CellSize == glm::vec2(32.0f, 32.0f) && defaults.Get<Tilemap>().TileSize == glm::vec2(64.0f, 64.0f), "an empty tilemap has no rows and sensible sizes");
+        Entity emptyRows = scene.CreateEntity("emptyRows");
+        CHECK(registry.Read(emptyRows, "Tilemap", Json::parse(R"({"rows": []})")).empty() && registry.Read(scene.CreateEntity("blankRow"), "Tilemap", Json::parse(R"({"rows": [""]})")).empty(), "no rows, or a row with no tiles, is fine");
+
+        Entity bad = scene.CreateEntity("bad");
+        errors = registry.Read(bad, "Tilemap", Json::parse(R"({"rows": "0123"})"));
+        CHECK(errors.size() == 1 && HasError(errors, "/rows", "expected an array of strings, got a string"), "rows must be an array");
+        errors = registry.Read(bad, "Tilemap", Json::parse(R"({"rows": ["01", 5, null]})"));
+        CHECK(errors.size() == 2 && HasError(errors, "/rows/1", "expected a string, got a number") && HasError(errors, "/rows/2", "expected a string, got null"), "every row that is not a string is reported");
+        errors = registry.Read(bad, "Tilemap", Json::parse(R"({"rows": ["abc", "ab", "abcd"]})"));
+        CHECK(errors.size() == 2 && HasError(errors, "/rows/1", "this row has 2 tiles but the first row has 3") && HasError(errors, "/rows/2", "has 4 tiles"), "rows of different lengths are reported against the first row");
+        errors = registry.Read(bad, "Tilemap", Json::parse(R"({"rows": ["ab", "aB", "a ", "a-"]})"));
+        CHECK(errors.size() == 3 && HasError(errors, "/rows/1", "'B' at position 1 is not a tile character") && HasError(errors, "/rows/2", "' ' at position 1") && HasError(errors, "/rows/3", "'-' at position 1"), "a character that is not a tile is reported with its position");
+        CHECK(!bad.Has<Tilemap>(), "a tilemap with any problem is not added");
+
+        errors = registry.Read(bad, "Tilemap", Json::parse(R"({"cellSize": [0, 32], "tileSize": [64, 0], "rows": ["a", "bc"]})"));
+        CHECK(HasError(errors, "/cellSize/0", "must be at least 1") && HasError(errors, "/tileSize/1", "must be at least 0.001") && errors.size() == 2, "sizes must be positive, and the rows are only checked once the fields themselves are fine");
+
+        // writing
+        Json written = registry.Write(map, "Tilemap");
+        CHECK(written["rows"] == Json::array({ "01.f", "a..z" }) && written["tileSize"] == Json::array({ 64.0, 64.0 }), "a tilemap writes its rows as an array of strings");
+        CHECK(registry.Write(defaults, "Tilemap", true) == Json::object(), "an all-default tilemap writes as an empty object with skipDefaults");
+        CHECK(registry.Find("Tilemap")->Fields[3].Type == FieldType::StringArray && std::string(FieldTypeName(FieldType::StringArray)) == "string[]" && registry.Find("Tilemap")->Fields[0].AssetPath, "rows is a string[] field and the sheet is an asset path");
+
+        // the writer lays a component with a list of strings out as a block, one string per line
+        Scene ground("Ground");
+        Entity g = ground.CreateEntity("ground");
+        g.Add<Transform>();
+        Tilemap& tm = g.Add<Tilemap>();
+        tm.Texture = sheet;
+        tm.Rows = { "01", "2." };
+        ground.CreateEntity("flat").Add<Tilemap>();
+        const std::string golden = R"({
+  "version": 1,
+  "name": "Ground",
+  "entities": [
+    {
+      "name": "ground",
+      "components": {
+        "Transform": { "position": [0, 0], "rotation": 0, "scale": [1, 1] },
+        "Tilemap": {
+          "texture": "Assets/Textures/test_sheet.tga",
+          "cellSize": [32, 32],
+          "tileSize": [64, 64],
+          "rows": [
+            "01",
+            "2."
+          ]
+        }
+      }
+    },
+    {
+      "name": "flat",
+      "components": {
+        "Tilemap": {
+          "texture": "",
+          "cellSize": [32, 32],
+          "tileSize": [64, 64],
+          "rows": []
+        }
+      }
+    }
+  ]
+}
+)";
+        SceneSaveResult saved = SaveSceneToText(ground, registry);
+        for (const std::string& problem : saved.Problems) printf("      %s\n", problem.c_str());
+        CHECK(saved.Ok() && saved.Text == golden, "a tilemap is written as a block with one row per line");
+
+        SceneLoadResult back = LoadSceneFromText(golden, "golden", registry);
+        CHECK(back.Ok() && SaveSceneToText(*back.Scene, registry).Text == golden && back.Scene->FindEntity("ground").Get<Tilemap>().Rows[1] == "2.", "the block form loads and writes back identically");
+        back.Scene->FindEntity("ground").Get<Tilemap>().Rows[1] = "3.";
+        std::vector<std::string> before = SplitLines(golden), after = SplitLines(SaveSceneToText(*back.Scene, registry).Text);
+        int changed = 0;
+        for (size_t i = 0; i < before.size() && i < after.size(); i++) changed += before[i] != after[i];
+        CHECK(before.size() == after.size() && changed == 1, "changing one row changes exactly one line");
+
+        // a tilemap that would not read back is refused
+        Scene broken("Broken");
+        broken.CreateEntity("m").Add<Tilemap>().Rows = { "ab", "a" };
+        SceneSaveResult refused = SaveSceneToText(broken, registry);
+        CHECK(!refused.Ok() && refused.Problems[0].find("entity 'm' component 'Tilemap'/rows/1: this row has 1 tiles") != std::string::npos, "a tilemap with rows of different lengths is refused by the writer");
+        Scene unsafe("Unsafe");
+        unsafe.CreateEntity("m").Add<Tilemap>().Texture = "../sheet.png";
+        CHECK(!SaveSceneToText(unsafe, registry).Ok(), "an unsafe sheet path is refused by the writer");
+
+        // the loader reports where, and the schema accepts a good tilemap
+        SceneLoadResult load = LoadSceneFromText(R"({"version": 1, "name": "x", "entities": [{"name": "m", "components": {"Tilemap": {"rows": ["ab", "a"]}}}]})", "inline", registry);
+        CHECK(HasProblem(load, "/entities/0/components/Tilemap/rows/1", "this row has 1 tiles") && !load.Scene->FindEntity("m").Has<Tilemap>(), "the loader reports a bad tilemap with its path and skips the component");
+        const Json schema = GenerateSceneSchema(registry);
+        CHECK(SchemaErrors(schema, Json::parse(golden)).empty(), "the schema accepts a good tilemap");
+        CHECK(!SchemaErrors(schema, Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "m", "components": {"Tilemap": {"rows": "ab"}}}]})")).empty() && !SchemaErrors(schema, Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "m", "components": {"Tilemap": {"rows": ["ab", 5]}}}]})")).empty() && !SchemaErrors(schema, Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "m", "components": {"Tilemap": {"cellSize": [0, 1]}}}]})")).empty(), "the schema rejects rows that are not strings, and a zero size");
+        CHECK(schema["definitions"]["component_Tilemap"]["properties"]["rows"]["items"] == Json::parse(R"({"type": "string"})") && schema["definitions"]["component_Tilemap"]["properties"]["rows"]["type"] == "array", "rows is an array of strings in the schema");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

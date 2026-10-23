@@ -27,9 +27,9 @@ namespace Marle {
         std::string Message;
     };
 
-    enum class FieldType { Bool, Int, Float, String, Vec2, IVec2, Vec4 };
+    enum class FieldType { Bool, Int, Float, String, Vec2, IVec2, Vec4, StringArray };
 
-    EXPORT const char* FieldTypeName(FieldType type);   // "bool", "int", "float", "string", "vec2", "ivec2", "vec4"
+    EXPORT const char* FieldTypeName(FieldType type);   // "bool", "int", "float", "string", "vec2", "ivec2", "vec4", "string[]"
 
     // What the registry knows about one field, for validation, documentation and schemas.
     struct FieldInfo {
@@ -206,6 +206,30 @@ namespace Marle {
             }
         };
 
+        template<> struct FieldTraits<std::vector<std::string>> {
+            static constexpr FieldType Type = FieldType::StringArray;
+            static Json ToJson(const std::vector<std::string>& v)
+            {
+                Json array = Json::array();
+                for (const std::string& s : v) array.push_back(s);
+                return array;
+            }
+            static void Read(const Json& j, std::vector<std::string>& out, const FieldInfo&, const std::string& path, std::vector<ValidationError>& errors)
+            {
+                if (!j.is_array()) {
+                    errors.push_back({ path, std::string("expected an array of strings, got ") + JsonTypeName(j) });
+                    return;
+                }
+                std::vector<std::string> values;
+                bool ok = true;
+                for (size_t i = 0; i < j.size(); i++) {
+                    if (j[i].is_string()) values.push_back(j[i].get<std::string>());
+                    else { errors.push_back({ path + "/" + std::to_string(i), std::string("expected a string, got ") + JsonTypeName(j[i]) }); ok = false; }
+                }
+                if (ok) out = std::move(values);
+            }
+        };
+
         // Type-erased view of a registered component, held by the registry
         struct ComponentImpl {
             ComponentInfo Info;
@@ -224,6 +248,7 @@ namespace Marle {
                 std::function<Json(const T&)> Write;
             };
             std::vector<FieldOps> Ops;     // parallel to Info.Fields
+            std::function<void(const T&, std::vector<ValidationError>&)> Validator;   // rules that span fields
 
             TypedComponentImpl(std::string name, std::string description)
             {
@@ -267,6 +292,8 @@ namespace Marle {
                     else if (field.Required)
                         errors.push_back({ "/" + field.Name, "missing required field '" + field.Name + "'" });
                 }
+
+                if (errors.size() == before && Validator) Validator(value, errors);
 
                 if (errors.size() > before) return;
                 if (entity.Has<T>()) {
@@ -321,6 +348,15 @@ namespace Marle {
             ComponentBuilder& Max(double value) { if (m_Last) m_Last->Max = value; return *this; }
             ComponentBuilder& Range(double min, double max) { return Min(min).Max(max); }
 
+            // A check for rules that span fields, such as rows that must be the same length. It runs only
+            // when every field was read without problems, and reports problems with paths inside the
+            // component (e.g. "/rows/3"). The generated schema cannot express these rules.
+            ComponentBuilder& Validate(std::function<void(const T&, std::vector<ValidationError>&)> check)
+            {
+                m_Impl->Validator = std::move(check);
+                return *this;
+            }
+
         private:
             friend class ComponentRegistry;
             explicit ComponentBuilder(std::shared_ptr<detail::TypedComponentImpl<T>> impl) : m_Impl(std::move(impl)) {}
@@ -365,7 +401,7 @@ namespace Marle {
             std::vector<std::shared_ptr<detail::ComponentImpl>> m_Components;
     };
 
-    // Registers Transform, SpriteRenderer and Camera.
+    // Registers Transform, SpriteRenderer, Camera and Tilemap.
     EXPORT void RegisterBuiltinComponents(ComponentRegistry& registry);
 
     template<typename T>
