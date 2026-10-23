@@ -8,8 +8,12 @@
 #include "Marle/Scene/SceneSchema.h"
 #include "Marle/Scene/SceneTool.h"
 #include "Marle/Scene/SceneReloader.h"
+#include "Marle/Scene/RandomGenerator.h"
 #include <nlohmann/json-schema.hpp>
+#include <algorithm>
 #include <cctype>
+#include <climits>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -270,7 +274,7 @@ int main(int argc, char** argv)
         ComponentRegistry registry;
         RegisterBuiltinComponents(registry);
         std::vector<std::string> names = registry.GetNames();
-        CHECK(names.size() == 4 && names[0] == "Transform" && names[1] == "SpriteRenderer" && names[2] == "Camera" && names[3] == "Tilemap", "the built-in components register in order");
+        CHECK(names.size() == 5 && names[0] == "Transform" && names[1] == "SpriteRenderer" && names[2] == "Camera" && names[3] == "Tilemap" && names[4] == "Random", "the built-in components register in order");
 
         const ComponentInfo* transform = registry.Find("Transform");
         CHECK(transform && !transform->Description.empty() && transform->Fields.size() == 3, "a component has a description and its fields");
@@ -736,7 +740,7 @@ int main(int argc, char** argv)
 
         std::string order;
         for (auto it = schema["definitions"].begin(); it != schema["definitions"].end(); ++it) order += it.key() + " ";
-        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap ", "components are described in registration order");
+        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Random ", "components are described in registration order");
         CHECK(schema["definitions"]["entity"]["properties"]["components"]["properties"]["Camera"]["$ref"] == "#/definitions/component_Camera", "an entity's components point at their definitions");
 
         bool everyField = true, described = !schema["description"].get<std::string>().empty();
@@ -866,7 +870,7 @@ int main(int argc, char** argv)
         std::filesystem::create_directories(work / "sub");
 
         ToolRun ok = RunTool(registry, { "validate", "Assets/Scenes/example.json" });
-        CHECK(ok.Code == 0 && ok.Out == "OK    Assets/Scenes/example.json: 8 entities, 14 components\n" && ok.Err.empty(), "validate says OK for a good file, with counts");
+        CHECK(ok.Code == 0 && ok.Out == "OK    Assets/Scenes/example.json: 8 entities, 15 components\n" && ok.Err.empty(), "validate says OK for a good file, with counts");
 
         ToolRun bad = RunTool(registry, { "validate", dir + "mixed_errors.json" });
         CHECK(bad.Code == 1 && Contains(bad.Out, dir + "mixed_errors.json /entities/10/components/Camera/zoom: must be at least 0.01, got 0.0; the component is skipped\n"), "validate prints every problem as file, path and message, and exits 1");
@@ -1018,7 +1022,7 @@ int main(int argc, char** argv)
         CHECK(std::filesystem::exists(tool), "the marle-scene executable is built next to the tests");
 
         ToolRun good = RunProcess(tool + " validate Assets/Scenes/example.json");
-        CHECK(good.Code == 0 && good.Out == "OK    Assets/Scenes/example.json: 8 entities, 14 components\n", "marle-scene validate succeeds on a good scene");
+        CHECK(good.Code == 0 && good.Out == "OK    Assets/Scenes/example.json: 8 entities, 15 components\n", "marle-scene validate succeeds on a good scene");
         ToolRun broken = RunProcess(tool + " validate Tests/SceneTests/fixtures/mixed_errors.json");
         CHECK(broken.Code == 1 && Contains(broken.Out, "FAIL  Tests/SceneTests/fixtures/mixed_errors.json: 14 problems"), "marle-scene validate exits 1 on a bad scene");
         CHECK(RunProcess(tool + " bogus").Code == 2 && RunProcess(tool).Code == 2, "marle-scene exits 2 on a bad command line");
@@ -1636,6 +1640,157 @@ int main(int argc, char** argv)
         ComponentRegistry combos;
         combos.Register<Follow>("Follow", "f").Field(&Follow::Target, "target", "t").EntityReference().AssetPath().OneOf({ "" });
         CHECK(combos.Find("Follow")->Fields[0].EntityReference && !combos.Find("Follow")->Fields[0].AssetPath && combos.Find("Follow")->Fields[0].OneOf.empty(), "an entity reference cannot also be an asset path or a set of values");
+    }
+
+    // random numbers: the generator
+    {
+        // The expected numbers come from an independent implementation of the published algorithm (the
+        // minimal PCG32 from pcg-random.org, in Python); seed 42, stream 54 is the reference demo's vector.
+        auto firstOf = [](RandomGenerator g, int n) { std::vector<uint32_t> v; for (int i = 0; i < n; i++) v.push_back(g.NextU32()); return v; };
+        CHECK(firstOf(RandomGenerator(42, 54), 8) == std::vector<uint32_t>({ 0xa15c02b7, 0x7b47f409, 0xba1d3330, 0x83d2f293, 0xbfa4784b, 0xcbed606e, 0xbfc6a3ad, 0x812fff6d }), "seed 42, stream 54 gives the published PCG32 reference numbers");
+        CHECK(firstOf(RandomGenerator(0), 6) == std::vector<uint32_t>({ 0x47c28b93, 0xb98f6a27, 0x7d3dcb1e, 0xf0761116, 0x9cc33f5b, 0xbe0e744d }), "seed 0 gives its numbers");
+        CHECK(firstOf(RandomGenerator(1), 6) == std::vector<uint32_t>({ 0x9b6bdda9, 0x0c31fc48, 0xce97f8ef, 0x822c03d4, 0x943e8cf2, 0x1b75dde3 }) && firstOf(RandomGenerator(), 6) == firstOf(RandomGenerator(1), 6), "seed 1 gives its numbers, and is the default");
+        CHECK(firstOf(RandomGenerator(1, 1), 3) == std::vector<uint32_t>({ 0xc9828f91, 0x1592e274, 0xc0262657 }) && firstOf(RandomGenerator(1, 1), 1) != firstOf(RandomGenerator(1), 1), "another stream gives other numbers for the same seed");
+        CHECK(firstOf(RandomGenerator(0xFFFFFFFFull), 3) == std::vector<uint32_t>({ 0x1836f28a, 0x41720992, 0x67039735 }), "a seed that needs all 32 bits works");
+
+        // always the same
+        RandomGenerator a(1234), b(1234), c(1235);
+        bool same = true, differs = false;
+        for (int i = 0; i < 1000; i++) { uint32_t x = a.NextU32(), y = b.NextU32(), z = c.NextU32(); same = same && x == y; differs = differs || x != z; }
+        CHECK(same && differs, "two generators with the same seed agree, with another seed they do not");
+        RandomGenerator restart(77);
+        std::vector<uint32_t> run = firstOf(restart, 20);
+        for (int i = 0; i < 50; i++) restart.NextU32();
+        restart.Seed(77);
+        CHECK(firstOf(restart, 20) == run, "seeding again restarts the sequence");
+
+        // saving and restoring the state
+        RandomGenerator saved(5);
+        for (int i = 0; i < 10; i++) saved.NextU32();
+        RandomGenerator::State state = saved.GetState();
+        std::vector<uint32_t> after, replayed;
+        for (int i = 0; i < 10; i++) after.push_back(saved.NextU32());
+        CHECK(saved.GetState() != state && state != RandomGenerator(5).GetState(), "drawing moves the state");
+        saved.SetState(state);
+        for (int i = 0; i < 10; i++) replayed.push_back(saved.NextU32());
+        CHECK(replayed == after, "restoring the state replays the same numbers");
+
+        // bounded integers
+        auto sequence = [](RandomGenerator g, int n, uint32_t bound) { std::vector<uint32_t> v; for (int i = 0; i < n; i++) v.push_back(g.Below(bound)); return v; };
+        CHECK(sequence(RandomGenerator(7), 12, 10) == std::vector<uint32_t>({ 3, 8, 3, 0, 0, 9, 6, 3, 5, 9, 8, 6 }) && sequence(RandomGenerator(9), 10, 7) == std::vector<uint32_t>({ 3, 0, 6, 0, 0, 1, 4, 1, 1, 5 }), "Below gives the numbers the reference algorithm gives");
+        RandomGenerator dice(2024);
+        int faces[6] = {};
+        bool inRange = true;
+        for (int i = 0; i < 6000; i++) { uint32_t r = dice.Below(6); inRange = inRange && r < 6; faces[r]++; }
+        CHECK(inRange && *std::min_element(faces, faces + 6) > 900 && *std::max_element(faces, faces + 6) < 1100, "Below stays in range and is even (6000 rolls of a die)");
+        RandomGenerator edge(1);
+        CHECK(edge.Below(1) == 0 && edge.Below(0) == 0 && edge.Below(2) < 2, "a bound of 1 or 0 gives 0");
+        bool large = true;
+        for (int i = 0; i < 1000; i++) large = large && edge.Below(0x80000001u) < 0x80000001u;
+        CHECK(large, "a bound over half the range stays in range (where a plain modulo would be most biased)");
+
+        // integers between
+        auto between = [](RandomGenerator g, int n, int lo, int hi) { std::vector<int> v; for (int i = 0; i < n; i++) v.push_back(g.IntBetween(lo, hi)); return v; };
+        CHECK(between(RandomGenerator(3), 12, -5, 5) == std::vector<int>({ -3, 4, -4, 0, 5, -2, -5, -2, -2, 4, 0, -1 }), "IntBetween gives the numbers the reference algorithm gives");
+        RandomGenerator ends(8);
+        bool sawLow = false, sawHigh = false, within = true;
+        for (int i = 0; i < 1000; i++) { int v = ends.IntBetween(3, 5); sawLow = sawLow || v == 3; sawHigh = sawHigh || v == 5; within = within && v >= 3 && v <= 5; }
+        CHECK(sawLow && sawHigh && within, "IntBetween includes both ends and nothing outside them");
+        CHECK(ends.IntBetween(4, 4) == 4 && ends.IntBetween(9, 2) == 9, "one value is that value, and a reversed range gives the minimum");
+        bool negative = true, wide = false;
+        for (int i = 0; i < 500; i++) { int v = ends.IntBetween(-1000000, -999990); negative = negative && v >= -1000000 && v <= -999990; }
+        for (int i = 0; i < 100; i++) wide = wide || ends.IntBetween(INT_MIN, INT_MAX) < 0;
+        CHECK(negative && wide, "IntBetween works for negative ranges and for the whole range of int");
+
+        // floats
+        RandomGenerator f(1);
+        std::vector<int> bits;
+        for (int i = 0; i < 4; i++) bits.push_back((int)(f.NextFloat() * 16777216.0f));
+        CHECK(bits == std::vector<int>({ 10185693, 799228, 13539320, 8530947 }), "NextFloat is 24 random bits over 2^24, exactly");
+        RandomGenerator g(11);
+        bool unit = true;
+        double sum = 0;
+        for (int i = 0; i < 100000; i++) { float v = g.NextFloat(); unit = unit && v >= 0.0f && v < 1.0f; sum += v; }
+        CHECK(unit && std::fabs(sum / 100000 - 0.5) < 0.01, "NextFloat is from 0 up to, not including, 1 and centered on one half");
+        bool ranged = true;
+        for (int i = 0; i < 10000; i++) { float v = g.FloatBetween(-2.5f, 4.0f); ranged = ranged && v >= -2.5f && v < 4.0f; }
+        CHECK(ranged && g.FloatBetween(3.0f, 3.0f) == 3.0f && g.FloatBetween(5.0f, 1.0f) == 5.0f, "FloatBetween stays in range, and a range with no width gives its minimum");
+        int heads = 0, never = 0, always = 0;
+        for (int i = 0; i < 10000; i++) { heads += g.Chance(0.5f); never += g.Chance(0.0f); always += g.Chance(1.0f); }
+        CHECK(never == 0 && always == 10000 && heads > 4800 && heads < 5200, "Chance never happens at 0, always at 1 and half the time at one half");
+    }
+
+    // random numbers: the scene's generator
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto first = [](Scene& scene, int n) { std::vector<uint32_t> v; for (int i = 0; i < n; i++) v.push_back(scene.GetRandom().NextU32()); return v; };
+        const std::vector<uint32_t> seed42 = { 0xa15c02b7, 0x7b47f409, 0xba1d3330, 0x83d2f293 };
+        const std::vector<uint32_t> seed1 = { 0x9b6bdda9, 0x0c31fc48, 0xce97f8ef, 0x822c03d4 };
+
+        const ComponentInfo* info = registry.Find("Random");
+        CHECK(info && info->Fields.size() == 1 && info->Fields[0].Name == "seed" && info->Fields[0].Type == FieldType::Int && info->Fields[0].Default == 1 && !info->Fields[0].Min && !info->Fields[0].Max && !info->Description.empty(), "Random is a registered component with a seed that can be any integer");
+        CHECK(Contains(info->Fields[0].Description, "same sequence") && Contains(info->Description, "clock"), "and says what it is for");
+
+        Scene plain("p");
+        CHECK(first(plain, 4) == seed1, "a scene without a Random component starts from seed 1");
+        plain.GetSceneEntity().Add<Random>().Seed = 42;
+        CHECK(first(plain, 2) != std::vector<uint32_t>({ seed42[0], seed42[1] }) , "changing the component does not change a generator that is already running");
+        plain.ResetRandom();
+        CHECK(first(plain, 4) == seed42, "ResetRandom restarts it from the component's seed");
+        plain.ResetRandom();
+        CHECK(first(plain, 4) == seed42, "and again from the same place");
+        plain.GetSceneEntity().Remove<Random>();
+        plain.ResetRandom();
+        CHECK(first(plain, 4) == seed1, "without the component it is back to seed 1");
+
+        // loaded from a scene file
+        SceneLoadResult load = LoadSceneFromText(R"({"version": 1, "name": "s", "components": {"Random": {"seed": 42}}, "entities": []})", "inline", registry);
+        CHECK(load.Ok() && load.Scene->GetSceneEntity().Get<Random>().Seed == 42 && first(*load.Scene, 4) == seed42, "loading a scene starts its generator from the seed in the file");
+        SceneLoadResult twice = LoadSceneFromText(R"({"version": 1, "name": "s", "components": {"Random": {"seed": 42}}, "entities": []})", "inline", registry);
+        CHECK(first(*twice.Scene, 4) == seed42, "and loading it again gives the same numbers");
+        CHECK(first(*LoadSceneFromText(R"({"version": 1, "name": "s", "entities": []})", "inline", registry).Scene, 4) == seed1, "a file without a seed uses seed 1");
+
+        SceneLoadResult negative = LoadSceneFromText(R"({"version": 1, "name": "s", "components": {"Random": {"seed": -1}}, "entities": []})", "inline", registry);
+        CHECK(first(*negative.Scene, 3) == std::vector<uint32_t>({ 0x1836f28a, 0x41720992, 0x67039735 }), "a negative seed is its 32-bit value, and a different seed from the positive one");
+        CHECK(first(*LoadSceneFromText(R"({"version": 1, "name": "s", "components": {"Random": {"seed": 2147483647}}, "entities": []})", "inline", registry).Scene, 1) != first(*LoadSceneFromText(R"({"version": 1, "name": "s", "components": {"Random": {"seed": -2147483648}}, "entities": []})", "inline", registry).Scene, 1), "the largest and smallest seeds differ");
+
+        // a bad seed
+        SceneLoadResult bad = LoadSceneFromText(R"({"version": 1, "name": "s", "components": {"Random": {"seed": 1.5}}, "entities": []})", "inline", registry);
+        CHECK(HasProblem(bad, "/components/Random/seed", "expected an integer, got a number with a fraction") && first(*bad.Scene, 4) == seed1, "a seed that is not an integer is a problem, and the scene falls back to seed 1");
+        CHECK(HasProblem(LoadSceneFromText(R"({"version": 1, "name": "s", "components": {"Random": {"sed": 1}}, "entities": []})", "inline", registry), "/components/Random/sed", "did you mean 'seed'?"), "a misspelled field gets a suggestion");
+
+        // no shared state
+        Scene one("one"), two("two");
+        std::vector<uint32_t> fromOne = first(one, 5);
+        CHECK(first(two, 5) == fromOne, "two scenes with the same seed give the same numbers");
+        first(one, 100);
+        RandomGenerator reference(1);
+        for (int i = 0; i < 5; i++) reference.NextU32();   // two has drawn five numbers; the next five are numbers 6 to 10
+        std::vector<uint32_t> nextFive;
+        for (int i = 0; i < 5; i++) nextFive.push_back(reference.NextU32());
+        CHECK(first(two, 5) == nextFive, "drawing a hundred numbers from one scene does not move another's sequence");
+        Scene three("three");
+        first(one, 7);
+        CHECK(first(three, 5) == fromOne, "a new scene starts from the start however much another has drawn");
+
+        // writing: the seed is data, the position in the sequence is not
+        Scene saved("saved");
+        saved.GetSceneEntity().Add<Random>().Seed = 42;
+        saved.ResetRandom();
+        first(saved, 10);
+        SceneSaveResult text = SaveSceneToText(saved, registry);
+        CHECK(text.Ok() && Contains(text.Text, "\"components\": {\n    \"Random\": { \"seed\": 42 }\n  },"), "the seed is written as a scene component");
+        SceneLoadResult back = LoadSceneFromText(text.Text, "saved", registry);
+        CHECK(back.Ok() && first(*back.Scene, 4) == seed42, "a saved scene starts its sequence again from the seed");
+
+        // the schema and the example
+        const Json schema = GenerateSceneSchema(registry);
+        const Json& seed = schema["definitions"]["component_Random"]["properties"]["seed"];
+        CHECK(seed["type"] == "integer" && seed["default"] == 1 && !seed.contains("minimum") && !seed.contains("maximum"), "the schema describes the seed as any integer");
+        CHECK(SchemaErrors(schema, ParseWithComments(R"({"version": 1, "name": "x", "components": {"Random": {"seed": 7}}, "entities": []})")).empty() && !SchemaErrors(schema, ParseWithComments(R"({"version": 1, "name": "x", "components": {"Random": {"seed": 0.5}}, "entities": []})")).empty(), "a scene with a seed validates, a fractional seed does not");
+        SceneLoadResult example = LoadScene("Assets/Scenes/example.json", registry);
+        CHECK(example.Ok() && example.Scene->GetSceneEntity().Get<Random>().Seed == 1 && first(*example.Scene, 4) == seed1, "the example scene carries a seed of its own");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

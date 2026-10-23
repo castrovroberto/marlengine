@@ -1,6 +1,9 @@
 {
   "version": 1,
   "name": "Example garden",
+  "components": {
+    "Random": { "seed": 1 }
+  },
   "entities": [
     {
       "name": "camera",

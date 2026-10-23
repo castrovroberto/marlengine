@@ -2,6 +2,7 @@
 
 #include "Marle/Core.h"
 #include "Entity.h"
+#include "RandomGenerator.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,6 +34,15 @@ namespace Marle {
             // ForEach and cannot be destroyed.
             Entity GetSceneEntity() const;
 
+            // The scene's random number generator (ADR-0002): the only source of random numbers a behavior
+            // may use. It starts from the seed in the scene's own Random component, or seed 1 if there is
+            // none, and loading a scene starts it there. It is runtime state: a saved scene restarts its
+            // sequence from the seed.
+            RandomGenerator& GetRandom() { return m_Random; }
+
+            // Restarts the generator from the seed in the scene's own Random component (seed 1 if none)
+            void ResetRandom();
+
             // The entity with this name, or an invalid Entity.
             Entity FindEntity(const std::string& name) const;
 
@@ -53,6 +63,7 @@ namespace Marle {
         private:
             std::string m_Name;
             std::shared_ptr<detail::SceneState> m_State;
+            RandomGenerator m_Random;
     };
 
     template<typename... Components, typename Fn>

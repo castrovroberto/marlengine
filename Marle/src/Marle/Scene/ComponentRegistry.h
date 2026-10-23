@@ -456,7 +456,7 @@ namespace Marle {
             std::vector<std::shared_ptr<detail::ComponentImpl>> m_Components;
     };
 
-    // Registers Transform, SpriteRenderer, Camera and Tilemap.
+    // Registers Transform, SpriteRenderer, Camera, Tilemap and Random.
     EXPORT void RegisterBuiltinComponents(ComponentRegistry& registry);
 
     template<typename T>

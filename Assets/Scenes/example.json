@@ -5,6 +5,8 @@
   "$schema": "scene.schema.json",
   "version": 1,
   "name": "Example garden",
+  // Components of the scene itself, not of any entity: here, the number its random numbers start from.
+  "components": { "Random": { "seed": 1 } },
   "entities": [
     {
       "name": "camera",

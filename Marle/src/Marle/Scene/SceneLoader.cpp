@@ -192,6 +192,7 @@ namespace Marle {
             if (!root["components"].is_object()) problem("/components", std::string("expected an object, got ") + detail::JsonTypeName(root["components"]));
             else loadComponents(scene.GetSceneEntity(), root["components"], "/components");
         }
+        scene.ResetRandom();   // start the scene's random numbers from the seed it just loaded
 
         if (!root.contains("entities")) { problem("", "missing required key 'entities'"); return result; }
         if (!root["entities"].is_array()) { problem("/entities", std::string("expected an array, got ") + detail::JsonTypeName(root["entities"])); return result; }

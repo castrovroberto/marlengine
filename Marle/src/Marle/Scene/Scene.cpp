@@ -1,6 +1,7 @@
 #include "mrlpch.h"
 #include "Marle/Log.h"
 #include "Scene.h"
+#include "Components.h"
 #include <algorithm>
 
 namespace Marle {
@@ -30,6 +31,13 @@ namespace Marle {
         m_State->ByName.emplace(name, handle);
         m_State->Order.push_back(handle);
         return Entity(m_State, handle);
+    }
+
+    void Scene::ResetRandom()
+    {
+        const Random* seed = GetSceneEntity().TryGet<Random>();
+        // a negative seed is the number it wraps to as a 32-bit integer, so every int is a different seed
+        m_Random.Seed(seed ? (uint64_t)(uint32_t)seed->Seed : 1u);
     }
 
     Entity Scene::GetSceneEntity() const

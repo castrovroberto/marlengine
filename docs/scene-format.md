@@ -65,6 +65,7 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 | | `cellSize` | vec2 | `[32, 32]` | One sheet cell in pixels. Min 1. |
 | | `tileSize` | vec2 | `[64, 64]` | One tile in world units. Min 0.001. |
 | | `rows` | string[] | `[]` | The tiles, one string per row (see Tilemaps). |
+| `Random` | `seed` | int | `1` | On the scene itself (its top-level `components`). Any integer; the same seed gives the same sequence of random numbers on every run. |
 
 **Tilemaps.** A `Tilemap` is a grid of tiles cut from a sprite sheet, so a whole map is data and not one entity per tile. The entity's `Transform.position` is the map's bottom-left corner in the world and `Transform.scale` multiplies `tileSize`; its rotation is not used.
 
@@ -84,6 +85,8 @@ An entity is identified by its name, nothing else. There are no generated ids, c
   ]
 }
 ```
+
+**Random numbers.** A scene's random numbers come from one generator that starts from `Random.seed` in the scene's own components (seed 1 if there is none) and from nothing else: never the clock or the machine, so the same scene, seed and input always play out the same way (ADR-0002). A seed can be any integer, and a negative one is as good as any other. The generator is runtime state: a scene saved while it runs writes its seed, not where it had got to, so loading it starts the sequence again.
 
 **Units.** World coordinates have Y pointing up. Angles are radians, counter-clockwise. Colors are floats from 0 to 1.
 

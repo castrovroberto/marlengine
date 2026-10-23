@@ -39,6 +39,9 @@
         },
         "Tilemap": {
           "$ref": "#/definitions/component_Tilemap"
+        },
+        "Random": {
+          "$ref": "#/definitions/component_Random"
         }
       }
     },
@@ -82,6 +85,9 @@
             },
             "Tilemap": {
               "$ref": "#/definitions/component_Tilemap"
+            },
+            "Random": {
+              "$ref": "#/definitions/component_Random"
             }
           }
         }
@@ -248,6 +254,18 @@
           },
           "description": "The tiles, one string per row, listed top to bottom as the map looks. Each character is a sprite sheet cell counted from the sheet's bottom-left cell, left to right then up, in base 36 (0-9 then a-z), or '.' for no tile. Every row must be the same length.",
           "default": []
+        }
+      }
+    },
+    "component_Random": {
+      "type": "object",
+      "description": "On the scene itself: where the scene's random numbers start, so the same seed gives the same sequence on every run. Nothing is ever seeded from the clock.",
+      "additionalProperties": false,
+      "properties": {
+        "seed": {
+          "type": "integer",
+          "description": "Any integer. The same seed always gives the same sequence of random numbers.",
+          "default": 1
         }
       }
     }

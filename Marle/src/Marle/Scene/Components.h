@@ -44,6 +44,12 @@ namespace Marle {
         return -2;
     }
 
+    // On the scene itself: the number the scene's random numbers start from. The same seed gives the
+    // same sequence on every run; nothing is ever seeded from the clock.
+    struct Random {
+        int Seed = 1;
+    };
+
     // Views the scene from the entity's Transform.
     struct Camera {
         float Zoom = 1.0f;                     // larger shows less of the world
