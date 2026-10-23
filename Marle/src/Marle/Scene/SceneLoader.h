@@ -32,6 +32,10 @@ namespace Marle {
         // Empty means the file is fully valid.
         std::vector<SceneProblem> Problems;
 
+        // FNV-1a hash of the text that was loaded (Simulation.h), to tell one version of a scene file from
+        // another, as an input recording does
+        uint64_t TextHash = 0;
+
         bool Ok() const { return Scene && Problems.empty(); }
     };
 

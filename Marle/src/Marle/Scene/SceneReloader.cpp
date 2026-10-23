@@ -53,6 +53,7 @@ namespace Marle {
         m_Stamp = ReadStamp();
         SceneLoadResult result = LoadScene(m_Status.File, m_Registry);
 
+        m_SceneHash = result.TextHash;
         m_Status.Missing = false;
         m_Status.KeptPrevious = false;
         m_Status.LastOk = result.Ok();
@@ -82,6 +83,7 @@ namespace Marle {
 
         m_Status.KeptPrevious = !result.Ok();
         if (result.Ok()) {
+            m_SceneHash = result.TextHash;
             m_Status.Loads++;
             reload.Scene = std::move(result.Scene);
         } else {

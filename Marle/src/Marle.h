@@ -15,6 +15,7 @@
 
 // For use by Marle applications
 #include "Marle/Application.h"
+#include "Marle/CommandLine.h"
 #include "Marle/Log.h"
 #include "Marle/Window.h"
 #include "Marle/Layer.h"
@@ -32,6 +33,7 @@
 #include "Marle/Scene/SceneRenderer.h"
 #include "Marle/Scene/SceneReloader.h"
 #include "Marle/Scene/Simulation.h"
+#include "Marle/Scene/InputRecording.h"
 
 // Events
 #include "Marle/Events/Event.h"

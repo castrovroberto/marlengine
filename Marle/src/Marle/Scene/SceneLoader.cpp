@@ -1,6 +1,7 @@
 #include "mrlpch.h"
 #include "Marle/Log.h"
 #include "SceneLoader.h"
+#include "Simulation.h"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -59,6 +60,7 @@ namespace Marle {
     SceneLoadResult LoadSceneFromText(const std::string& text, const std::string& source, const ComponentRegistry& registry)
     {
         SceneLoadResult result;
+        result.TextHash = Fnv1a64(text.data(), text.size());
         auto problem = [&](const std::string& path, const std::string& message) { result.Problems.push_back({ source, path, message }); };
 
         // Parse, noting repeated keys: a plain parse keeps the last one silently, which hides mistakes.

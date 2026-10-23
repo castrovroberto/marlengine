@@ -10,6 +10,8 @@
 #include "Marle/Scene/SceneReloader.h"
 #include "Marle/Scene/RandomGenerator.h"
 #include "Marle/Scene/Simulation.h"
+#include "Marle/Scene/InputRecording.h"
+#include "Marle/CommandLine.h"
 #include "Marle/Core/KeyNames.h"
 #include "Marle/Core/KeyCodes.h"
 #include <nlohmann/json-schema.hpp>
@@ -2870,6 +2872,301 @@ int main(int argc, char** argv)
         CarryOverState(registry, *baselineAgain.Scene, *second.Scene, *third.Scene);
         stepWith(*third.Scene, keys, 30); stepWith(*chainControl.Scene, keys, 30);
         CHECK(Simulation::Checksum(registry, *third.Scene) == Simulation::Checksum(registry, *chainControl.Scene), "two reloads along the way leave the run exactly as an unbroken one");
+    }
+
+    // input recordings: the file
+    {
+        // frames: W and D go down (step 0); D up (3); a wheel movement (4); a tap on Q (5); W up (6); Space down with the wheel (8)
+        InputRecording recording;
+        recording.SceneName = "Test scene";
+        recording.SceneHash = 0x0123456789abcdefull;
+        recording.Seed = 7;
+        recording.StepsPerSecond = 60;
+        recording.HasChecksum = true;
+        recording.Checksum = 0xfedcba9876543210ull;
+        recording.Frames.resize(10);
+        recording.Frames[0].Press(Key::W).Press(Key::D);
+        recording.Frames[1].Hold(Key::W).Hold(Key::D);
+        recording.Frames[2].Hold(Key::W).Hold(Key::D);
+        recording.Frames[3].Hold(Key::W);
+        recording.Frames[4].Hold(Key::W); recording.Frames[4].Scroll = 1.5f;
+        recording.Frames[5].Hold(Key::W); recording.Frames[5].Pressed.set(Key::Q);
+        recording.Frames[8].Press(Key::Space); recording.Frames[8].Scroll = -2.0f;
+        recording.Frames[9].Hold(Key::Space);
+
+        const std::string golden = R"({
+  "version": 1,
+  "scene": "Test scene",
+  "sceneHash": "0123456789abcdef",
+  "seed": 7,
+  "stepsPerSecond": 60,
+  "steps": 10,
+  "checksum": "fedcba9876543210",
+  "changes": [
+    { "step": 0, "down": ["D", "W"], "pressed": ["D", "W"] },
+    { "step": 3, "up": ["D"] },
+    { "step": 4, "scroll": 1.5 },
+    { "step": 5, "pressed": ["Q"] },
+    { "step": 6, "up": ["W"] },
+    { "step": 8, "down": ["Space"], "pressed": ["Space"], "scroll": -2 }
+  ]
+}
+)";
+        RecordingWriteResult written = WriteRecording(recording);
+        for (const std::string& problem : written.Problems) printf("      %s\n", problem.c_str());
+        CHECK(written.Ok() && written.Text == golden, "a recording is written one line per step where the input changed");
+        CHECK(recording.GetStepCount() == 10, "and knows how many steps it has");
+
+        RecordingReadResult read = ReadRecording(golden);
+        for (const std::string& problem : read.Problems) printf("      %s\n", problem.c_str());
+        const InputRecording& back = read.Recording;
+        CHECK(read.Ok() && back.SceneName == "Test scene" && back.SceneHash == 0x0123456789abcdefull && back.Seed == 7 && back.StepsPerSecond == 60 && back.HasChecksum && back.Checksum == 0xfedcba9876543210ull && back.GetStepCount() == 10, "it reads back with its header");
+        bool sameFrames = back.Frames.size() == recording.Frames.size();
+        for (size_t i = 0; sameFrames && i < recording.Frames.size(); i++) sameFrames = back.Frames[i] == recording.Frames[i];
+        CHECK(sameFrames, "and with every frame exactly: keys down, taps, newly pressed keys and the wheel");
+        CHECK(WriteRecording(back).Text == golden, "writing what was read gives the same text");
+        CHECK(!back.Frames[5].IsDown(Key::Q) && back.Frames[5].WasPressed(Key::Q) && back.Frames[3].IsDown(Key::W) && !back.Frames[3].IsDown(Key::D) && back.Frames[7] == InputFrame() && back.Frames[9].IsDown(Key::Space) && !back.Frames[9].WasPressed(Key::Space), "a tap is pressed and not down, a key stays down until it goes up, and unlisted steps repeat the keys that are down");
+
+        InputRecording empty;
+        empty.SceneName = "e"; empty.SceneHash = 1;
+        CHECK(WriteRecording(empty).Text == "{\n  \"version\": 1,\n  \"scene\": \"e\",\n  \"sceneHash\": \"0000000000000001\",\n  \"seed\": 1,\n  \"stepsPerSecond\": 60,\n  \"steps\": 0,\n  \"changes\": []\n}\n", "a recording with no steps and no checksum is written without either");
+        RecordingReadResult nothing = ReadRecording(WriteRecording(empty).Text);
+        CHECK(nothing.Ok() && nothing.Recording.GetStepCount() == 0 && !nothing.Recording.HasChecksum, "and reads back");
+        InputRecording quiet = empty;
+        quiet.Frames.resize(5);
+        quiet.Frames[2].Hold(Key::A); quiet.Frames[3].Hold(Key::A); quiet.Frames[4].Hold(Key::A);   // down from step 2 on, never pressed
+        RecordingReadResult quietRead = ReadRecording(WriteRecording(quiet).Text);
+        CHECK(quietRead.Ok() && quietRead.Recording.Frames.size() == 5 && quietRead.Recording.Frames[2].IsDown(Key::A) && quietRead.Recording.Frames[4].IsDown(Key::A) && quietRead.Recording.Frames[1] == InputFrame(), "a key that is down without ever being pressed (held from before) is kept too");
+
+        // comments and layout do not matter when reading
+        RecordingReadResult loose = ReadRecording("// a recording\n{ \"version\": 1, \"scene\": \"Test scene\", \"sceneHash\": \"0123456789abcdef\", \"seed\": 7, \"stepsPerSecond\": 60, \"steps\": 3,\n \"changes\": [ /* the first step */ {\"step\": 1, \"down\": [\"W\"]} ] }");
+        CHECK(loose.Ok() && loose.Recording.Frames[1].IsDown(Key::W) && !loose.Recording.Frames[1].WasPressed(Key::W) && loose.Recording.Frames[2].IsDown(Key::W) && !loose.Recording.HasChecksum, "comments and any layout are fine, and the checksum is optional");
+
+        // what the writer refuses
+        InputRecording unnamed = empty;
+        unnamed.Frames.resize(2);
+        unnamed.Frames[1].Hold(150);
+        RecordingWriteResult w1 = WriteRecording(unnamed);
+        CHECK(!w1.Ok() && Contains(w1.Problems[0], "step 1: a key that has no name"), "a key with no name cannot be written");
+        InputRecording infinite = empty;
+        infinite.Frames.resize(1); infinite.Frames[0].Scroll = INFINITY;
+        CHECK(!WriteRecording(infinite).Ok() && Contains(WriteRecording(infinite).Problems[0], "not finite"), "a wheel movement that is not a number cannot be written");
+        InputRecording nameless = empty; nameless.SceneName = "";
+        InputRecording badRate = empty; badRate.StepsPerSecond = 0;
+        InputRecording badName = empty; badName.SceneName = "bad\xff";
+        CHECK(!WriteRecording(nameless).Ok() && !WriteRecording(badRate).Ok() && !WriteRecording(badName).Ok(), "no scene name, a bad step rate and a name that is not UTF-8 are refused");
+    }
+
+    // input recordings: the spec's own example is a valid recording
+    {
+        std::string doc = ReadFile("docs/input-recording.md");
+        size_t at = doc.find("```jsonc\n");
+        std::string block = at == std::string::npos ? "" : doc.substr(at + 9, doc.find("\n```", at) - at - 9);
+        RecordingReadResult read = ReadRecording(block);
+        for (const std::string& problem : read.Problems) printf("      %s\n", problem.c_str());
+        CHECK(!block.empty() && read.Ok() && read.Recording.GetStepCount() == 12 && read.Recording.Frames[0].WasPressed(Key::W) && read.Recording.Frames[5].WasPressed(Key::Q) && read.Recording.Frames[11].IsDown(Key::Space) && read.Recording.Frames[8].Scroll == -2.0f, "the example in docs/input-recording.md reads with the engine's own reader");
+        CHECK(Contains(doc, "`sceneHash`") && Contains(doc, "`stepsPerSecond`") && Contains(doc, "`checksum`") && Contains(doc, "`changes`") && Contains(doc, "`scene`") && Contains(doc, "`seed`") && Contains(doc, "`steps`") && Contains(doc, "`version`"), "and the document describes every key of the file");
+    }
+
+    // input recordings: reading problems
+    {
+        const std::string head = R"({"version": 1, "scene": "s", "sceneHash": "0000000000000001", "seed": 1, "stepsPerSecond": 60, "steps": 10, )";
+        auto read = [&](const std::string& rest) { return ReadRecording(head + rest); };
+        auto has = [](const RecordingReadResult& r, const std::string& text) {
+            for (const std::string& p : r.Problems) if (p.find(text) != std::string::npos) return true;
+            return false;
+        };
+
+        CHECK(read(R"("changes": []})").Ok(), "the base recording used below is valid");
+        RecordingReadResult syntax = ReadRecording(R"({"version": 1, )");
+        CHECK(!syntax.Ok() && Contains(syntax.Problems[0], "parse error"), "a syntax error is reported");
+        CHECK(Contains(ReadRecording("[]").Problems[0], "the top level must be an object, got an array"), "so is a top level that is not an object");
+        CHECK(has(ReadRecording(R"({"scene": "s"})"), "missing required key 'version'") && has(ReadRecording(R"({"version": 2})"), "/version: this engine reads recordings of version 1"), "a missing or newer version is refused");
+        RecordingReadResult unknown = read(R"("stepz": 3, "changes": []})");
+        CHECK(has(unknown, "/stepz: unknown key 'stepz' (did you mean 'steps'?)"), "an unknown key gets a suggestion");
+
+        CHECK(has(ReadRecording(R"({"version": 1, "sceneHash": "0000000000000001", "seed": 1, "stepsPerSecond": 60, "steps": 1, "changes": []})"), "missing required key 'scene'") && has(ReadRecording(R"({"version": 1, "scene": "", "sceneHash": "0000000000000001", "seed": 1, "stepsPerSecond": 60, "steps": 1, "changes": []})"), "/scene: expected a non-empty string"), "the scene name is required");
+        for (const char* bad : { "\"ABCDEF0123456789\"", "\"123\"", "5", "\"000000000000000g\"" })
+            CHECK(has(ReadRecording(std::string(R"({"version": 1, "scene": "s", "sceneHash": )") + bad + R"(, "seed": 1, "stepsPerSecond": 60, "steps": 1, "changes": []})"), "/sceneHash: expected 16 lower-case hex digits"), (std::string("the scene hash ") + bad + " is refused").c_str());
+        CHECK(has(ReadRecording(R"({"version": 1, "scene": "s", "seed": 1, "stepsPerSecond": 60, "steps": 1, "changes": []})"), "missing required key 'sceneHash'"), "and required");
+        auto withField = [&](const std::string& field) { return ReadRecording(R"({"version": 1, "scene": "s", "sceneHash": "0000000000000001", )" + field + R"(, "changes": []})"); };
+        CHECK(has(withField(R"("seed": 1.5, "stepsPerSecond": 60, "steps": 1)"), "/seed: expected an integer, got a number") && has(withField(R"("seed": "x", "stepsPerSecond": 60, "steps": 1)"), "/seed: expected an integer, got a string"), "the seed must be an integer");
+        CHECK(has(withField(R"("seed": 1, "stepsPerSecond": 0, "steps": 1)"), "/stepsPerSecond: must be 1 to 1000, got 0") && has(withField(R"("seed": 1, "stepsPerSecond": 5000, "steps": 1)"), "/stepsPerSecond: must be 1 to 1000"), "the step rate is held to a sane range");
+        CHECK(has(withField(R"("seed": 1, "stepsPerSecond": 60, "steps": -1)"), "/steps: must be 0 to 1000000, got -1") && has(withField(R"("seed": 1, "stepsPerSecond": 60, "steps": 1000001)"), "/steps: must be 0 to 1000000") && has(withField(R"("seed": 1, "stepsPerSecond": 60)"), "missing required key 'steps'"), "so is the number of steps");
+        CHECK(has(read(R"("checksum": "xyz", "changes": []})"), "/checksum: expected 16 lower-case hex digits") && read(R"("checksum": "00000000000000ff", "changes": []})").Recording.Checksum == 255, "a checksum is 16 hex digits when it is there");
+        CHECK(has(ReadRecording(R"({"version": 1, "scene": "s", "sceneHash": "0000000000000001", "seed": 1, "stepsPerSecond": 60, "steps": 10})"), "missing required key 'changes'") && has(read(R"("changes": {}})"), "/changes: expected an array, got an object"), "changes is required and an array");
+        CHECK(has(read(R"("changes": [5]})"), "/changes/0: a change must be an object, got a number") && has(read(R"("changes": [{"step": 1, "dwn": ["W"]}]})"), "/changes/0/dwn: unknown key 'dwn' (did you mean 'down'?)"), "a change must be an object, with known keys");
+
+        CHECK(has(read(R"("changes": [{"down": ["W"]}]})"), "/changes/0/step: expected an integer step") && has(read(R"("changes": [{"step": 10, "down": ["W"]}]})"), "/changes/0/step: step 10 is outside the recording (0 to 9)") && has(read(R"("changes": [{"step": -1, "down": ["W"]}]})"), "outside the recording"), "a change needs a step inside the recording");
+        CHECK(has(read(R"("changes": [{"step": 5, "down": ["W"]}, {"step": 3, "up": ["W"]}]})"), "/changes/1/step: step 3 is not after the step before it (5)") && has(read(R"("changes": [{"step": 2, "down": ["W"]}, {"step": 2, "up": ["W"]}]})"), "/changes/1/step: step 2 is not after"), "steps must be in order, once each");
+        CHECK(has(read(R"("changes": [{"step": 1, "down": "W"}]})"), "/changes/0/down: expected an array of key names, got a string") && has(read(R"("changes": [{"step": 1, "down": [5]}]})"), "/changes/0/down/0: expected a key name, got a number"), "key lists must be lists of names");
+        RecordingReadResult typo = read(R"("changes": [{"step": 1, "down": ["W", "Spce"]}]})");
+        CHECK(has(typo, "/changes/0/down/1: 'Spce' is not a key name (did you mean 'Space'?)") && has(typo, "there are " + std::to_string(KeyNames().size()) + " key names"), "a name that is not a key gets a suggestion and the count of names");
+        CHECK(has(read(R"("changes": [{"step": 1, "down": ["w"]}]})"), "(did you mean 'W'?)") && has(read(R"("changes": [{"step": 1, "pressed": ["W", "W"]}]})"), "/changes/0/pressed/1: 'W' is listed twice"), "case matters, and a key is listed once");
+        CHECK(has(read(R"("changes": [{"step": 1, "down": ["W"]}, {"step": 2, "down": ["W"]}]})"), "/changes/1/down: 'W' goes down but is already down") && has(read(R"("changes": [{"step": 1, "up": ["W"]}]})"), "/changes/0/up: 'W' goes up but is not down"), "a key cannot go down while down or up while not down");
+        CHECK(has(read(R"("changes": [{"step": 1, "down": ["W"]}, {"step": 2, "down": ["A"], "up": ["A"]}]})"), "/changes/1: 'A' goes down and up in the same step"), "or both at once");
+        CHECK(has(read(R"("changes": [{"step": 1}]})"), "/changes/0: this change does nothing; leave the step out") && has(read(R"("changes": [{"step": 1, "scroll": 0}]})"), "this change does nothing") && has(read(R"("changes": [{"step": 1, "scroll": "up"}]})"), "/changes/0/scroll: expected a number, got a string"), "a change that changes nothing is a mistake, and the wheel is a number");
+        RecordingReadResult many = read(R"("changes": [{"step": 1, "down": ["Nope"]}, {"step": 2, "up": ["W"]}, 7]})");
+        CHECK(many.Problems.size() == 3, "every problem is reported, not just the first");
+        CHECK(read(R"("changes": [{"step": 1, "up": ["W"]}, {"step": 2, "down": ["W"]}]})").Problems.size() == 1, "a key that is not down cannot go up, even if it goes down later");
+
+        // a recording that reads clean has frames for every step; one with problems must not be replayed
+        RecordingReadResult clean = read(R"("changes": [{"step": 2, "down": ["W"], "pressed": ["W"]}, {"step": 6, "up": ["W"]}]})");
+        CHECK(clean.Ok() && clean.Recording.Frames.size() == 10 && !clean.Recording.Frames[1].IsDown(Key::W) && clean.Recording.Frames[2].WasPressed(Key::W) && clean.Recording.Frames[5].IsDown(Key::W) && !clean.Recording.Frames[6].IsDown(Key::W) && !clean.Recording.Frames[9].IsDown(Key::W), "a valid recording has a frame for each step");
+    }
+
+    // input recordings: the scene it is for, the recorder and the replay
+    {
+        InputRecording recording;
+        recording.SceneName = "The scene"; recording.SceneHash = 0xabcull; recording.Seed = 5; recording.StepsPerSecond = 60;
+        CHECK(RecordingMismatch(recording, "The scene", 0xabcull, 5, 60).empty(), "a recording fits the scene it was made for");
+        std::string otherName = RecordingMismatch(recording, "Another", 0xabcull, 5, 60);
+        CHECK(Contains(otherName, "made for the scene 'The scene', not 'Another'"), "a different scene is named in the refusal");
+        std::string otherText = RecordingMismatch(recording, "The scene", 0xdefull, 5, 60);
+        CHECK(Contains(otherText, "different version of the scene 'The scene'") && Contains(otherText, "0000000000000abc") && Contains(otherText, "0000000000000def") && Contains(otherText, "record again"), "a changed scene text is refused, with both hashes and what to do");
+        CHECK(Contains(RecordingMismatch(recording, "The scene", 0xabcull, 6, 60), "seed 5") && Contains(RecordingMismatch(recording, "The scene", 0xabcull, 5, 120), "60 steps a second, and this run is at 120"), "and so are another seed or step rate");
+
+        InputRecorder recorder;
+        CHECK(!recorder.IsRecording(), "nothing is being recorded at first");
+        recorder.Record(InputFrame().Press(Key::A));
+        CHECK(recorder.GetStepCount() == 0, "a frame given when not recording is dropped");
+        recorder.Start("Rec", 0x1234ull, 3, 60);
+        CHECK(recorder.IsRecording() && recorder.GetSceneHash() == 0x1234ull, "starting a recording keeps the scene's hash");
+        recorder.Record(InputFrame().Press(Key::W));
+        recorder.Record(InputFrame().Hold(Key::W));
+        recorder.Record(InputFrame());
+        CHECK(recorder.GetStepCount() == 3, "each step adds a frame");
+        InputRecording finished = recorder.Finish(0xfeedull);
+        CHECK(!recorder.IsRecording() && finished.SceneName == "Rec" && finished.SceneHash == 0x1234ull && finished.Seed == 3 && finished.HasChecksum && finished.Checksum == 0xfeedull && finished.Frames.size() == 3 && finished.Frames[0].WasPressed(Key::W) && finished.Frames[1].IsDown(Key::W) && finished.Frames[2] == InputFrame(), "finishing gives the recording with the checksum");
+        recorder.Start("Again", 1, 1, 60);
+        recorder.Record(InputFrame().Press(Key::B));
+        recorder.Cancel();
+        CHECK(!recorder.IsRecording() && recorder.GetStepCount() == 0, "cancelling drops what was recorded");
+        recorder.Start("Fresh", 2, 1, 60);
+        CHECK(recorder.GetStepCount() == 0, "and a new recording starts empty");
+
+        InputReplay replay(finished);
+        CHECK(!replay.IsFinished() && replay.GetStep() == 0 && replay.GetRecording().SceneName == "Rec", "a replay starts at the first step");
+        InputFrame a = replay.Next(), b = replay.Next();
+        CHECK(a.WasPressed(Key::W) && b.IsDown(Key::W) && !b.WasPressed(Key::W) && replay.GetStep() == 2 && !replay.IsFinished(), "it gives the frames in order");
+        replay.Next();
+        CHECK(replay.IsFinished() && replay.GetStep() == 3 && replay.Next() == InputFrame() && replay.GetStep() == 3, "and then empty ones once it is finished");
+    }
+
+    // input recordings: a replay is the run it came from
+    {
+        ComponentRegistry registry = MakeSimulationRegistry();
+        auto load = [&](const std::string& text) { return LoadSceneFromText(text, "inline", registry); };
+        auto sceneText = [](int seed, const std::string& speed = "200") {
+            return R"({"version": 1, "name": "Run", "components": {"Random": {"seed": )" + std::to_string(seed) + R"(}}, "entities": [
+                {"name": "player", "components": {"Transform": {"position": [500, 500]}, "KeyboardMove": {"speed": )" + speed + R"(, "relativeTo": "camera"}}},
+                {"name": "rabbit", "components": {"Transform": {"position": [300, 300]}, "Wander": {"speed": 90, "changeEvery": 0.4}, "Dice": {}}},
+                {"name": "light", "components": {"Transform": {}, "Orbit": {"target": "player", "radius": 30, "speed": 2}}},
+                {"name": "camera", "components": {"Transform": {}, "Camera": {"primary": true}, "Follow": {"target": "player"}, "KeyboardRotate": {}, "WheelZoom": {}}}]})";
+        };
+        const std::string text = sceneText(77);
+
+        // play and record a run, with random numbers in it
+        SceneLoadResult live = load(text);
+        InputRecorder recorder;
+        recorder.Start(live.Scene->GetName(), live.TextHash, live.Scene->GetSeed(), 60);
+        RandomGenerator script(99);
+        for (int i = 0; i < 600; i++) {
+            InputFrame frame = ScriptedFrame(script);
+            recorder.Record(frame);
+            Simulation::Step(registry, *live.Scene, frame, 1.0 / 60.0);
+        }
+        const uint64_t liveChecksum = Simulation::Checksum(registry, *live.Scene);
+        InputRecording recording = recorder.Finish(liveChecksum);
+        CHECK(recording.GetStepCount() == 600 && recording.SceneHash == Fnv1a64(text.data(), text.size()) && recording.Seed == 77 && recording.SceneName == "Run", "a recorded run knows its scene, its text's hash, its seed and its length");
+
+        // through text, as it would be on disk
+        RecordingWriteResult written = WriteRecording(recording);
+        RecordingReadResult read = ReadRecording(written.Text);
+        CHECK(written.Ok() && read.Ok() && read.Recording.Checksum == liveChecksum && read.Recording.GetStepCount() == 600 && WriteRecording(read.Recording).Text == written.Text, "it survives being written and read");
+
+        // the replay
+        SceneLoadResult replayed = load(text);
+        CHECK(RecordingMismatch(read.Recording, replayed.Scene->GetName(), replayed.TextHash, replayed.Scene->GetSeed(), 60).empty(), "the scene it is replayed on fits it");
+        uint64_t replayChecksum = ReplayRecording(registry, *replayed.Scene, read.Recording);
+        CHECK(replayChecksum == liveChecksum && replayChecksum == read.Recording.Checksum, "replaying it on a fresh copy of the scene ends in exactly the state of the run it came from");
+        CHECK(Simulation::Checksum(registry, *replayed.Scene) == liveChecksum && replayed.Scene->FindEntity("rabbit").Get<Transform>().Position == live.Scene->FindEntity("rabbit").Get<Transform>().Position && replayed.Scene->FindEntity("player").Get<Transform>().Position == live.Scene->FindEntity("player").Get<Transform>().Position, "player and the random-walking rabbit are where they were");
+
+        // and it is not a coincidence: change anything and the replay differs
+        InputRecording changed = read.Recording;
+        changed.Frames[300].Hold(Key::Q);
+        SceneLoadResult one = load(text), two = load(text), three = load(sceneText(78)), four = load(sceneText(77, "201"));
+        CHECK(ReplayRecording(registry, *one.Scene, changed) != liveChecksum, "one key held in one step gives a different end state");
+        CHECK(RecordingMismatch(read.Recording, "Run", three.TextHash, three.Scene->GetSeed(), 60) != "" && ReplayRecording(registry, *two.Scene, InputRecording(read.Recording)) == liveChecksum, "a second replay of the same recording is again the same");
+        CHECK(RecordingMismatch(read.Recording, "Run", three.TextHash, 78, 60).find("different version") != std::string::npos && ReplayRecording(registry, *three.Scene, read.Recording) != liveChecksum, "a scene with another seed is refused, and forcing it gives another run");
+        CHECK(RecordingMismatch(read.Recording, "Run", four.TextHash, 77, 60).find("different version") != std::string::npos && ReplayRecording(registry, *four.Scene, read.Recording) != liveChecksum, "so is one with a different player speed: any change to the text is a different version");
+        CHECK(Fnv1a64(text.data(), text.size()) != Fnv1a64((text + " ").data(), text.size() + 1) && load(text + " ").TextHash != load(text).TextHash && load(text).TextHash == load(text).TextHash, "the hash of the scene text changes with a single added space");
+
+        // the real world file
+        ComponentRegistry builtins;
+        RegisterBuiltinComponents(builtins);
+        SceneLoadResult world = LoadScene("Assets/Scenes/world.json", builtins);
+        InputRecorder worldRecorder;
+        worldRecorder.Start(world.Scene->GetName(), world.TextHash, world.Scene->GetSeed(), 60);
+        RandomGenerator worldScript(8);
+        for (int i = 0; i < 900; i++) {
+            InputFrame frame = ScriptedFrame(worldScript);
+            worldRecorder.Record(frame);
+            Simulation::Step(builtins, *world.Scene, frame, 1.0 / 60.0);
+        }
+        InputRecording worldRecording = worldRecorder.Finish(Simulation::Checksum(builtins, *world.Scene));
+        RecordingReadResult worldRead = ReadRecording(WriteRecording(worldRecording).Text);
+        SceneLoadResult worldAgain = LoadScene("Assets/Scenes/world.json", builtins);
+        CHECK(worldRead.Ok() && RecordingMismatch(worldRead.Recording, worldAgain.Scene->GetName(), worldAgain.TextHash, worldAgain.Scene->GetSeed(), 60).empty() && ReplayRecording(builtins, *worldAgain.Scene, worldRead.Recording) == worldRecording.Checksum, "the Sandbox world, played for 900 steps and recorded, replays to the same state");
+
+        // a recording is the same thing whether the run was long or short
+        InputRecording prefix = worldRead.Recording;
+        prefix.Frames.resize(450);
+        SceneLoadResult half = LoadScene("Assets/Scenes/world.json", builtins), straight = LoadScene("Assets/Scenes/world.json", builtins);
+        uint64_t halfway = ReplayRecording(builtins, *half.Scene, prefix);
+        RandomGenerator again(8);
+        for (int i = 0; i < 450; i++) Simulation::Step(builtins, *straight.Scene, ScriptedFrame(again), 1.0 / 60.0);
+        CHECK(halfway == Simulation::Checksum(builtins, *straight.Scene) && halfway != worldRecording.Checksum, "the first half of a recording is the first half of the run");
+    }
+
+    // the scene's hash, the reloader and the command line
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::string text = R"({"version": 1, "name": "h", "entities": []})";
+        SceneLoadResult a = LoadSceneFromText(text, "a", registry), b = LoadSceneFromText(text + "\n", "b", registry);
+        CHECK(a.TextHash == Fnv1a64(text.data(), text.size()) && a.TextHash != b.TextHash && a.TextHash == LoadSceneFromText(text, "c", registry).TextHash, "a loaded scene carries the hash of its text, the same for the same text");
+        CHECK(LoadSceneFromText("{ not json", "d", registry).TextHash == Fnv1a64("{ not json", 10), "even when it could not be loaded");
+        CHECK(a.Scene->GetSeed() == 1 && LoadSceneFromText(R"({"version": 1, "name": "h", "components": {"Random": {"seed": -4}}, "entities": []})", "e", registry).Scene->GetSeed() == -4, "a scene reports its seed, 1 when it has none");
+
+        const std::filesystem::path work = std::filesystem::temp_directory_path() / "marle_scene_hash_test";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work);
+        const std::string file = (work / "scene.json").generic_string();
+        const std::string v2 = R"({"version": 1, "name": "h", "entities": [{"name": "a"}]})";
+        const std::string broken = R"({"version": 1, "name": "h", "entities": [{"name": "a", "components": {"Camera": {"zom": 2}}}]})";
+        WriteFile(file, text);
+        SceneReloader reloader(file, registry);
+        reloader.Load();
+        CHECK(reloader.GetSceneHash() == Fnv1a64(text.data(), text.size()), "the reloader knows the hash of the scene it handed out");
+        WriteFile(file, v2);
+        std::filesystem::last_write_time(file, std::filesystem::file_time_type::clock::now() + std::chrono::minutes(1));
+        CHECK(reloader.Poll().Scene != nullptr && reloader.GetSceneHash() == Fnv1a64(v2.data(), v2.size()), "and the new hash once a reload is applied");
+        WriteFile(file, broken);
+        std::filesystem::last_write_time(file, std::filesystem::file_time_type::clock::now() + std::chrono::minutes(2));
+        CHECK(reloader.Poll().Scene == nullptr && reloader.GetSceneHash() == Fnv1a64(v2.data(), v2.size()), "a refused reload leaves the hash of the scene that is still running");
+        std::filesystem::remove_all(work);
+
+        // the command line
+        char program[] = "Sandbox", replay[] = "--replay", path[] = "run.json", quiet[] = "--quiet", fast[] = "--speed=3", last[] = "--last";
+        char* argv[] = { program, replay, path, quiet, fast, last };
+        SetCommandLine(6, argv);
+        CHECK(GetCommandLine() == std::vector<std::string>({ "--replay", "run.json", "--quiet", "--speed=3", "--last" }), "the command line is what follows the program's name");
+        CHECK(HasCommandLineFlag("--quiet") && HasCommandLineFlag("--replay") && HasCommandLineFlag("--speed") && !HasCommandLineFlag("--loud") && !HasCommandLineFlag("--quie"), "a flag is there or not");
+        CHECK(GetCommandLineValue("--replay") == std::optional<std::string>("run.json") && GetCommandLineValue("--speed") == std::optional<std::string>("3"), "a value follows a flag, or comes after an equals sign");
+        CHECK(!GetCommandLineValue("--last") && !GetCommandLineValue("--nope"), "a flag with nothing after it, or no flag, has no value");
+        SetCommandLine(1, argv);
+        CHECK(GetCommandLine().empty() && !HasCommandLineFlag("--replay"), "with nothing after the program's name there are no arguments");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

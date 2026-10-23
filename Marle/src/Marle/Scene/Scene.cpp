@@ -33,11 +33,16 @@ namespace Marle {
         return Entity(m_State, handle);
     }
 
-    void Scene::ResetRandom()
+    int Scene::GetSeed() const
     {
         const Random* seed = GetSceneEntity().TryGet<Random>();
+        return seed ? seed->Seed : 1;
+    }
+
+    void Scene::ResetRandom()
+    {
         // a negative seed is the number it wraps to as a 32-bit integer, so every int is a different seed
-        m_Random.Seed(seed ? (uint64_t)(uint32_t)seed->Seed : 1u);
+        m_Random.Seed((uint64_t)(uint32_t)GetSeed());
     }
 
     Entity Scene::GetSceneEntity() const

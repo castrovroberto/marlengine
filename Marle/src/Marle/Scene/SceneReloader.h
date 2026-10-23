@@ -58,6 +58,9 @@ namespace Marle {
 
             const SceneReloadStatus& GetStatus() const { return m_Status; }
 
+            // The hash of the file text the scene handed out last was loaded from (SceneLoadResult::TextHash)
+            uint64_t GetSceneHash() const { return m_SceneHash; }
+
         private:
             struct Stamp {
                 bool Exists = false;
@@ -70,6 +73,7 @@ namespace Marle {
             const ComponentRegistry& m_Registry;
             Stamp m_Stamp;
             SceneReloadStatus m_Status;
+            uint64_t m_SceneHash = 0;
     };
 
 }

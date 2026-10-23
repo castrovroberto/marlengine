@@ -44,6 +44,9 @@ namespace Marle {
             // Restarts the generator from the seed in the scene's own Random component (seed 1 if none)
             void ResetRandom();
 
+            // The seed in the scene's own Random component, or 1 if it has none
+            int GetSeed() const;
+
             // A behavior cannot reload a scene, so one that wants a restart asks (RestartOnKey does), and the
             // host decides what restarting means (the Sandbox loads the scene from its file again). It is
             // runtime state: not in a scene file and not in a checksum.

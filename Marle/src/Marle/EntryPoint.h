@@ -21,6 +21,8 @@
  */
 #pragma once
 
+#include "Marle/CommandLine.h"
+
 /*
  * #ifdef
  * Conditional inclusion
@@ -63,6 +65,7 @@ extern Marle::Application* Marle::CreateApplication();
 
 int main(int argc, char** argv) {
 
+    Marle::SetCommandLine(argc, argv);
     Marle::Log::Init();
 
     auto app = Marle::CreateApplication();
