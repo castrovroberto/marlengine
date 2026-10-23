@@ -16,11 +16,20 @@ WorldLayer::WorldLayer(Marle::Application& app)
 
 void WorldLayer::LoadWorld()
 {
-    Marle::SceneLoadResult result = Marle::LoadScene(WorldFile, m_Registry);
+    // The first load keeps whatever loaded, problems and all; later changes to the file are only
+    // applied when they are fully valid (see PollScene)
+    m_Reloader = std::make_unique<Marle::SceneReloader>(WorldFile, m_Registry);
+    Marle::SceneLoadResult result = m_Reloader->Load();
     for (const Marle::SceneProblem& problem : result.Problems)
         MRL_ERROR("{}", problem.ToString());
     m_Scene = result.Scene ? std::move(result.Scene) : std::make_unique<Marle::Scene>("Empty");
 
+    BindEntities();
+    Reset();
+}
+
+void WorldLayer::BindEntities()
+{
     m_CameraEntity = m_Scene->FindEntity("camera");
     m_WorldEntity = m_Scene->FindEntity("world");
     m_PlayerEntity = m_Scene->FindEntity("player");
@@ -34,7 +43,28 @@ void WorldLayer::LoadWorld()
     m_PlayerStart = m_PlayerEntity.Has<Marle::Transform>() ? m_PlayerEntity.Get<Marle::Transform>().Position : glm::vec2(0.0f);
     m_CameraRotationStart = m_CameraEntity.Has<Marle::Transform>() ? m_CameraEntity.Get<Marle::Transform>().Rotation : 0.0f;
     m_ZoomStart = m_CameraEntity.Has<Marle::Camera>() ? m_CameraEntity.Get<Marle::Camera>().Zoom : 1.0f;
-    Reset();
+}
+
+void WorldLayer::PollScene(bool force)
+{
+    Marle::SceneReload reload = m_Reloader->Poll(force);
+    if (!reload.Attempted) return;
+
+    if (!reload.Scene) {
+        for (const Marle::SceneProblem& problem : m_Reloader->GetStatus().Problems)
+            MRL_ERROR("{}", problem.ToString());
+        MRL_ERROR("{} has {}; keeping the scene that is running", WorldFile, m_Reloader->GetStatus().Problems.size() == 1 ? "a problem" : std::to_string(m_Reloader->GetStatus().Problems.size()) + " problems");
+        return;
+    }
+
+    // Swap the scene, keeping what can be kept: the player, camera rotation, zoom and spin are
+    // simulation state and carry on; R still goes back to where the new file starts things
+    const float zoom = GetZoom();
+    m_Scene = std::move(reload.Scene);
+    BindEntities();
+    if (Marle::Camera* camera = m_CameraEntity.TryGet<Marle::Camera>())
+        camera->Zoom = zoom;
+    MRL_INFO("Reloaded {} ({} entities)", WorldFile, m_Scene->GetEntityCount());
 }
 
 float WorldLayer::GetZoom() const
@@ -63,12 +93,18 @@ void WorldLayer::OnDetach()
     // the context is still alive.
     m_Viewport.reset();
     m_Renderer.reset();
+    m_Reloader.reset();
 }
 
 void WorldLayer::OnUpdate(double dt)
 {
     using Marle::Input;
     namespace Key = Marle::Key;
+
+    if (--m_ReloadCountdown <= 0) {   // about six times a second
+        m_ReloadCountdown = 10;
+        PollScene();
+    }
 
     glm::vec2 move(0.0f);
     if (Input::IsKeyPressed(Key::W) || Input::IsKeyPressed(Key::Up))    move.y += 1.0f;
@@ -156,8 +192,57 @@ void WorldLayer::OnRender(double alpha)
         m_Viewport->Unbind();
 }
 
+void WorldLayer::DrawScenePanel()
+{
+    if (!m_ShowScenePanel) return;
+    const Marle::SceneReloadStatus& status = m_Reloader->GetStatus();
+
+    ImGui::SetNextWindowPos(ImVec2(10.0f, 245.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Scene", &m_ShowScenePanel, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const float width = ImGui::GetFontSize() * 24.0f;   // the panel is this wide; text wraps inside it
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+
+        ImGui::TextUnformatted(status.File.c_str());
+        ImGui::Text("%zu entities, loaded %u time%s", m_Scene->GetEntityCount(), status.Loads, status.Loads == 1 ? "" : "s");
+
+        auto coloredText = [](const ImVec4& color, const char* text) {
+            ImGui::PushStyleColor(ImGuiCol_Text, color);
+            ImGui::TextUnformatted(text);
+            ImGui::PopStyleColor();
+        };
+        if (status.Missing)
+            coloredText(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "File is missing; keeping the scene that is running");
+        else if (status.KeptPrevious)
+            coloredText(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Reload refused: keeping the scene that is running");
+        else if (!status.LastOk)
+            coloredText(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Loaded with problems");
+        else
+            coloredText(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "OK");
+
+        if (status.Failures > 0) ImGui::TextDisabled("%u reload%s refused so far", status.Failures, status.Failures == 1 ? "" : "s");
+        if (ImGui::Button("Reload now")) PollScene(true);
+
+        if (!status.Problems.empty()) {
+            ImGui::SeparatorText("Problems");
+            ImGui::BeginChild("problems", ImVec2(width, 190.0f), ImGuiChildFlags_Borders);
+            ImGui::PushTextWrapPos(width - ImGui::GetStyle().ScrollbarSize);
+            for (const Marle::SceneProblem& problem : status.Problems) {
+                ImGui::Text("%s%s%s", problem.Path.c_str(), problem.Path.empty() ? "" : ": ", problem.Message.c_str());
+                ImGui::Separator();
+            }
+            ImGui::PopTextWrapPos();
+            ImGui::EndChild();
+        }
+        ImGui::TextDisabled("F3 toggles this panel");
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::End();
+}
+
 void WorldLayer::OnImGuiRender()
 {
+    DrawScenePanel();
+
     if (!m_ShowPanel) return;
 
     ImGui::SetNextWindowPos(ImVec2(340.0f, 40.0f), ImGuiCond_FirstUseEver);
@@ -197,6 +282,10 @@ void WorldLayer::OnEvent(Marle::Event& e)
         }
         else if (key.GetKeyCode() == Marle::Key::F2 && key.GetRepeatCount() == 0) {
             m_ShowPanel = !m_ShowPanel;
+            e.SetHandled();
+        }
+        else if (key.GetKeyCode() == Marle::Key::F3 && key.GetRepeatCount() == 0) {
+            m_ShowScenePanel = !m_ShowScenePanel;
             e.SetHandled();
         }
     }

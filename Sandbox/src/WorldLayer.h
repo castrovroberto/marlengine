@@ -28,6 +28,12 @@ private:
     // Reads the scene file and finds the entities this layer drives; problems are logged, and a file
     // that cannot be used at all leaves an empty scene (everything is then skipped safely)
     void LoadWorld();
+    // Finds the entities this layer drives in the current scene and where the file starts them
+    void BindEntities();
+    // Checks whether the scene file changed and swaps in the new scene if it is valid; the
+    // simulation (player, camera rotation, zoom, spin) carries on from where it was
+    void PollScene(bool force = false);
+    void DrawScenePanel();
     void Reset();
 
     Marle::Application& m_App;
@@ -42,6 +48,9 @@ private:
     glm::vec2 m_PanelSize = { 900.0f, 520.0f };
 
     Marle::ComponentRegistry m_Registry;
+    std::unique_ptr<Marle::SceneReloader> m_Reloader;
+    int m_ReloadCountdown = 0;      // fixed steps until the file is checked again
+    bool m_ShowScenePanel = true;   // F3
     std::unique_ptr<Marle::Scene> m_Scene;
     std::unique_ptr<Marle::SceneRenderer> m_Renderer;
     Marle::Entity m_CameraEntity, m_WorldEntity, m_PlayerEntity, m_SatelliteEntity;

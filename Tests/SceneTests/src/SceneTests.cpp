@@ -7,8 +7,10 @@
 #include "Marle/Scene/SceneWriter.h"
 #include "Marle/Scene/SceneSchema.h"
 #include "Marle/Scene/SceneTool.h"
+#include "Marle/Scene/SceneReloader.h"
 #include <nlohmann/json-schema.hpp>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -1177,6 +1179,97 @@ int main(int argc, char** argv)
         RegisterBuiltinComponents(again);
         CHECK(SchemaErrors(GenerateSceneSchema(again), ParseWithComments(ReadFile(file))).empty(), "and it validates against the schema");
         CHECK(RunTool(registry, { "format", "--check", file }).Code == 0 && RunTool(registry, { "validate", file }).Code == 0, "marle-scene validates it and finds it already formatted");
+    }
+
+    // scene reloader
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::filesystem::path work = std::filesystem::temp_directory_path() / "marle_scene_reloader_test";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work);
+        const std::string file = (work / "scene.json").generic_string();
+
+        // every write gets its own modification time, so the tests do not depend on timestamp granularity
+        int tick = 0;
+        auto Write = [&](const std::string& text) {
+            WriteFile(file, text);
+            std::filesystem::last_write_time(file, std::filesystem::file_time_type::clock::now() + std::chrono::minutes(++tick));
+        };
+        const std::string one = R"({"version": 1, "name": "one", "entities": [{"name": "a", "components": {"Transform": {"position": [1, 2]}}}]})";
+        const std::string two = R"({"version": 1, "name": "two", "entities": [{"name": "b"}, {"name": "c"}]})";
+        const std::string three = R"({"version": 1, "name": "three", "entities": []})";
+
+        Write(one);
+        SceneReloader reloader(file, registry);
+        SceneLoadResult first = reloader.Load();
+        CHECK(first.Ok() && first.Scene->GetName() == "one" && first.Scene->FindEntity("a"), "the first load gives the scene");
+        CHECK(reloader.GetStatus().File == file && reloader.GetStatus().Loads == 1 && reloader.GetStatus().Failures == 0 && reloader.GetStatus().LastOk && reloader.GetStatus().Problems.empty() && !reloader.GetStatus().Missing, "and the status says so");
+
+        SceneReload idle = reloader.Poll();
+        CHECK(!idle.Attempted && !idle.Scene && reloader.GetStatus().Loads == 1, "a file that has not changed is not loaded again");
+
+        // a good edit is applied
+        Write(two);
+        SceneReload changed = reloader.Poll();
+        CHECK(changed.Attempted && changed.Scene && changed.Scene->GetName() == "two" && changed.Scene->GetEntityCount() == 2 && changed.Scene->FindEntity("c") && !changed.Scene->FindEntity("a"), "an edited file gives the new scene");
+        CHECK(reloader.GetStatus().Loads == 2 && reloader.GetStatus().LastOk && first.Scene->FindEntity("a"), "the old scene is untouched and the load is counted");
+        CHECK(!reloader.Poll().Attempted, "and the same edit is not loaded twice");
+
+        // strict: any problem at all refuses the reload, and the problems are kept
+        Write("{ \"version\": 1, \"name\": \"x\", \"entities\": [ { \"name\": \"a\", }, ] }");
+        SceneReload syntax = reloader.Poll();
+        CHECK(syntax.Attempted && !syntax.Scene && !reloader.GetStatus().LastOk && reloader.GetStatus().Failures == 1 && reloader.GetStatus().Problems.size() == 1 && Contains(reloader.GetStatus().Problems[0].Message, "parse error"), "a syntax error is refused, with the reason in the status");
+        CHECK(!reloader.Poll().Attempted && !reloader.GetStatus().LastOk && reloader.GetStatus().Problems.size() == 1 && reloader.GetStatus().Failures == 1, "a refused file is not retried until it changes, and its problems stay in the status");
+        CHECK(reloader.GetStatus().KeptPrevious && !first.Scene->GetName().empty(), "the status says the scene from before is still the one running");
+
+        Write(R"({"version": 1, "name": "x", "entities": [{"name": "a", "components": {"Camera": {"zom": 2}}}, {"name": "ok"}]})");
+        SceneReload typo = reloader.Poll();
+        CHECK(typo.Attempted && !typo.Scene && reloader.GetStatus().Failures == 2 && HasProblem(SceneLoadResult{ nullptr, reloader.GetStatus().Problems }, "/entities/0/components/Camera/zom", "did you mean 'zoom'"), "a mistyped field refuses the whole reload even though the rest would load");
+        Write(R"({"version": 1, "name": "x", "entities": [{"name": "a", "components": {"SpriteRenderer": {"texture": "Assets/Textures/not_there_yet.png"}}}]})");
+        SceneReload asset = reloader.Poll();
+        CHECK(asset.Attempted && !asset.Scene && reloader.GetStatus().Failures == 3 && Contains(reloader.GetStatus().Problems[0].Message, "does not exist"), "a missing asset file refuses the reload too");
+
+        // fixing the file is applied, and the problems clear
+        Write(three);
+        SceneReload fixed = reloader.Poll();
+        CHECK(fixed.Attempted && fixed.Scene && fixed.Scene->GetName() == "three" && reloader.GetStatus().LastOk && reloader.GetStatus().Problems.empty() && reloader.GetStatus().Loads == 3 && reloader.GetStatus().Failures == 3 && !reloader.GetStatus().KeptPrevious, "a fixed file is applied, the problems are cleared and nothing is kept back");
+
+        // a file that goes missing (an editor saving through a rename) is waited for, not a failure
+        std::filesystem::remove(file);
+        SceneReload gone = reloader.Poll();
+        CHECK(!gone.Attempted && !gone.Scene && reloader.GetStatus().Missing && reloader.GetStatus().Failures == 3 && reloader.GetStatus().LastOk, "a missing file leaves things as they were and says it is missing");
+        CHECK(!reloader.Poll().Attempted && reloader.GetStatus().Missing, "and keeps waiting");
+        Write(one);
+        SceneReload back = reloader.Poll();
+        CHECK(back.Attempted && back.Scene && back.Scene->GetName() == "one" && !reloader.GetStatus().Missing, "when the file is back it is loaded");
+
+        // forcing, and a file replaced the way the engine writes files
+        SceneReload forced = reloader.Poll(true);
+        CHECK(forced.Attempted && forced.Scene && forced.Scene->GetName() == "one", "a forced poll reloads a file that has not changed");
+        WriteTextFile(file, two);
+        std::filesystem::last_write_time(file, std::filesystem::file_time_type::clock::now() + std::chrono::minutes(++tick));
+        SceneReload replaced = reloader.Poll();
+        CHECK(replaced.Attempted && replaced.Scene && replaced.Scene->GetName() == "two", "a file replaced through a temporary file and a rename is noticed");
+
+        // a second reloader: the first load is lenient, and a file that is not there yet is picked up
+        Write(R"({"version": 1, "name": "partial", "entities": [{"name": "a", "components": {"Camera": {"zom": 2}}}, {"name": "b"}]})");
+        SceneReloader lenient(file, registry);
+        SceneLoadResult partial = lenient.Load();
+        CHECK(partial.Scene && !partial.Ok() && partial.Scene->FindEntity("b") && lenient.GetStatus().Loads == 1 && !lenient.GetStatus().LastOk && lenient.GetStatus().Problems.size() == 1 && !lenient.GetStatus().KeptPrevious, "the first load returns what loaded even with problems, and records them (nothing is being kept back)");
+        Write(two);
+        CHECK(lenient.Poll().Scene != nullptr && lenient.GetStatus().LastOk && lenient.GetStatus().Problems.empty(), "and the next valid edit is applied");
+
+        std::filesystem::remove(file);
+        SceneReloader absent(file, registry);
+        SceneLoadResult none = absent.Load();
+        CHECK(!none.Scene && !absent.GetStatus().LastOk && absent.GetStatus().Loads == 0 && Contains(absent.GetStatus().Problems[0].Message, "cannot open the file"), "loading a file that does not exist gives no scene and says why");
+        CHECK(!absent.Poll().Attempted && absent.GetStatus().Missing, "it keeps waiting for the file");
+        Write(one);
+        SceneReload arrived = absent.Poll();
+        CHECK(arrived.Attempted && arrived.Scene && arrived.Scene->GetName() == "one" && absent.GetStatus().Loads == 1 && !absent.GetStatus().Missing, "and loads it when it appears");
+
+        std::filesystem::remove_all(work);
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

@@ -14,7 +14,7 @@ public:
         PushOverlay(std::make_unique<StatsLayer>(*world));
         PushOverlay(std::make_unique<Marle::ImGuiLayer>(GetLayerStack()));   // topmost: sees events first, draws last
 
-        MRL_INFO("Controls: WASD/arrows move (Shift runs), Q/E rotate camera, mouse wheel zooms, R resets, H toggles the HUD, F1 toggles the stats panel, F2 toggles the viewport panel, Esc quits");
+        MRL_INFO("Controls: WASD/arrows move (Shift runs), Q/E rotate camera, mouse wheel zooms, R resets, H toggles the HUD, F1 toggles the stats panel, F2 toggles the viewport panel, F3 the scene panel, Esc quits");
     }
 };
 

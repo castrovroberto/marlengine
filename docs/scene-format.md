@@ -138,6 +138,12 @@ Problems come back as a list: repeated keys first (they are found while parsing)
 
 The schema accepts and rejects the same files as the loader, with exceptions that a schema cannot express: two entities with the same name, an asset file that does not exist, a key repeated within an object, and rules that span fields (tile rows of equal length, tile characters that exist). The loader is the authority. A test checks the agreement against every fixture file and against the name and asset path rules.
 
+## Reloading while the game runs
+
+The Sandbox watches `Assets/Scenes/world.json` and reloads it a few times a second whenever the file's modification time or size changes, so you can edit the file (or have an AI edit it) and watch the world change without restarting. Reloading is **strict**: a reload is applied only if the file has no problems at all. If it has any, including a typo in one field or an image that is not there yet, the scene that is running stays exactly as it was, every problem is logged and shown in the Scene panel (F3), and the file is tried again the next time it changes. The first load at startup is the one exception: with nothing running yet, it keeps whatever loaded.
+
+A successful reload keeps what is simulation state and not scene data (in the Sandbox: where the player is, the camera's rotation and zoom, the spin of the accent tiles); pressing R still returns to wherever the file now starts things. A file that is briefly missing, as when an editor saves by renaming, is waited for and is not an error. The engine side is `SceneReloader` (`Scene/SceneReloader.h`), which needs no window or GL context.
+
 ## Command line
 
 `marle-scene` checks and tidies scene files without opening a window. Build it with `make SceneTool` (it lands in `bin/<Config>-<system>-<arch>/SceneTool/marle-scene`) and run it from the repository root, since asset paths are relative to the working directory.
