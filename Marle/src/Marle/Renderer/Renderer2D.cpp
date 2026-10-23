@@ -312,6 +312,24 @@ namespace Marle {
         SubmitQuad(position, size, rotation, 0, s_FullTexCoords, color);
     }
 
+    void Renderer2D::DrawString(const BitmapFont& font, const std::string& text, const glm::vec2& position, float glyphHeight, const glm::vec4& color)
+    {
+        const float advance = font.GetAdvance(glyphHeight);
+        const glm::vec2 glyphSize(advance, glyphHeight);
+
+        size_t column = 0, line = 0;
+        for (char c : text) {
+            if (c == '\n') { line++; column = 0; continue; }
+            if (c == '\r') continue;
+
+            if (c != ' ') {
+                glm::vec2 center = position + glm::vec2(((float)column + 0.5f) * advance, glyphHeight * (0.5f - (float)line));
+                DrawQuad(center, glyphSize, font.GetGlyph(c), color);
+            }
+            column++;
+        }
+    }
+
     Renderer2D::Statistics Renderer2D::GetStats()
     {
         return s_Data ? s_Data->Stats : Statistics();

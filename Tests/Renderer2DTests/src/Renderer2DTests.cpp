@@ -412,6 +412,117 @@ protected:
             CHECK(Binding() == 0 && vp[2] == (int)W, "Unbind without a Bind leaves GL state alone");
         }
 
+        // 9d. bitmap font text
+        {
+            BitmapFont font("Assets/Fonts/mono.png", 16, 32);
+            CHECK(font.IsLoaded(), "the font sheet loads");
+            CHECK(font.GetAdvance(32.0f) == 16.0f && font.GetAdvance(16.0f) == 8.0f, "glyphs keep the cell's 1:2 proportions");
+
+            glm::vec2 box = font.Measure("ab\nabc\r\n", 32.0f);
+            CHECK(box.x == 48.0f && box.y == 96.0f, "Measure is the widest line by the line count (got %.0f x %.0f)", box.x, box.y);
+            CHECK(font.Measure("", 32.0f).x == 0.0f && font.Measure("", 32.0f).y == 32.0f, "an empty string measures zero wide, one line high");
+
+            // quad counts: spaces and newlines draw nothing, everything shares one texture and one draw call
+            auto DrawCounts = [&](const std::string& text) {
+                glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+                Renderer2D::BeginBatch(W, H);
+                Renderer2D::DrawString(font, text, {100, 100}, 32.0f);
+                Renderer2D::EndBatch();
+                return Renderer2D::GetStats();
+            };
+            CHECK(DrawCounts("Hi there").QuadCount == 7 && DrawCounts("Hi there").DrawCalls == 1, "'Hi there' is 7 glyph quads in one draw call");
+            CHECK(DrawCounts("a b\nc\r\n").QuadCount == 3, "spaces, newlines and carriage returns draw no quads");
+            CHECK(DrawCounts("").QuadCount == 0 && DrawCounts("").DrawCalls == 0, "an empty string draws nothing");
+
+            // Bounding box (and count) of the pixels that differ from the clear color in a region
+            struct Bounds { int minX, minY, maxX, maxY, count; };
+            auto Ink = [&](int x0, int y0, int w, int h) {
+                std::vector<unsigned char> buf(w * h * 4);
+                glReadPixels(x0, y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
+                Bounds b = { 1 << 20, 1 << 20, -1, -1, 0 };
+                for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+                    const unsigned char* p = &buf[(y * w + x) * 4];
+                    if (abs(p[0] - bg.r) > 12 || abs(p[1] - bg.g) > 12 || abs(p[2] - bg.b) > 12) {
+                        b.minX = std::min(b.minX, x0 + x); b.maxX = std::max(b.maxX, x0 + x);
+                        b.minY = std::min(b.minY, y0 + y); b.maxY = std::max(b.maxY, y0 + y);
+                        b.count++;
+                    }
+                }
+                return b;
+            };
+            auto DrawAt = [&](const std::string& text, float height, glm::vec4 color) {
+                glClear(GL_COLOR_BUFFER_BIT);
+                Renderer2D::BeginBatch(W, H);
+                Renderer2D::DrawString(font, text, {100, 100}, height, color);
+                Renderer2D::EndBatch();
+            };
+
+            // position is the bottom-left corner of the first cell: 'M' fills nearly all of 100..116 x 100..132
+            DrawAt("M", 32.0f, glm::vec4(1.0f));
+            Bounds m = Ink(60, 60, 200, 120);
+            CHECK(m.count > 60 && m.minX >= 100 && m.maxX < 116 && m.minY >= 100 && m.maxY < 132, "a glyph stays inside its cell, anchored bottom-left (x %d..%d, y %d..%d)", m.minX, m.maxX, m.minY, m.maxY);
+            CHECK(m.maxX - m.minX >= 10 && m.maxY - m.minY >= 14, "a glyph is drawn at the requested height (%d x %d px)", m.maxX - m.minX + 1, m.maxY - m.minY + 1);
+
+            DrawAt("MM", 32.0f, glm::vec4(1.0f));
+            Bounds mm = Ink(60, 60, 200, 120);
+            CHECK(mm.minX >= 100 && mm.minX < 106 && mm.maxX >= 125 && mm.maxX < 132, "the next glyph is one advance to the right (x %d..%d)", mm.minX, mm.maxX);
+
+            DrawAt("M\nM", 32.0f, glm::vec4(1.0f));
+            Bounds nl = Ink(60, 20, 200, 160);
+            CHECK(nl.minY >= 68 && nl.minY < 76 && nl.maxY >= 100 && nl.maxY < 132 && nl.minX >= 100 && nl.maxX < 116, "a newline starts the next line one height below (y %d..%d)", nl.minY, nl.maxY);
+
+            DrawAt("M", 16.0f, glm::vec4(1.0f));
+            Bounds half = Ink(60, 60, 200, 120);
+            CHECK(half.maxX < 108 && half.maxY < 116 && half.count > 10 && half.count < m.count, "half the height draws a half-size glyph (x %d..%d, y %d..%d)", half.minX, half.maxX, half.minY, half.maxY);
+
+            // different characters look different
+            DrawAt(".", 32.0f, glm::vec4(1.0f));
+            Bounds dot = Ink(60, 60, 200, 120);
+            CHECK(dot.count > 0 && dot.count * 4 < m.count && dot.maxY < 116, "'.' is small and sits low in the cell (%d px, top y=%d)", dot.count, dot.maxY);
+
+            // unknown characters draw as '?'
+            auto Pixels = [&](const std::string& text) {
+                DrawAt(text, 32.0f, glm::vec4(1.0f));
+                std::vector<unsigned char> buf(40 * 40 * 4);
+                glReadPixels(95, 95, 40, 40, GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
+                return buf;
+            };
+            std::vector<unsigned char> question = Pixels("?");
+            CHECK(Ink(95, 95, 40, 40).count > 40, "'?' draws something");
+            CHECK(Pixels("\x01") == question && Pixels("\xC3") == question && Pixels("\t") == question, "control and non-ASCII characters draw as '?'");
+
+            // tint and alpha
+            DrawAt("M", 32.0f, glm::vec4(0, 1, 0, 1));
+            std::vector<unsigned char> green(200 * 120 * 4);
+            glReadPixels(60, 60, 200, 120, GL_RGBA, GL_UNSIGNED_BYTE, green.data());
+            int maxG = 0, maxR = 0, maxB = 0;
+            for (size_t i = 0; i < green.size(); i += 4) {
+                maxR = std::max(maxR, (int)green[i]); maxG = std::max(maxG, (int)green[i + 1]); maxB = std::max(maxB, (int)green[i + 2]);
+            }
+            CHECK(maxG >= 250 && maxR <= bg.r + 2 && maxB <= bg.b + 2, "the color tints the glyphs (max r,g,b %d,%d,%d)", maxR, maxG, maxB);
+
+            DrawAt("M", 32.0f, glm::vec4(1, 1, 1, 0.5f));
+            std::vector<unsigned char> faint(200 * 120 * 4);
+            glReadPixels(60, 60, 200, 120, GL_RGBA, GL_UNSIGNED_BYTE, faint.data());
+            int brightest = 0;
+            for (size_t i = 0; i < faint.size(); i += 4) brightest = std::max(brightest, (int)faint[i]);
+            CHECK(brightest > bg.r + 40 && brightest < 200, "alpha fades the text (brightest r %d)", brightest);
+
+            // a font whose sheet fails to load draws the error checker, and a good one is unaffected
+            BitmapFont missing("Assets/Fonts/does_not_exist.png", 16, 32);
+            CHECK(!missing.IsLoaded(), "a missing font sheet is not loaded");
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawString(missing, "A", {100, 100}, 32.0f);
+            Renderer2D::DrawQuad({300, 100}, {20, 20}, glm::vec4(0, 1, 0, 1));
+            Renderer2D::EndBatch();
+            Bounds err = Ink(60, 60, 100, 120);
+            bool magenta = false;
+            for (int y = 100; y < 132 && !magenta; y++) for (int x = 100; x < 116; x++) if (Near(Read(x, y), 255, 0, 255)) { magenta = true; break; }
+            CHECK(Renderer2D::GetStats().QuadCount == 2 && err.count > 100 && magenta, "a failed font draws the error checker for each glyph");
+            CHECK(Near(Read(300, 100), 0, 255, 0), "quads after a failed font still draw");
+        }
+
         // 10. GL errors
         GLenum err = glGetError();
         CHECK(err == GL_NO_ERROR, "no GL error (0x%x)", err);

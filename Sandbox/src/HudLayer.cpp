@@ -5,6 +5,16 @@ HudLayer::HudLayer(Marle::Application& app, const WorldLayer& world)
 {
 }
 
+void HudLayer::OnAttach()
+{
+    m_Font = std::make_unique<Marle::BitmapFont>("Assets/Fonts/mono.png", 16, 32);
+}
+
+void HudLayer::OnDetach()
+{
+    m_Font.reset();   // holds a GL texture: release it while the context is still alive
+}
+
 void HudLayer::OnUpdate(double)
 {
     m_UpdateCount++;
@@ -44,6 +54,12 @@ void HudLayer::OnRender(double)
         float t = (glm::log(m_World.GetZoom()) - glm::log(0.25f)) / (glm::log(4.0f) - glm::log(0.25f));
         Renderer2D::DrawQuad({ 40.0f + barW * 0.5f, top }, { barW, 6.0f }, off);
         Renderer2D::DrawQuad({ 40.0f + barW * t, top }, { 8.0f, 20.0f }, on);
+
+        // Labels above the key cluster
+        char zoom[32];
+        snprintf(zoom, sizeof(zoom), "ZOOM %.2fx", m_World.GetZoom());
+        Renderer2D::DrawString(*m_Font, zoom, { 20.0f, 164.0f }, 22.0f, on);
+        Renderer2D::DrawString(*m_Font, "H hides the HUD", { 20.0f, 142.0f }, 16.0f, glm::vec4(0.8f, 0.8f, 0.85f, 1.0f));
 
         // Mouse reticle at the polled position; turns red while the left button is held
         glm::vec2 mouse = Input::GetMousePosition();
