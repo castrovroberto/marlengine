@@ -38,6 +38,10 @@ namespace Marle {
     // leading or trailing whitespace and no '/'.
     EXPORT bool IsValidEntityName(const std::string& name);
 
+    // Why an asset path is not allowed in a scene file, or empty if it is: paths are relative to the
+    // working directory and written with '/', so a scene file cannot point at arbitrary files.
+    EXPORT std::string AssetPathProblem(const std::string& path);
+
     // Loads a scene file. One mistake never costs the whole scene: each entity and component is
     // checked on its own, the offending one is skipped (a missing asset file is the exception: the
     // component loads and the file is reported), and every problem is returned. Needs no GL context.

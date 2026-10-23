@@ -26,6 +26,7 @@
 #include "Marle/Scene/Components.h"
 #include "Marle/Scene/ComponentRegistry.h"
 #include "Marle/Scene/SceneLoader.h"
+#include "Marle/Scene/SceneWriter.h"
 
 // Events
 #include "Marle/Events/Event.h"

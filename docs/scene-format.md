@@ -64,12 +64,16 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 
 ## Written form
 
-The engine reads any layout that follows the rules above. When it writes a scene file, the output is canonical, so a change to one component changes only that component's lines:
+The engine reads any layout that follows the rules above. When it writes a scene file (`SaveScene`), the output is canonical, so loading a canonical file and writing it again gives the same bytes, and a change to one component changes exactly one line:
 
-- Entities in creation order. Components in registration order. Fields in declaration order, and **every field is written**, including ones at their default.
-- Two-space indentation, one entity per block, numeric vectors on a single line, LF line endings, no byte order mark, one newline at the end of the file.
-- Numbers are the shortest text that reads back to the same value: `0.1`, not `0.10000000149011612`.
+- Entities in creation order. Components in registration order. Fields in declaration order, and **every field is written**, including ones at their default. An entity with no components has no `components` key.
+- Two-space indentation, one entity per block, **one line per component** with its fields inside `{ ... }` and vectors as `[a, b]`, LF line endings, no byte order mark, one newline at the end of the file.
+- Numbers are the shortest text that reads back to the same value: `0.1`, not `0.10000000149011612`, and a whole number has no decimal point (`1024`, not `1024.0`). Text is UTF-8, with only quotes, backslashes and control characters escaped.
+- The `$schema` key is written only when the caller asks for it, since loading does not keep it.
 - Comments are not kept. Writing a scene drops them, and the engine never rewrites a file on its own, so comments in a hand-written file are only lost if you ask the engine to save over it.
+- Components the registry does not know are not written.
+
+What is written always reads back. If the scene holds something a file cannot (an entity name the rules forbid, a number that is not finite, a value outside its field's range, an unsafe asset path, text that is not valid UTF-8), nothing is written, every reason is reported, and any existing file is left as it was. Files are written to a temporary file beside the target and renamed into place, so a failed save never leaves a half-written scene.
 
 ## Errors
 

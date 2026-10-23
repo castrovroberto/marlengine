@@ -4,6 +4,7 @@
 #include "Marle/Scene/Components.h"
 #include "Marle/Scene/ComponentRegistry.h"
 #include "Marle/Scene/SceneLoader.h"
+#include "Marle/Scene/SceneWriter.h"
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
@@ -20,6 +21,22 @@ static int fails = 0;
 struct Position { float x = 0.0f, y = 0.0f; Position() = default; Position(float x, float y) : x(x), y(y) {} };
 struct Health { int points = 10; };
 struct Door { std::string Target; int Level = 1; bool Locked = false; };   // Target is required
+
+static std::string ReadFile(const std::string& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    std::stringstream text;
+    text << in.rdbuf();
+    return text.str();
+}
+
+static std::vector<std::string> SplitLines(const std::string& text)
+{
+    std::vector<std::string> lines;
+    std::stringstream stream(text);
+    for (std::string line; std::getline(stream, line);) lines.push_back(line);
+    return lines;
+}
 
 static bool HasProblem(const SceneLoadResult& result, const std::string& path, const std::string& text)
 {
@@ -455,6 +472,172 @@ int main()
         CHECK(dots.Scene->FindEntity("a").Has<SpriteRenderer>() && HasProblem(dots, "/entities/0/components/SpriteRenderer/texture", "does not exist"), "'..' inside a name is just a name");
         CHECK(assetProblem("").Ok() && assetProblem("Assets/Textures/test_sprite.tga").Ok(), "an empty texture and an existing file are fine");
         CHECK(HasProblem(assetProblem("Assets/Textures"), "/entities/0/components/SpriteRenderer/texture", "does not exist"), "a directory is not a file");
+    }
+
+    // scene writer: canonical form
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+
+        Scene scene("Golden");
+        Entity a = scene.CreateEntity("a");
+        a.Add<Camera>();                                   // added first, but written second
+        a.Add<Transform>().Position = { 0.1f, -2.5f };
+        a.Add<Health>();                                   // not registered: not written
+        scene.CreateEntity("bare");
+        SpriteRenderer& sprite = scene.CreateEntity("sprite").Add<SpriteRenderer>();
+        sprite.Texture = "Assets/Textures/test_sprite.tga";
+        sprite.Tint = { 1.0f, 0.5f, 0.25f, 0.1f };
+
+        const std::string golden = R"({
+  "version": 1,
+  "name": "Golden",
+  "entities": [
+    {
+      "name": "a",
+      "components": {
+        "Transform": { "position": [0.1, -2.5], "rotation": 0, "scale": [1, 1] },
+        "Camera": { "zoom": 1, "primary": false }
+      }
+    },
+    {
+      "name": "bare"
+    },
+    {
+      "name": "sprite",
+      "components": {
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sprite.tga", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 0.5, 0.25, 0.1] }
+      }
+    }
+  ]
+}
+)";
+        SceneSaveResult saved = SaveSceneToText(scene, registry);
+        for (const std::string& problem : saved.Problems) printf("      %s\n", problem.c_str());
+        CHECK(saved.Ok() && saved.Text == golden, "a scene is written in canonical form");
+
+        CHECK(SaveSceneToText(Scene("x"), registry).Text == "{\n  \"version\": 1,\n  \"name\": \"x\",\n  \"entities\": []\n}\n", "an empty scene writes an empty entities list");
+        SceneWriteOptions withSchema;
+        withSchema.Schema = "scene.schema.json";
+        CHECK(SaveSceneToText(Scene("x"), registry, withSchema).Text == "{\n  \"$schema\": \"scene.schema.json\",\n  \"version\": 1,\n  \"name\": \"x\",\n  \"entities\": []\n}\n", "$schema is written first when asked for");
+        CHECK(LoadSceneFromText(SaveSceneToText(Scene("x"), registry, withSchema).Text, "inline", registry).Ok(), "a file with $schema loads");
+
+        // what is written loads back, and writing that gives the same text
+        SceneLoadResult back = LoadSceneFromText(golden, "golden", registry);
+        CHECK(back.Ok() && SaveSceneToText(*back.Scene, registry).Text == golden, "loading the canonical text and writing it again changes nothing");
+        CHECK(back.Scene->FindEntity("a").Get<Transform>().Position == glm::vec2(0.1f, -2.5f) && back.Scene->FindEntity("sprite").Get<SpriteRenderer>().Tint.w == 0.1f, "the values read back exactly");
+
+        // the canonical fixture is the example without its comments
+        std::string canonical = ReadFile("Tests/SceneTests/fixtures/canonical.json");
+        SceneLoadResult fromFixture = LoadScene("Tests/SceneTests/fixtures/canonical.json", registry);
+        CHECK(!canonical.empty() && fromFixture.Ok() && SaveSceneToText(*fromFixture.Scene, registry).Text == canonical, "a canonical file round-trips byte for byte");
+        SceneLoadResult fromExample = LoadScene("Assets/Scenes/example.json", registry);
+        CHECK(fromExample.Ok() && SaveSceneToText(*fromExample.Scene, registry).Text == canonical, "the example, written out, is the canonical fixture (only its comments are gone)");
+        CHECK(canonical.back() == '\n' && canonical.find('\r') == std::string::npos && canonical.find("\n\n") == std::string::npos && canonical.compare(0, 3, "\xEF\xBB\xBF") != 0, "one trailing newline, LF line endings, no BOM, no blank lines");
+
+        // a change to one component changes only that component's line
+        std::vector<std::string> before = SplitLines(canonical);
+        fromFixture.Scene->FindEntity("player").Get<Transform>().Position = { 1030.0f, 520.5f };
+        std::vector<std::string> after = SplitLines(SaveSceneToText(*fromFixture.Scene, registry).Text);
+        int changed = 0;
+        std::string changedLine;
+        for (size_t i = 0; i < before.size() && i < after.size(); i++)
+            if (before[i] != after[i]) { changed++; changedLine = after[i]; }
+        CHECK(before.size() == after.size() && changed == 1 && changedLine.find("[1030, 520.5]") != std::string::npos, "changing one component changes exactly one line");
+
+        // order does not depend on how the scene was built
+        Scene reordered("Order");
+        reordered.CreateEntity("second");
+        Entity first = reordered.CreateEntity("first");
+        first.Add<Camera>(); first.Add<SpriteRenderer>(); first.Add<Transform>();
+        std::string text = SaveSceneToText(reordered, registry).Text;
+        CHECK(text.find("\"second\"") < text.find("\"first\"") && text.find("Transform") < text.find("SpriteRenderer") && text.find("SpriteRenderer") < text.find("Camera"), "entities are written in creation order and components in registration order");
+        reordered.DestroyEntity(reordered.FindEntity("second"));
+        reordered.CreateEntity("third");
+        text = SaveSceneToText(reordered, registry).Text;
+        CHECK(text.find("\"first\"") < text.find("\"third\"") && text.find("second") == std::string::npos, "destroyed entities are gone and new ones go last");
+
+        // numbers
+        Scene numbers("Numbers");
+        Entity n = numbers.CreateEntity("n");
+        n.Add<Transform>() = Transform{ { 16777216.0f, -3.0f }, 1e-7f, { 3e38f, 123456.789f } };
+        n.Add<Camera>().Zoom = 0.33333334f;
+        std::string numText = SaveSceneToText(numbers, registry).Text;
+        CHECK(numText.find("[16777216, -3]") != std::string::npos && numText.find("\"zoom\": 0.33333334") != std::string::npos && numText.find(".0,") == std::string::npos && numText.find(".0 ") == std::string::npos && numText.find(".0]") == std::string::npos, "whole numbers have no decimal point and others are the shortest text that reads back");
+        SceneLoadResult numBack = LoadSceneFromText(numText, "numbers", registry);
+        const Transform& nt = numBack.Scene->FindEntity("n").Get<Transform>();
+        CHECK(numBack.Ok() && nt.Position == glm::vec2(16777216.0f, -3.0f) && nt.Rotation == 1e-7f && nt.Scale == glm::vec2(3e38f, 123456.789f) && numBack.Scene->FindEntity("n").Get<Camera>().Zoom == 0.33333334f, "extreme and awkward floats read back exactly");
+
+        // text
+        Scene text2("say \"hi\" \\ ñ ✓");
+        text2.CreateEntity("ünïcode ✓").Add<SpriteRenderer>().Texture = "Assets/ñandú \"q\".png";
+        std::string textText = SaveSceneToText(text2, registry).Text;
+        CHECK(textText.find(R"("name": "say \"hi\" \\ ñ ✓")") != std::string::npos && textText.find("ünïcode ✓") != std::string::npos, "quotes and backslashes are escaped, UTF-8 is kept as it is");
+        SceneLoadResult textBack = LoadSceneFromText(textText, "text", registry);
+        CHECK(textBack.Scene && textBack.Scene->GetName() == "say \"hi\" \\ ñ ✓" && textBack.Scene->FindEntity("ünïcode ✓").Get<SpriteRenderer>().Texture == "Assets/ñandú \"q\".png", "names and strings read back unchanged");
+    }
+
+    // scene writer: refusing what would not read back
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+
+        auto problemsOf = [&](auto&& build) {
+            Scene scene("Bad");
+            build(scene);
+            return SaveSceneToText(scene, registry);
+        };
+        auto mentions = [](const SceneSaveResult& r, const std::string& text) {
+            for (const std::string& p : r.Problems) if (p.find(text) != std::string::npos) return true;
+            return false;
+        };
+
+        SceneSaveResult slash = problemsOf([](Scene& s) { s.CreateEntity("a/b"); });
+        CHECK(!slash.Ok() && mentions(slash, "entity 'a/b': scene files cannot hold this name"), "an entity name scene files cannot hold is refused");
+        CHECK(!problemsOf([](Scene& s) { s.CreateEntity(" lead"); }).Ok() && !problemsOf([](Scene& s) { s.CreateEntity(std::string(65, 'x')); }).Ok(), "leading whitespace and a too long name are refused");
+
+        SceneSaveResult nan = problemsOf([](Scene& s) { s.CreateEntity("e").Add<Transform>().Position.x = std::nanf(""); });
+        CHECK(!nan.Ok() && mentions(nan, "entity 'e' component 'Transform'/position/0: the number is not finite"), "a number that is not finite is refused, with where it is");
+        SceneSaveResult inf = problemsOf([](Scene& s) { s.CreateEntity("e").Add<Transform>().Rotation = INFINITY; });
+        CHECK(!inf.Ok() && mentions(inf, "/rotation: the number is not finite"), "infinity is refused too");
+
+        SceneSaveResult range = problemsOf([](Scene& s) { s.CreateEntity("e").Add<Camera>().Zoom = 0.0f; });
+        CHECK(!range.Ok() && mentions(range, "entity 'e' component 'Camera'/zoom: must be at least 0.01"), "a value outside its range is refused");
+
+        SceneSaveResult unsafe = problemsOf([](Scene& s) { s.CreateEntity("e").Add<SpriteRenderer>().Texture = "../outside.png"; });
+        CHECK(!unsafe.Ok() && mentions(unsafe, "entity 'e' component 'SpriteRenderer'/texture: the path must not contain '..'"), "an unsafe asset path is refused");
+
+        SceneSaveResult utf8 = problemsOf([](Scene& s) { s.CreateEntity("e").Add<SpriteRenderer>().Texture = "bad\xff.png"; });
+        CHECK(!utf8.Ok() && mentions(utf8, "not valid UTF-8"), "text that is not valid UTF-8 is refused");
+        CHECK(!SaveSceneToText(Scene(""), registry).Ok(), "a scene without a name is refused");
+
+        SceneSaveResult several = problemsOf([](Scene& s) { s.CreateEntity("a/b"); s.CreateEntity("e").Add<Camera>().Zoom = -1.0f; });
+        CHECK(several.Problems.size() == 2, "every problem is reported, not just the first");
+    }
+
+    // scene writer: files
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::string file = (std::filesystem::temp_directory_path() / "marle_scene_writer_test.json").string();
+        std::filesystem::remove(file);
+
+        Scene scene("On disk");
+        scene.CreateEntity("hero").Add<Transform>().Position = { 4.0f, 5.0f };
+        CHECK(SaveScene(scene, registry, file), "a scene saves to a file");
+        CHECK(ReadFile(file) == SaveSceneToText(scene, registry).Text && !std::filesystem::exists(file + ".tmp"), "the file holds exactly the canonical text and no temporary file is left");
+        SceneLoadResult loaded = LoadScene(file, registry);
+        CHECK(loaded.Ok() && loaded.Scene->FindEntity("hero").Get<Transform>().Position == glm::vec2(4.0f, 5.0f), "the saved file loads");
+
+        scene.FindEntity("hero").Get<Transform>().Position = { 7.0f, 8.0f };
+        CHECK(SaveScene(scene, registry, file) && LoadScene(file, registry).Scene->FindEntity("hero").Get<Transform>().Position == glm::vec2(7.0f, 8.0f), "saving again replaces the file");
+
+        std::string good = ReadFile(file);
+        scene.FindEntity("hero").Get<Transform>().Rotation = std::nanf("");
+        CHECK(!SaveScene(scene, registry, file) && ReadFile(file) == good && !std::filesystem::exists(file + ".tmp"), "a scene that cannot be written leaves the existing file as it was");
+
+        CHECK(!SaveScene(Scene("x"), registry, (std::filesystem::temp_directory_path() / "marle_no_such_dir" / "x.json").string()), "an unwritable path reports failure");
+        std::filesystem::remove(file);
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

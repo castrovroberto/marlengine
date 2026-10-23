@@ -22,10 +22,9 @@ namespace Marle {
         return std::none_of(name.begin(), name.end(), [](unsigned char c) { return c < 0x20 || c == 0x7f; });
     }
 
-    // Why an asset path is not allowed, or empty if it is. Paths are relative to the working
-    // directory and written with '/', so a scene file cannot point at arbitrary files.
-    static std::string AssetPathProblem(const std::string& path)
+    std::string AssetPathProblem(const std::string& path)
     {
+        if (path.empty()) return "";
         if (path.find('\\') != std::string::npos) return "use '/' as the path separator";
         if (path[0] == '/' || (path.size() > 1 && path[1] == ':')) return "the path must be relative to the working directory";
 
