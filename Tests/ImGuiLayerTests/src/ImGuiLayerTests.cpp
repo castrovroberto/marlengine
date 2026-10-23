@@ -45,7 +45,7 @@ struct Driver : Layer {
         if (Frame == 1) Imgui->OnEvent(outside);
         if (Frame == 2) Imgui->OnEvent(keyDown);
         if (Frame == 3) { Imgui->OnEvent(keyUp); Imgui->OnEvent(inside); }
-        if (Frame >= 6) App.Close();
+        if (Frame >= 8) App.Close();
     }
 
     void OnImGuiRender() override
@@ -86,6 +86,18 @@ struct Driver : Layer {
             CHECK(press.IsHandled(), "a click on an ImGui window is marked handled");
             MouseButtonReleasedEvent release(Mouse::Left);
             Imgui->OnEvent(release);
+
+            MouseScrolledEvent wheel(0.0f, 1.0f);
+            Imgui->OnEvent(wheel);
+            CHECK(wheel.IsHandled(), "the wheel over an ImGui window is handled by default");
+            // a layer showing a picture of the world asks for the mouse back while it is hovered
+            ImGui::SetNextFrameWantCaptureMouse(false);
+        }
+        if (Frame == 5) {
+            CHECK(!io.WantCaptureMouse, "SetNextFrameWantCaptureMouse(false) releases the mouse over a hovered window");
+            MouseScrolledEvent wheel(0.0f, 1.0f);
+            Imgui->OnEvent(wheel);
+            CHECK(!wheel.IsHandled(), "the wheel then reaches the layers below");
         }
 
         // A window to hover, and a foreground rect to read back (ImGui coordinates, top-left origin)
@@ -133,8 +145,8 @@ int main()
         CHECK(ImGui::GetCurrentContext() != nullptr, "attaching the ImGuiLayer creates an ImGui context");
 
         app.Run();
-        CHECK(Frame >= 6, "the loop ran every scripted frame");
-        CHECK(HookCallsBelow >= 6 && HookCallsAbove >= 6, "OnImGuiRender runs on every layer, above and below the ImGuiLayer");
+        CHECK(Frame >= 8, "the loop ran every scripted frame");
+        CHECK(HookCallsBelow >= 8 && HookCallsAbove >= 8, "OnImGuiRender runs on every layer, above and below the ImGuiLayer");
 
         const Probe& p = *app.ProbeLayer;
         CHECK(p.Read, "pixels were read back");

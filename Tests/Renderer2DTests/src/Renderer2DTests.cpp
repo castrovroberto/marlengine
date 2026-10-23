@@ -351,6 +351,15 @@ protected:
             Renderer2D::EndBatch();
             CHECK(Near(Read(64, 64), 255, 0, 0), "a quad drawn between Bind and Unbind lands in the framebuffer");
             CHECK(Near(Read(200, 100), bg.r, bg.g, bg.b), "outside the quad is the clear color");
+
+            // Showing the texture over the window (ImGui panel) needs opaque alpha: translucent quads
+            // drawn over the cleared framebuffer must not make it see-through.
+            Renderer2D::BeginBatch(256, 128);
+            Renderer2D::DrawQuad({200, 100}, {20, 20}, glm::vec4(1, 1, 1, 0.5f));
+            Renderer2D::EndBatch();
+            unsigned char blended[4];
+            glReadPixels(200, 100, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, blended);
+            CHECK(blended[3] == 255 && blended[0] > bg.r + 40, "a translucent quad blends its color but leaves alpha opaque (rgba %d,%d,%d,%d)", blended[0], blended[1], blended[2], blended[3]);
             fb.Unbind();
 
             Viewport(vp);
