@@ -47,6 +47,7 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 
 - Keys are the component's field names. A field that is left out takes its default; a field marked required must appear.
 - Values must have the field's type and be inside its range. Vectors are arrays of exactly the right length, such as `[x, y]` or `[r, g, b, a]`.
+- A string field can be limited to a set of allowed values (for example the name of a key); anything else is an error that lists the allowed values and suggests the closest one. Matching is exact, so case matters. The schema describes such a field with an `enum`.
 - The built-in components and their fields are in the table below. The generated JSON Schema, `Assets/Scenes/scene.schema.json`, is the complete reference for every registered component, including your own (see Schema).
 
 | Component | Field | Type | Default | Meaning |

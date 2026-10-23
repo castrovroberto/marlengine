@@ -43,6 +43,7 @@ namespace Marle {
                     break;
                 case FieldType::String:
                     schema = Json::object({ { "type", "string" } });
+                    if (!field.OneOf.empty()) schema["enum"] = field.OneOf;
                     if (field.AssetPath) schema["pattern"] = AssetPathPattern;
                     break;
                 case FieldType::Vec2:  schema = Numbers("number", 2, field); break;
@@ -52,7 +53,11 @@ namespace Marle {
                     schema = Json::object({ { "type", "array" }, { "items", Json::object({ { "type", "string" } }) } });
                     break;
             }
-            schema["description"] = field.Description + (field.AssetPath ? " An asset file path, relative to the working directory, written with '/' and without '..'." : "");
+            std::string allowed;
+            for (size_t i = 0; i < field.OneOf.size(); i++) allowed += (i ? ", " : "") + field.OneOf[i];
+            schema["description"] = field.Description
+                + (field.OneOf.empty() ? "" : " One of: " + allowed + ".")
+                + (field.AssetPath ? " An asset file path, relative to the working directory, written with '/' and without '..'." : "");
             schema["default"] = field.Default;
             return schema;
         }

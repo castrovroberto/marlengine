@@ -4,6 +4,7 @@
 #include "Entity.h"
 #include <nlohmann/json.hpp>
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <typeinfo>
 #include <vector>
@@ -40,6 +42,7 @@ namespace Marle {
         bool AssetPath = false;                 // a string naming a file, relative to the working directory
         Json Default;                           // the value of a default-constructed component
         std::optional<double> Min, Max;         // applied to every number in the field
+        std::vector<std::string> OneOf;         // for a string: the only values allowed, empty means any string
     };
 
     struct ComponentInfo {
@@ -172,10 +175,20 @@ namespace Marle {
         template<> struct FieldTraits<std::string> {
             static constexpr FieldType Type = FieldType::String;
             static Json ToJson(const std::string& v) { return v; }
-            static void Read(const Json& j, std::string& out, const FieldInfo&, const std::string& path, std::vector<ValidationError>& errors)
+            static void Read(const Json& j, std::string& out, const FieldInfo& info, const std::string& path, std::vector<ValidationError>& errors)
             {
-                if (!j.is_string()) errors.push_back({ path, std::string("expected a string, got ") + JsonTypeName(j) });
-                else out = j.get<std::string>();
+                if (!j.is_string()) {
+                    errors.push_back({ path, std::string("expected a string, got ") + JsonTypeName(j) });
+                    return;
+                }
+                const std::string& value = j.get_ref<const std::string&>();
+                if (!info.OneOf.empty() && std::find(info.OneOf.begin(), info.OneOf.end(), value) == info.OneOf.end()) {
+                    std::string allowed, hint = SuggestionFor(value, info.OneOf);
+                    for (size_t i = 0; i < info.OneOf.size(); i++) allowed += (i ? ", '" : "'") + info.OneOf[i] + "'";
+                    errors.push_back({ path, "expected one of " + allowed + ", got '" + value + "'" + (hint.empty() ? "" : " (" + hint + ")") });
+                    return;
+                }
+                out = value;
             }
         };
 
@@ -333,6 +346,27 @@ namespace Marle {
             ComponentBuilder& Field(M T::* member, const std::string& name, const std::string& description);
 
             ComponentBuilder& Required() { if (m_Last) m_Last->Required = true; return *this; }
+
+            // Limits the last field, which must be a string, to these values. Reading anything else is an
+            // error that lists them and suggests the closest; the schema gets an enum. The list must be
+            // non-empty and without repeats, and must contain the field's default (the value in a
+            // default-constructed component); otherwise the problem is logged and the field stays free.
+            ComponentBuilder& OneOf(std::vector<std::string> values)
+            {
+                if (!m_Last) return *this;
+                if (m_Last->Type != FieldType::String) {
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is not a string, so it cannot be limited to a set of values");
+                } else if (values.empty()) {
+                    detail::ReportRegistryError("field '" + m_Last->Name + "': OneOf needs at least one value");
+                } else if (std::set<std::string>(values.begin(), values.end()).size() != values.size()) {
+                    detail::ReportRegistryError("field '" + m_Last->Name + "': OneOf has a value that is listed twice");
+                } else if (std::find(values.begin(), values.end(), m_Last->Default.get<std::string>()) == values.end()) {
+                    detail::ReportRegistryError("field '" + m_Last->Name + "': its default '" + m_Last->Default.get<std::string>() + "' is not one of the allowed values");
+                } else {
+                    m_Last->OneOf = std::move(values);
+                }
+                return *this;
+            }
 
             // Marks the last field, which must be a string, as the path of an asset file. The scene
             // loader checks that it stays inside the working directory and that the file exists.

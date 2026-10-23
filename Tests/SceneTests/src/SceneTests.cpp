@@ -29,6 +29,7 @@ static int fails = 0;
 struct Position { float x = 0.0f, y = 0.0f; Position() = default; Position(float x, float y) : x(x), y(y) {} };
 struct Health { int points = 10; };
 struct Gravity { float Strength = 9.8f; };
+struct Pad { std::string Keys = "both"; std::string Label; int Count = 0; };
 struct Door { std::string Target; int Level = 1; bool Locked = false; };   // Target is required
 
 static std::string ReadFile(const std::string& path)
@@ -1441,6 +1442,94 @@ int main(int argc, char** argv)
         std::string formatted = ReadFile(w + "/a.json");
         CHECK(Contains(formatted, "  \"components\": {\n    \"Camera\": { \"zoom\": 2, \"primary\": false }\n  },\n") && LoadScene(w + "/a.json", registry).Ok() && RunTool(registry, { "format", "--check", w + "/a.json" }).Code == 0, "format keeps and canonicalizes the scene's own components");
         std::filesystem::remove_all(work);
+    }
+
+    // field enums: a string that is one of a fixed set
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        registry.Register<Pad>("Pad", "A pad.")
+            .Field(&Pad::Keys, "keys", "Which keys move it.").OneOf({ "wasd", "arrows", "both" })
+            .Field(&Pad::Label, "label", "Free text.")
+            .Field(&Pad::Count, "count", "A number.");
+        const ComponentInfo* info = registry.Find("Pad");
+
+        CHECK(info->Fields[0].OneOf == std::vector<std::string>({ "wasd", "arrows", "both" }) && info->Fields[0].Default == "both" && info->Fields[1].OneOf.empty(), "a field records its allowed values, a free string has none");
+
+        Scene scene;
+        for (const char* value : { "wasd", "arrows", "both" }) {
+            Entity e = scene.CreateEntity(value);
+            CHECK(registry.Read(e, "Pad", Json::parse(std::string(R"({"keys": ")") + value + R"("})")).empty() && e.Get<Pad>().Keys == value, (std::string("the value '") + value + "' is accepted").c_str());
+        }
+        Entity free = scene.CreateEntity("free");
+        CHECK(registry.Read(free, "Pad", Json::parse(R"({"label": "anything at all", "keys": "both"})")).empty() && free.Get<Pad>().Label == "anything at all", "a string with no allowed set takes anything");
+        Entity omitted = scene.CreateEntity("omitted");
+        CHECK(registry.Read(omitted, "Pad", Json::object()).empty() && omitted.Get<Pad>().Keys == "both", "a field left out takes its default, which is one of the allowed values");
+
+        Entity bad = scene.CreateEntity("bad");
+        auto errors = registry.Read(bad, "Pad", Json::parse(R"({"keys": "wsad"})"));
+        CHECK(errors.size() == 1 && HasError(errors, "/keys", "expected one of 'wasd', 'arrows', 'both', got 'wsad'") && HasError(errors, "/keys", "did you mean 'wasd'?"), "any other value is an error that lists the allowed ones and suggests the closest");
+        errors = registry.Read(bad, "Pad", Json::parse(R"({"keys": "Both"})"));
+        CHECK(HasError(errors, "/keys", "did you mean 'both'?"), "a different case is suggested too, but is still an error");
+        errors = registry.Read(bad, "Pad", Json::parse(R"({"keys": "nonsense"})"));
+        CHECK(errors.size() == 1 && HasError(errors, "/keys", "got 'nonsense'") && !HasError(errors, "/keys", "did you mean"), "a value that is nothing like them gets no suggestion");
+        errors = registry.Read(bad, "Pad", Json::parse(R"({"keys": ""})"));
+        CHECK(HasError(errors, "/keys", "got ''"), "an empty string is not an allowed value unless it is listed");
+        errors = registry.Read(bad, "Pad", Json::parse(R"({"keys": 5, "count": "x"})"));
+        CHECK(errors.size() == 2 && HasError(errors, "/keys", "expected a string, got a number") && HasError(errors, "/count", "expected an integer"), "a value that is not a string is a type error, reported with the others");
+        CHECK(!bad.Has<Pad>(), "a component with a bad value is not added");
+
+        // writing
+        CHECK(registry.Write(free, "Pad")["keys"] == "both" && registry.Write(free, "Pad", true)["label"] == "anything at all" && !registry.Write(free, "Pad", true).contains("keys"), "an allowed value is written, and skipDefaults leaves out the default one");
+        Scene refuse("Refuse");
+        refuse.CreateEntity("e").Add<Pad>().Keys = "nope";
+        SceneSaveResult refused = SaveSceneToText(refuse, registry);
+        CHECK(!refused.Ok() && refused.Problems[0].find("entity 'e' component 'Pad'/keys: expected one of") != std::string::npos, "the writer refuses a value outside the set, so what is written reads back");
+
+        // the loader and the tool
+        SceneLoadResult load = LoadSceneFromText(R"({"version": 1, "name": "x", "entities": [{"name": "e", "components": {"Pad": {"keys": "arrow"}}}]})", "inline", registry);
+        CHECK(HasProblem(load, "/entities/0/components/Pad/keys", "did you mean 'arrows'?") && !load.Scene->FindEntity("e").Has<Pad>(), "the loader reports it with its path and skips the component");
+        const std::filesystem::path work = std::filesystem::temp_directory_path() / "marle_scene_enum_test";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work);
+        WriteFile((work / "a.json").string(), R"({"version": 1, "name": "x", "entities": [{"name": "e", "components": {"Pad": {"keys": "wsad"}}}]})");
+        ToolRun run = RunTool(registry, { "validate", (work / "a.json").generic_string() });
+        CHECK(run.Code == 1 && Contains(run.Out, "/entities/0/components/Pad/keys: expected one of 'wasd', 'arrows', 'both', got 'wsad' (did you mean 'wasd'?); the component is skipped"), "marle-scene validate prints it");
+        std::filesystem::remove_all(work);
+
+        // the schema
+        const Json schema = GenerateSceneSchema(registry);
+        const Json& keys = schema["definitions"]["component_Pad"]["properties"]["keys"];
+        CHECK(keys["type"] == "string" && keys["enum"] == Json::array({ "wasd", "arrows", "both" }) && keys["default"] == "both" && keys["description"] == "Which keys move it. One of: wasd, arrows, both.", "the schema has an enum, and the description lists the values");
+        CHECK(!schema["definitions"]["component_Pad"]["properties"]["label"].contains("enum"), "a free string has no enum");
+        auto padErrors = [&](const std::string& value) { return SchemaErrors(schema, Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "e", "components": {"Pad": {"keys": )" + Json(value).dump() + "}}}]}")); };
+        bool agree = true;
+        for (const char* value : { "wasd", "arrows", "both", "Both", "wsad", "", "x", "wasd ", "arrows\n" }) {
+            bool schemaOk = padErrors(value).empty();
+            Scene probe;
+            bool loaderOk = registry.Read(probe.CreateEntity("p"), "Pad", Json::parse(R"({"keys": )" + Json(std::string(value)).dump() + "}")).empty();
+            if (schemaOk != loaderOk) { printf("      schema and loader disagree about '%s'\n", value); agree = false; }
+        }
+        CHECK(agree, "the schema and the loader accept exactly the same values");
+
+        // setting a set up wrongly is logged and leaves the field free
+        ComponentRegistry other;
+        other.Register<Pad>("Pad", "A pad.")
+            .Field(&Pad::Keys, "keys", "k").OneOf({ "a", "b" })                    // the default 'both' is not in the set
+            .Field(&Pad::Label, "label", "l").OneOf({})                            // empty
+            .Field(&Pad::Count, "count", "c").OneOf({ "1" });                      // not a string
+        CHECK(other.Find("Pad")->Fields[0].OneOf.empty() && other.Find("Pad")->Fields[1].OneOf.empty() && other.Find("Pad")->Fields[2].OneOf.empty(), "a set that is empty, on a non-string, or without the default is refused");
+        ComponentRegistry repeats;
+        repeats.Register<Pad>("Pad", "A pad.").Field(&Pad::Keys, "keys", "k").OneOf({ "both", "both" });
+        CHECK(repeats.Find("Pad")->Fields[0].OneOf.empty(), "a set with a repeated value is refused");
+        ComponentRegistry empties;
+        empties.Register<Pad>("Pad", "A pad.").Field(&Pad::Label, "label", "l").OneOf({ "", "x" });
+        Scene emptyScene;
+        Entity pe = emptyScene.CreateEntity("e");
+        CHECK(empties.Find("Pad")->Fields[0].OneOf.size() == 2 && empties.Read(pe, "Pad", Json::parse(R"({"label": ""})")).empty() && !empties.Read(emptyScene.CreateEntity("f"), "Pad", Json::parse(R"({"label": "y"})")).empty(), "an empty string can be an allowed value when the default is empty");
+        ComponentBuilder<Pad> detached = registry.Register<Pad>("Pad", "again");   // refused: name in use
+        detached.Field(&Pad::Keys, "keys", "k").OneOf({ "both" });
+        CHECK(registry.Find("Pad")->Fields[0].OneOf.size() == 3, "a set on a refused registration changes nothing");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);
