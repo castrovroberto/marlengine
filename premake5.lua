@@ -318,5 +318,6 @@ testProject "Renderer2DTests"   -- pixel readback; needs a display, run from the
 testProject "InputTests"        -- headless
 testProject "LogTests"          -- headless
 testProject "LayerStackTests"   -- headless
+testProject "SceneTests"        -- headless
 testProject "ApplicationTests"  -- needs a display
 testProject "ImGuiLayerTests"   -- needs a display; pixel readback of ImGui output

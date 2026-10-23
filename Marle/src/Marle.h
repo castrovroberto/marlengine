@@ -21,6 +21,9 @@
 #include "Marle/LayerStack.h"
 #include "Marle/ImGui/ImGuiLayer.h"
 
+// Scene
+#include "Marle/Scene/Scene.h"
+
 // Events
 #include "Marle/Events/Event.h"
 #include "Marle/Events/KeyEvent.h"
