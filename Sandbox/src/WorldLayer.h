@@ -21,6 +21,14 @@ public:
     void OnEvent(Marle::Event& e) override;
     void OnImGuiRender() override;
 
+    // Recording and replaying input (docs/input-recording.md). A recording starts from the scene as the file
+    // has it, so recording restarts the world first (F5, or --record at launch when it is fresh).
+    void StartRecording(const std::string& file, bool restartFirst);
+    void StopRecording(const char* why);
+    void StartReplay(const std::string& file, bool exitWhenDone);
+    bool IsReplaying() const { return m_Replay != nullptr; }
+    Marle::InputFrame NextReplayFrame() { return m_Replay ? m_Replay->Next() : Marle::InputFrame(); }
+
     // Read from the scene, for the HUD and the stats panel
     float GetZoom() const;
     float GetCameraRotation() const;   // radians
@@ -37,6 +45,8 @@ private:
     void PollScene(bool force = false, bool carry = true, const char* what = "Reloaded");
     void RestartWorld();
     void DrawScenePanel();
+    void FinishReplay();
+    void Note(bool good, const std::string& text);   // logs it and shows it in the Scene panel
 
     Marle::Application& m_App;
 
@@ -56,4 +66,11 @@ private:
     std::unique_ptr<Marle::Scene> m_Scene;
     std::unique_ptr<Marle::Scene> m_Baseline;   // the file as it was last loaded, never run: what a reload compares with
     std::unique_ptr<Marle::SceneRenderer> m_Renderer;
+
+    Marle::InputRecorder m_Recorder;
+    std::string m_RecordFile = "recording.json";
+    std::unique_ptr<Marle::InputReplay> m_Replay;
+    bool m_ExitWhenDone = false;
+    std::string m_Notice;           // the last thing recording or replaying had to say
+    bool m_NoticeGood = true;
 };

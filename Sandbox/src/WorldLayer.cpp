@@ -1,7 +1,10 @@
 #include "WorldLayer.h"
 #include <imgui.h>
+#include <fstream>
+#include <sstream>
 
 static constexpr const char* WorldFile = "Assets/Scenes/world.json";
+static constexpr int StepsPerSecond = 60;   // the Application's fixed step is 1/60 s
 
 WorldLayer::WorldLayer(Marle::Application& app)
     : Layer("World"), m_App(app)
@@ -41,9 +44,112 @@ void WorldLayer::PollScene(bool force, bool carry, const char* what)
         Marle::CarryOverState(m_Registry, *m_Baseline, *m_Scene, *reload.Scene);
     m_Scene = std::move(reload.Scene);
 
+    // A recording or a replay follows from the file it was made on, started fresh: a reload that carries state
+    // over, or of a file that has changed, ends it. (A restart is a fresh load of the same file, and is fine.)
+    if (m_Recorder.IsRecording() && (carry || m_Reloader->GetSceneHash() != m_Recorder.GetSceneHash())) {
+        m_Recorder.Cancel();
+        Note(false, "Recording stopped and dropped: the scene was reloaded, so the run no longer follows from the file it started on");
+    }
+    if (m_Replay && (carry || m_Reloader->GetSceneHash() != m_Replay->GetRecording().SceneHash)) {
+        m_Replay.reset();
+        Note(false, "Replay stopped: the scene was reloaded, so it can no longer reproduce the run");
+        if (m_ExitWhenDone) m_App.Close();
+    }
+
     m_Baseline = Marle::LoadScene(WorldFile, m_Registry).Scene;   // the file as it is now, never run
     if (!m_Baseline) m_Baseline = std::make_unique<Marle::Scene>("Empty");
     MRL_INFO("{} {} ({} entities)", what, WorldFile, m_Scene->GetEntityCount());
+}
+
+void WorldLayer::Note(bool good, const std::string& text)
+{
+    m_Notice = text;
+    m_NoticeGood = good;
+    if (good) MRL_INFO("{}", text); else MRL_ERROR("{}", text);
+}
+
+void WorldLayer::StartRecording(const std::string& file, bool restartFirst)
+{
+    if (m_Recorder.IsRecording()) return;
+    if (m_Replay && restartFirst) {
+        Note(false, "Cannot start a recording while a replay is playing");
+        return;
+    }
+    m_RecordFile = file;
+
+    // A recording starts from the scene as the file has it, so the world starts over first
+    if (restartFirst) {
+        RestartWorld();
+        if (m_Reloader->GetStatus().KeptPrevious) {
+            Note(false, "Cannot record: the scene file has problems, so it could not be restarted from the file");
+            return;
+        }
+    }
+    m_Recorder.Start(m_Scene->GetName(), m_Reloader->GetSceneHash(), m_Scene->GetSeed(), StepsPerSecond);
+    Note(true, "Recording to " + m_RecordFile + (restartFirst ? " (the scene was restarted)" : ""));
+}
+
+void WorldLayer::StopRecording(const char* why)
+{
+    if (!m_Recorder.IsRecording()) return;
+
+    const uint64_t checksum = Marle::Simulation::Checksum(m_Registry, *m_Scene);
+    Marle::InputRecording recording = m_Recorder.Finish(checksum);
+    Marle::RecordingWriteResult written = Marle::WriteRecording(recording);
+    if (!written.Ok()) {
+        for (const std::string& problem : written.Problems) MRL_ERROR("{}", problem);
+        Note(false, "The recording could not be written");
+        return;
+    }
+
+    std::string error;
+    if (!Marle::WriteTextFile(m_RecordFile, written.Text, &error))
+        Note(false, "The recording could not be saved: " + error);
+    else
+        Note(true, "Saved " + m_RecordFile + " (" + std::to_string(recording.GetStepCount()) + " steps, checksum " + Marle::Simulation::ChecksumText(checksum) + "; " + why + ")");
+}
+
+void WorldLayer::StartReplay(const std::string& file, bool exitWhenDone)
+{
+    std::ifstream in(file, std::ios::binary);
+    if (!in) {
+        Note(false, "Replay refused: cannot open " + file);
+        return;
+    }
+    std::stringstream text;
+    text << in.rdbuf();
+
+    Marle::RecordingReadResult read = Marle::ReadRecording(text.str());
+    if (!read.Ok()) {
+        for (const std::string& problem : read.Problems) MRL_ERROR("{}: {}", file, problem);
+        Note(false, "Replay refused: " + file + " has " + std::to_string(read.Problems.size()) + " problem(s)");
+        return;
+    }
+    std::string mismatch = Marle::RecordingMismatch(read.Recording, m_Scene->GetName(), m_Reloader->GetSceneHash(), m_Scene->GetSeed(), StepsPerSecond);
+    if (!mismatch.empty()) {
+        Note(false, "Replay refused: " + mismatch);
+        return;
+    }
+
+    m_Replay = std::make_unique<Marle::InputReplay>(std::move(read.Recording));
+    m_ExitWhenDone = exitWhenDone;
+    Note(true, "Replaying " + file + " (" + std::to_string(m_Replay->GetRecording().GetStepCount()) + " steps)");
+}
+
+void WorldLayer::FinishReplay()
+{
+    const Marle::InputRecording& recording = m_Replay->GetRecording();
+    const uint64_t checksum = Marle::Simulation::Checksum(m_Registry, *m_Scene);
+    if (!recording.HasChecksum)
+        Note(true, "Replay finished (the recording has no checksum to compare with; this run ended at " + Marle::Simulation::ChecksumText(checksum) + ")");
+    else if (checksum == recording.Checksum)
+        Note(true, "Replay finished: the checksum matches (" + Marle::Simulation::ChecksumText(checksum) + "), the run was reproduced exactly");
+    else
+        Note(false, "Replay finished: the checksum does NOT match (recorded " + Marle::Simulation::ChecksumText(recording.Checksum) + ", this run " + Marle::Simulation::ChecksumText(checksum) + ")");
+
+    StopRecording("the replay ended");
+    m_Replay.reset();
+    if (m_ExitWhenDone) m_App.Close();
 }
 
 void WorldLayer::RestartWorld()
@@ -80,6 +186,7 @@ void WorldLayer::OnDetach()
 {
     // The renderer holds the scene's textures, and the framebuffer a GL object: release them while
     // the context is still alive.
+    StopRecording("the game was closed");
     m_Viewport.reset();
     m_Renderer.reset();
     m_Reloader.reset();
@@ -92,11 +199,17 @@ void WorldLayer::OnUpdate(double dt)
         PollScene();
     }
 
+    if (m_Recorder.IsRecording())
+        m_Recorder.Record(m_App.GetInputFrame());
+
     // Everything that moves is a behavior in the scene, run with this step's input
     Marle::Simulation::Step(m_Registry, *m_Scene, m_App.GetInputFrame(), dt);
 
     if (m_Scene->IsRestartRequested())
         RestartWorld();
+
+    if (m_Replay && m_Replay->IsFinished())
+        FinishReplay();
 }
 
 void WorldLayer::OnRender(double alpha)
@@ -156,6 +269,13 @@ void WorldLayer::DrawScenePanel()
         if (status.Failures > 0) ImGui::TextDisabled("%u reload%s refused so far", status.Failures, status.Failures == 1 ? "" : "s");
         if (ImGui::Button("Reload now")) PollScene(true);
 
+        if (m_Recorder.IsRecording())
+            coloredText(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), ("Recording: " + std::to_string(m_Recorder.GetStepCount()) + " steps (F5 stops)").c_str());
+        if (m_Replay)
+            coloredText(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), ("Replaying: " + std::to_string(m_Replay->GetStep()) + " / " + std::to_string(m_Replay->GetRecording().GetStepCount()) + " steps").c_str());
+        if (!m_Notice.empty())
+            coloredText(m_NoticeGood ? ImVec4(0.7f, 0.9f, 0.7f, 1.0f) : ImVec4(1.0f, 0.6f, 0.4f, 1.0f), m_Notice.c_str());
+
         if (!status.Problems.empty()) {
             ImGui::SeparatorText("Problems");
             ImGui::BeginChild("problems", ImVec2(width, 190.0f), ImGuiChildFlags_Borders);
@@ -167,7 +287,7 @@ void WorldLayer::DrawScenePanel()
             ImGui::PopTextWrapPos();
             ImGui::EndChild();
         }
-        ImGui::TextDisabled("F3 toggles this panel");
+        ImGui::TextDisabled("F3 toggles this panel, F5 records");
         ImGui::PopTextWrapPos();
     }
     ImGui::End();
@@ -212,6 +332,11 @@ void WorldLayer::OnEvent(Marle::Event& e)
     }
     else if (key.GetKeyCode() == Marle::Key::F3 && key.GetRepeatCount() == 0) {
         m_ShowScenePanel = !m_ShowScenePanel;
+        e.SetHandled();
+    }
+    else if (key.GetKeyCode() == Marle::Key::F5 && key.GetRepeatCount() == 0) {
+        if (m_Recorder.IsRecording()) StopRecording("stopped");
+        else StartRecording(m_RecordFile, true);
         e.SetHandled();
     }
 }
