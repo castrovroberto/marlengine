@@ -1,6 +1,7 @@
 #include "mrlpch.h"
 #include "Marle/Log.h"
 #include "SceneLoader.h"
+#include "Simulation.h"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -59,12 +60,14 @@ namespace Marle {
     SceneLoadResult LoadSceneFromText(const std::string& text, const std::string& source, const ComponentRegistry& registry)
     {
         SceneLoadResult result;
+        result.TextHash = Fnv1a64(text.data(), text.size());
         auto problem = [&](const std::string& path, const std::string& message) { result.Problems.push_back({ source, path, message }); };
 
         // Parse, noting repeated keys: a plain parse keeps the last one silently, which hides mistakes.
         struct Frame { bool IsArray = false; size_t Index = 0; std::string Key; std::set<std::string> Keys; };
         std::vector<Frame> frames;
         std::set<size_t> repeatedInEntity;     // entities with a repeated key, to be skipped
+        bool repeatedInSceneComponents = false;   // the scene's own components have one: they are skipped
         bool repeatedElsewhere = false;
 
         auto pointer = [&] {
@@ -86,6 +89,7 @@ namespace Marle {
                             std::string path = pointer();
                             problem(path, "the key '" + f.Key + "' appears more than once; keys must be unique");
                             if (path.rfind("/entities/", 0) == 0) repeatedInEntity.insert(std::strtoull(path.c_str() + 10, nullptr, 10));
+                            else if (path.rfind("/components/", 0) == 0) repeatedInSceneComponents = true;
                             else repeatedElsewhere = true;
                         }
                         break;
@@ -113,7 +117,7 @@ namespace Marle {
             return result;
         }
 
-        const std::vector<std::string> topKeys = { "version", "name", "entities", "$schema" };
+        const std::vector<std::string> topKeys = { "version", "name", "components", "entities", "$schema" };
         for (auto it = root.begin(); it != root.end(); ++it) {
             if (std::find(topKeys.begin(), topKeys.end(), it.key()) != topKeys.end()) continue;
             std::string hint = detail::SuggestionFor(it.key(), topKeys);
@@ -139,6 +143,58 @@ namespace Marle {
 
         result.Scene = std::make_unique<Scene>(name);
         Scene& scene = *result.Scene;
+
+        // Entity references found while loading, resolved once every entity exists (so a reference to an
+        // entity later in the file is fine)
+        struct Reference { std::string Path, Name; };
+        std::vector<Reference> references;
+
+        // The components of an entity, or of the scene itself: `path` is where the components object is
+        auto loadComponents = [&](Entity entity, const Json& components, const std::string& path) {
+            for (auto it = components.begin(); it != components.end(); ++it) {
+                const std::string componentAt = path + "/" + it.key();
+                const ComponentInfo* info = registry.Find(it.key());
+
+                // An asset path that leaves the working directory is not loaded at all
+                bool unsafe = false;
+                if (info && it.value().is_object())
+                    for (const FieldInfo& field : info->Fields) {
+                        auto value = it.value().find(field.Name);
+                        if (!field.AssetPath || value == it.value().end() || !value->is_string() || value->get<std::string>().empty()) continue;
+                        std::string why = AssetPathProblem(value->get<std::string>());
+                        if (!why.empty()) { problem(componentAt + "/" + field.Name, why + "; the component is skipped"); unsafe = true; }
+                    }
+                if (unsafe) continue;
+
+                std::vector<ValidationError> errors = registry.Read(entity, it.key(), it.value());
+                for (size_t i = 0; i < errors.size(); i++)
+                    problem(componentAt + errors[i].Path, errors[i].Message + (i == 0 ? "; the component is skipped" : ""));
+                if (!errors.empty()) continue;
+
+                for (const FieldInfo& field : info->Fields) {
+                    auto value = it.value().find(field.Name);
+                    if (field.EntityReference && value != it.value().end() && !value->get<std::string>().empty())
+                        references.push_back({ componentAt + "/" + field.Name, value->get<std::string>() });
+                }
+
+                // A missing asset is reported, but the component loads so the entity still shows up
+                // (a missing image is drawn as the error checker)
+                for (const FieldInfo& field : info->Fields) {
+                    auto value = it.value().find(field.Name);
+                    if (!field.AssetPath || value == it.value().end() || value->get<std::string>().empty()) continue;
+                    std::error_code ec;
+                    if (!std::filesystem::is_regular_file(value->get<std::string>(), ec))
+                        problem(componentAt + "/" + field.Name, "the file '" + value->get<std::string>() + "' does not exist");
+                }
+            }
+        };
+
+        // The scene's own components
+        if (root.contains("components") && !repeatedInSceneComponents) {
+            if (!root["components"].is_object()) problem("/components", std::string("expected an object, got ") + detail::JsonTypeName(root["components"]));
+            else loadComponents(scene.GetSceneEntity(), root["components"], "/components");
+        }
+        scene.ResetRandom();   // start the scene's random numbers from the seed it just loaded
 
         if (!root.contains("entities")) { problem("", "missing required key 'entities'"); return result; }
         if (!root["entities"].is_array()) { problem("/entities", std::string("expected an array, got ") + detail::JsonTypeName(root["entities"])); return result; }
@@ -174,35 +230,18 @@ namespace Marle {
             const Json& components = entry["components"];
             if (!components.is_object()) { problem(at + "/components", std::string("expected an object, got ") + detail::JsonTypeName(components)); continue; }
 
-            for (auto it = components.begin(); it != components.end(); ++it) {
-                const std::string componentAt = at + "/components/" + it.key();
-                const ComponentInfo* info = registry.Find(it.key());
+            loadComponents(entity, components, at + "/components");
+        }
 
-                // An asset path that leaves the working directory is not loaded at all
-                bool unsafe = false;
-                if (info && it.value().is_object())
-                    for (const FieldInfo& field : info->Fields) {
-                        auto value = it.value().find(field.Name);
-                        if (!field.AssetPath || value == it.value().end() || !value->is_string() || value->get<std::string>().empty()) continue;
-                        std::string why = AssetPathProblem(value->get<std::string>());
-                        if (!why.empty()) { problem(componentAt + "/" + field.Name, why + "; the component is skipped"); unsafe = true; }
-                    }
-                if (unsafe) continue;
-
-                std::vector<ValidationError> errors = registry.Read(entity, it.key(), it.value());
-                for (size_t i = 0; i < errors.size(); i++)
-                    problem(componentAt + errors[i].Path, errors[i].Message + (i == 0 ? "; the component is skipped" : ""));
-                if (!errors.empty()) continue;
-
-                // A missing asset is reported, but the component loads so the entity still shows up
-                // (a missing image is drawn as the error checker)
-                for (const FieldInfo& field : info->Fields) {
-                    auto value = it.value().find(field.Name);
-                    if (!field.AssetPath || value == it.value().end() || value->get<std::string>().empty()) continue;
-                    std::error_code ec;
-                    if (!std::filesystem::is_regular_file(value->get<std::string>(), ec))
-                        problem(componentAt + "/" + field.Name, "the file '" + value->get<std::string>() + "' does not exist");
-                }
+        // References to entities: the component stays loaded, and behavior that uses it does nothing
+        // until the name is right
+        if (!references.empty()) {
+            std::vector<std::string> names;
+            for (const Entity& entity : scene.GetEntities()) names.push_back(entity.GetName());
+            for (const Reference& reference : references) {
+                if (scene.FindEntity(reference.Name)) continue;
+                std::string hint = detail::SuggestionFor(reference.Name, names);
+                problem(reference.Path, "no entity named '" + reference.Name + "' exists in the scene" + (hint.empty() ? "" : " (" + hint + ")") + "; the component still loads, but nothing uses the reference until it is fixed");
             }
         }
 

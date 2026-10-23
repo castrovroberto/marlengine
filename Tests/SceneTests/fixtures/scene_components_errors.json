@@ -1,0 +1,14 @@
+// Mistakes in the scene's own components. Each bad component is skipped, the rest loads.
+{
+  "version": 1,
+  "name": "Scene components",
+  "components": {
+    "Camera": { "zoom": 2 },
+    "Transfrom": { "position": [1, 2] },
+    "Tilemap": { "rows": ["ab", "a"] },
+    "SpriteRenderer": { "texture": "../outside.png" }
+  },
+  "entities": [
+    { "name": "a", "components": { "Camera": { "primary": true } } }
+  ]
+}

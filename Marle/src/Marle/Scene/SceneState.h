@@ -15,6 +15,7 @@ namespace detail {
         entt::registry Registry;
         std::unordered_map<std::string, entt::entity> ByName;
         std::vector<entt::entity> Order;    // creation order, for deterministic iteration and saving
+        entt::entity SceneEntity = entt::null;   // carries the scene's own components; not in ByName or Order
     };
 
     struct EntityName { std::string Value; };   // every entity has one, kept as a component

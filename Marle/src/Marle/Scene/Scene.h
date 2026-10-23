@@ -2,6 +2,7 @@
 
 #include "Marle/Core.h"
 #include "Entity.h"
+#include "RandomGenerator.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -27,6 +28,32 @@ namespace Marle {
             // an invalid Entity; the scene is unchanged.
             Entity CreateEntity(const std::string& name);
 
+            // The scene's own entity, which carries components that belong to the scene as a whole (ADR-0002),
+            // such as a random seed. It is not one of the scene's entities: it has no name to look up
+            // (GetName() gives "(scene)"), is not in GetEntities() or GetEntityCount(), is skipped by
+            // ForEach and cannot be destroyed.
+            Entity GetSceneEntity() const;
+
+            // The scene's random number generator (ADR-0002): the only source of random numbers a behavior
+            // may use. It starts from the seed in the scene's own Random component, or seed 1 if there is
+            // none, and loading a scene starts it there. It is runtime state: a saved scene restarts its
+            // sequence from the seed.
+            RandomGenerator& GetRandom() { return m_Random; }
+            const RandomGenerator& GetRandom() const { return m_Random; }
+
+            // Restarts the generator from the seed in the scene's own Random component (seed 1 if none)
+            void ResetRandom();
+
+            // The seed in the scene's own Random component, or 1 if it has none
+            int GetSeed() const;
+
+            // A behavior cannot reload a scene, so one that wants a restart asks (RestartOnKey does), and the
+            // host decides what restarting means (the Sandbox loads the scene from its file again). It is
+            // runtime state: not in a scene file and not in a checksum.
+            void RequestRestart() { m_RestartRequested = true; }
+            bool IsRestartRequested() const { return m_RestartRequested; }
+            void ClearRestartRequest() { m_RestartRequested = false; }
+
             // The entity with this name, or an invalid Entity.
             Entity FindEntity(const std::string& name) const;
 
@@ -40,13 +67,15 @@ namespace Marle {
             std::vector<Entity> GetEntities() const;
 
             // Calls fn(Entity, Components&...) for each entity that has all the listed components,
-            // in no particular order; use GetEntities() when order matters.
+            // in no particular order; use GetEntities() when order matters. The scene's own entity is not visited.
             template<typename... Components, typename Fn>
             void ForEach(Fn&& fn);
 
         private:
             std::string m_Name;
             std::shared_ptr<detail::SceneState> m_State;
+            RandomGenerator m_Random;
+            bool m_RestartRequested = false;
     };
 
     template<typename... Components, typename Fn>
@@ -54,7 +83,8 @@ namespace Marle {
     {
         auto view = m_State->Registry.template view<Components...>();
         for (auto handle : view)
-            fn(Entity(m_State, handle), view.template get<Components>(handle)...);
+            if (handle != m_State->SceneEntity)
+                fn(Entity(m_State, handle), view.template get<Components>(handle)...);
     }
 
 }

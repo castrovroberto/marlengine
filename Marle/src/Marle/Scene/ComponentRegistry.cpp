@@ -151,6 +151,21 @@ namespace Marle {
         return names;
     }
 
+    void RegisterBuiltinBehaviors(ComponentRegistry& registry);   // BuiltinBehaviors.cpp
+
+    bool ComponentRegistry::Remove(Entity entity, const std::string& component) const
+    {
+        for (const auto& registered : m_Components)
+            if (registered->Info.Name == component) return registered->RemoveFrom(entity);
+        return false;
+    }
+
+    void ComponentRegistry::RunBehaviors(Entity entity, BehaviorContext& context) const
+    {
+        for (const auto& component : m_Components)
+            if (component->Info.IsBehavior && component->Has(entity)) component->RunBehavior(entity, context);
+    }
+
     void RegisterBuiltinComponents(ComponentRegistry& registry)
     {
         registry.Register<Transform>("Transform", "Where an entity is, how it is turned and how big it is.")
@@ -185,6 +200,11 @@ namespace Marle {
                         errors.push_back({ "/rows/" + std::to_string(i), "this row has " + std::to_string(row.size()) + " tiles but the first row has " + std::to_string(map.Rows[0].size()) + "; every row must be the same length" });
                 }
             });
+
+        registry.Register<Random>("Random", "On the scene itself: where the scene's random numbers start, so the same seed gives the same sequence on every run. Nothing is ever seeded from the clock.")
+            .Field(&Random::Seed, "seed", "Any integer. The same seed always gives the same sequence of random numbers.");
+
+        RegisterBuiltinBehaviors(registry);
     }
 
 }

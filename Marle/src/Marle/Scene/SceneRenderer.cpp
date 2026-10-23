@@ -30,13 +30,29 @@ namespace Marle {
         if (m_Reported.insert(message).second) MRL_CORE_WARN("SceneRenderer: {}", message);
     }
 
-    void SceneRenderer::Render(const Scene& scene, float viewportWidth, float viewportHeight)
+    // The Transform to draw: the current one, or between the previous step's and the current one
+    static Transform Interpolated(Entity entity, const Transform& current, float alpha)
     {
+        const PreviousTransform* previous = entity.TryGet<PreviousTransform>();
+        if (!previous || alpha >= 1.0f) return current;
+
+        Transform drawn;
+        drawn.Position = glm::mix(previous->Position, current.Position, alpha);
+        drawn.Rotation = glm::mix(previous->Rotation, current.Rotation, alpha);
+        drawn.Scale = glm::mix(previous->Scale, current.Scale, alpha);
+        return drawn;
+    }
+
+    void SceneRenderer::Render(const Scene& scene, float viewportWidth, float viewportHeight, float alpha)
+    {
+        alpha = glm::clamp(alpha, 0.0f, 1.0f);
+
         glm::vec2 cameraPosition(0.0f);
         float cameraRotation = 0.0f, zoom = 1.0f;
         if (Entity camera = FindPrimaryCamera(scene)) {
-            cameraPosition = camera.Get<Transform>().Position;
-            cameraRotation = camera.Get<Transform>().Rotation;
+            const Transform view = Interpolated(camera, camera.Get<Transform>(), alpha);
+            cameraPosition = view.Position;
+            cameraRotation = view.Rotation;
             if (camera.Get<Camera>().Zoom > 0.0f) zoom = camera.Get<Camera>().Zoom;
         } else {
             ReportOnce("scene '" + scene.GetName() + "' has no primary camera (a Camera with primary true and a Transform); using one at the origin");
@@ -51,7 +67,9 @@ namespace Marle {
         Renderer2D::BeginBatch(camera);
 
         for (Entity entity : scene.GetEntities()) {
-            const Transform* transform = entity.TryGet<Transform>();
+            const Transform* current = entity.TryGet<Transform>();
+            const Transform drawn = current ? Interpolated(entity, *current, alpha) : Transform();
+            const Transform* transform = current ? &drawn : nullptr;
             const SpriteRenderer* sprite = entity.TryGet<SpriteRenderer>();
             const Tilemap* map = entity.TryGet<Tilemap>();
 

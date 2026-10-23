@@ -27,6 +27,17 @@ namespace Marle {
         std::unique_ptr<Marle::Scene> Scene;    // the new scene: only when it loaded with no problems at all
     };
 
+    // After a hot reload, keeps what the simulation had worked out (ADR-0002: state lives in the scene's
+    // components, so a plain reload would put everything back where the file starts it). `baseline` is the
+    // previous file as it was loaded, never run; `running` is the scene as it is now; `fresh` is the scene
+    // just loaded from the changed file, and is changed in place. For an entity (matched by name, the scene's
+    // own entity included) and a component that is in all three: if the file did not change that component,
+    // `fresh` takes the running value, and if it did, the new file wins. Entities and components that were
+    // added or removed in the file are as the file has them, and the position in the random sequence is
+    // carried over when the scene's seed was not changed. A PreviousTransform is not carried (it is runtime
+    // data that the next step records).
+    EXPORT void CarryOverState(const ComponentRegistry& registry, const Scene& baseline, const Scene& running, Scene& fresh);
+
     // Watches a scene file and reloads it when it changes, without a window or GL context.
     // Reloading is strict: a scene is only handed out when the file loads with no problems, so a
     // half-finished edit never replaces the scene that is running. The caller keeps its current scene
@@ -47,6 +58,9 @@ namespace Marle {
 
             const SceneReloadStatus& GetStatus() const { return m_Status; }
 
+            // The hash of the file text the scene handed out last was loaded from (SceneLoadResult::TextHash)
+            uint64_t GetSceneHash() const { return m_SceneHash; }
+
         private:
             struct Stamp {
                 bool Exists = false;
@@ -59,6 +73,7 @@ namespace Marle {
             const ComponentRegistry& m_Registry;
             Stamp m_Stamp;
             SceneReloadStatus m_Status;
+            uint64_t m_SceneHash = 0;
     };
 
 }

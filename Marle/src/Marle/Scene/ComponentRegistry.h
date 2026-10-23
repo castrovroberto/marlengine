@@ -2,8 +2,12 @@
 
 #include "Marle/Core.h"
 #include "Entity.h"
+#include "Marle/InputFrame.h"
+#include "RandomGenerator.h"
+#include "Scene.h"
 #include <nlohmann/json.hpp>
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
@@ -11,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <typeinfo>
 #include <vector>
@@ -38,13 +43,27 @@ namespace Marle {
         FieldType Type = FieldType::Float;
         bool Required = false;                  // must appear in the data; otherwise the default is used
         bool AssetPath = false;                 // a string naming a file, relative to the working directory
+        bool EntityReference = false;           // a string naming another entity in the scene; empty means none
         Json Default;                           // the value of a default-constructed component
         std::optional<double> Min, Max;         // applied to every number in the field
+        std::vector<std::string> OneOf;         // for a string: the only values allowed, empty means any string
+    };
+
+    // What a behavior is given each fixed step (ADR-0002). There is no clock here on purpose: time is
+    // the fixed step `Dt`, input is the step's frame, randomness is the scene's generator, so the same
+    // scene, seed and input always give the same result.
+    struct BehaviorContext {
+        Marle::Scene& Scene;
+        Entity Self;                    // the entity the behavior is on; the scene's own entity for a scene-level one
+        const InputFrame& Input;
+        RandomGenerator& Random;        // the scene's generator, the only source of random numbers
+        double Dt;                      // the fixed step in seconds
     };
 
     struct ComponentInfo {
         std::string Name;
         std::string Description;
+        bool IsBehavior = false;                // has an update function that runs every fixed step
         std::vector<FieldInfo> Fields;          // in declaration order
     };
 
@@ -172,10 +191,24 @@ namespace Marle {
         template<> struct FieldTraits<std::string> {
             static constexpr FieldType Type = FieldType::String;
             static Json ToJson(const std::string& v) { return v; }
-            static void Read(const Json& j, std::string& out, const FieldInfo&, const std::string& path, std::vector<ValidationError>& errors)
+            static void Read(const Json& j, std::string& out, const FieldInfo& info, const std::string& path, std::vector<ValidationError>& errors)
             {
-                if (!j.is_string()) errors.push_back({ path, std::string("expected a string, got ") + JsonTypeName(j) });
-                else out = j.get<std::string>();
+                if (!j.is_string()) {
+                    errors.push_back({ path, std::string("expected a string, got ") + JsonTypeName(j) });
+                    return;
+                }
+                const std::string& value = j.get_ref<const std::string&>();
+                if (!info.OneOf.empty() && std::find(info.OneOf.begin(), info.OneOf.end(), value) == info.OneOf.end()) {
+                    std::string hint = SuggestionFor(value, info.OneOf);
+                    std::string allowed;
+                    if (info.OneOf.size() <= 12)
+                        for (size_t i = 0; i < info.OneOf.size(); i++) allowed += (i ? ", '" : "'") + info.OneOf[i] + "'";
+                    else
+                        allowed = "the " + std::to_string(info.OneOf.size()) + " allowed values (the schema lists them)";   // too many to print
+                    errors.push_back({ path, "expected one of " + allowed + ", got '" + value + "'" + (hint.empty() ? "" : " (" + hint + ")") });
+                    return;
+                }
+                out = value;
             }
         };
 
@@ -239,6 +272,8 @@ namespace Marle {
             virtual bool Has(const Entity& entity) const = 0;
             virtual void Read(Entity& entity, const Json& data, std::vector<ValidationError>& errors) const = 0;
             virtual Json Write(const Entity& entity, bool skipDefaults) const = 0;
+            virtual void RunBehavior(Entity, BehaviorContext&) const {}
+            virtual bool RemoveFrom(Entity entity) const = 0;
         };
 
         template<typename T>
@@ -249,6 +284,7 @@ namespace Marle {
             };
             std::vector<FieldOps> Ops;     // parallel to Info.Fields
             std::function<void(const T&, std::vector<ValidationError>&)> Validator;   // rules that span fields
+            std::function<void(T&, BehaviorContext&)> BehaviorFn;
 
             TypedComponentImpl(std::string name, std::string description)
             {
@@ -303,6 +339,14 @@ namespace Marle {
                 entity.Add<T>(std::move(value));
             }
 
+            bool RemoveFrom(Entity entity) const override { return entity.Remove<T>(); }
+
+            void RunBehavior(Entity entity, BehaviorContext& context) const override
+            {
+                if (BehaviorFn)
+                    if (T* component = entity.TryGet<T>()) BehaviorFn(*component, context);
+            }
+
             Json Write(const Entity& entity, bool skipDefaults) const override
             {
                 const T* component = entity.TryGet<T>();
@@ -334,12 +378,53 @@ namespace Marle {
 
             ComponentBuilder& Required() { if (m_Last) m_Last->Required = true; return *this; }
 
+            // Limits the last field, which must be a string, to these values. Reading anything else is an
+            // error that lists them and suggests the closest; the schema gets an enum. The list must be
+            // non-empty and without repeats, and must contain the field's default (the value in a
+            // default-constructed component); otherwise the problem is logged and the field stays free.
+            ComponentBuilder& OneOf(std::vector<std::string> values)
+            {
+                if (!m_Last) return *this;
+                if (m_Last->Type != FieldType::String) {
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is not a string, so it cannot be limited to a set of values");
+                } else if (values.empty()) {
+                    detail::ReportRegistryError("field '" + m_Last->Name + "': OneOf needs at least one value");
+                } else if (std::set<std::string>(values.begin(), values.end()).size() != values.size()) {
+                    detail::ReportRegistryError("field '" + m_Last->Name + "': OneOf has a value that is listed twice");
+                } else if (m_Last->EntityReference) {
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is an entity reference, so it cannot be limited to a set of values");
+                } else if (std::find(values.begin(), values.end(), m_Last->Default.get<std::string>()) == values.end()) {
+                    detail::ReportRegistryError("field '" + m_Last->Name + "': its default '" + m_Last->Default.get<std::string>() + "' is not one of the allowed values");
+                } else {
+                    m_Last->OneOf = std::move(values);
+                }
+                return *this;
+            }
+
+            // Marks the last field, which must be a string, as the name of another entity in the scene
+            // (empty means none). After every entity is loaded, the scene loader reports a name that
+            // matches no entity, with the path of the reference; the component still loads. A field
+            // cannot also be an asset path or limited to a set of values.
+            ComponentBuilder& EntityReference()
+            {
+                if (!m_Last) return *this;
+                if (m_Last->Type != FieldType::String)
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is not a string, so it cannot be an entity reference");
+                else if (m_Last->AssetPath || !m_Last->OneOf.empty())
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is already an asset path or limited to a set of values, so it cannot be an entity reference");
+                else
+                    m_Last->EntityReference = true;
+                return *this;
+            }
+
             // Marks the last field, which must be a string, as the path of an asset file. The scene
             // loader checks that it stays inside the working directory and that the file exists.
             ComponentBuilder& AssetPath()
             {
                 if (m_Last && m_Last->Type != FieldType::String)
                     detail::ReportRegistryError("field '" + m_Last->Name + "' is not a string, so it cannot be an asset path");
+                else if (m_Last && m_Last->EntityReference)
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is an entity reference, so it cannot also be an asset path");
                 else if (m_Last)
                     m_Last->AssetPath = true;
                 return *this;
@@ -347,6 +432,20 @@ namespace Marle {
             ComponentBuilder& Min(double value) { if (m_Last) m_Last->Min = value; return *this; }
             ComponentBuilder& Max(double value) { if (m_Last) m_Last->Max = value; return *this; }
             ComponentBuilder& Range(double min, double max) { return Min(min).Max(max); }
+
+            // Makes this component a behavior: `update` runs for it every fixed step (Simulation::Step), with
+            // the component and a BehaviorContext. Scene-level components run first, then entities in the
+            // order of the file, and within an entity behaviors in registration order, so something that
+            // follows another entity belongs after it in the file. An update may change components of any
+            // entity but must not add or remove components or create or destroy entities; it must use only
+            // what the context gives it (no clock, no unseeded randomness, no polling Input), which is what
+            // keeps a run repeatable. Loading, writing, validating and the schema need nothing more.
+            ComponentBuilder& Behavior(std::function<void(T&, BehaviorContext&)> update)
+            {
+                m_Impl->BehaviorFn = std::move(update);
+                m_Impl->Info.IsBehavior = (bool)m_Impl->BehaviorFn;
+                return *this;
+            }
 
             // A check for rules that span fields, such as rows that must be the same length. It runs only
             // when every field was read without problems, and reports problems with paths inside the
@@ -395,13 +494,21 @@ namespace Marle {
             // The names of the components the entity has, in registration order
             std::vector<std::string> GetComponentNames(const Entity& entity) const;
 
+            // Runs the entity's behavior components, in registration order
+            void RunBehaviors(Entity entity, BehaviorContext& context) const;
+
+            // Takes the named component off the entity; true if it had it
+            bool Remove(Entity entity, const std::string& component) const;
+
         private:
             bool Add(const std::shared_ptr<detail::ComponentImpl>& impl);
 
             std::vector<std::shared_ptr<detail::ComponentImpl>> m_Components;
     };
 
-    // Registers Transform, SpriteRenderer, Camera and Tilemap.
+    // Registers Transform, SpriteRenderer, Camera, Tilemap and Random, then the built-in behaviors:
+    // KeyboardMove, KeyboardRotate, WheelZoom, Follow, Spin, Orbit, Wander, RestartOnKey (for the scene
+    // itself) and, last so that it always runs last on an entity, ClampPosition.
     EXPORT void RegisterBuiltinComponents(ComponentRegistry& registry);
 
     template<typename T>

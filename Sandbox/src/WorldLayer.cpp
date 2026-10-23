@@ -1,12 +1,10 @@
 #include "WorldLayer.h"
-#include <cmath>
 #include <imgui.h>
+#include <fstream>
+#include <sstream>
 
 static constexpr const char* WorldFile = "Assets/Scenes/world.json";
-static constexpr float WalkSpeed = 300.0f;      // world units per second
-static constexpr float CameraTurnSpeed = 1.0f;  // radians per second
-static constexpr float SatelliteDistance = 44.0f;
-static constexpr float HalfPi = 1.5707963f;
+static constexpr int StepsPerSecond = 60;   // the Application's fixed step is 1/60 s
 
 WorldLayer::WorldLayer(Marle::Application& app)
     : Layer("World"), m_App(app)
@@ -24,28 +22,11 @@ void WorldLayer::LoadWorld()
         MRL_ERROR("{}", problem.ToString());
     m_Scene = result.Scene ? std::move(result.Scene) : std::make_unique<Marle::Scene>("Empty");
 
-    BindEntities();
-    Reset();
+    m_Baseline = Marle::LoadScene(WorldFile, m_Registry).Scene;
+    if (!m_Baseline) m_Baseline = std::make_unique<Marle::Scene>("Empty");
 }
 
-void WorldLayer::BindEntities()
-{
-    m_CameraEntity = m_Scene->FindEntity("camera");
-    m_WorldEntity = m_Scene->FindEntity("world");
-    m_PlayerEntity = m_Scene->FindEntity("player");
-    m_SatelliteEntity = m_Scene->FindEntity("satellite");
-    m_Spinners.clear();
-    for (int i = 0; i < 4; i++)
-        m_Spinners.push_back(m_Scene->FindEntity("spinner_" + std::to_string(i)));
-
-    if (!m_PlayerEntity) MRL_ERROR("{} has no entity named 'player'", WorldFile);
-
-    m_PlayerStart = m_PlayerEntity.Has<Marle::Transform>() ? m_PlayerEntity.Get<Marle::Transform>().Position : glm::vec2(0.0f);
-    m_CameraRotationStart = m_CameraEntity.Has<Marle::Transform>() ? m_CameraEntity.Get<Marle::Transform>().Rotation : 0.0f;
-    m_ZoomStart = m_CameraEntity.Has<Marle::Camera>() ? m_CameraEntity.Get<Marle::Camera>().Zoom : 1.0f;
-}
-
-void WorldLayer::PollScene(bool force)
+void WorldLayer::PollScene(bool force, bool carry, const char* what)
 {
     Marle::SceneReload reload = m_Reloader->Poll(force);
     if (!reload.Attempted) return;
@@ -57,28 +38,142 @@ void WorldLayer::PollScene(bool force)
         return;
     }
 
-    // Swap the scene, keeping what can be kept: the player, camera rotation, zoom and spin are
-    // simulation state and carry on; R still goes back to where the new file starts things
-    const float zoom = GetZoom();
+    // What the simulation had worked out (where the player is, how far the camera has turned and zoomed,
+    // where the orbit has got to) stays, except for anything the file changed
+    if (carry)
+        Marle::CarryOverState(m_Registry, *m_Baseline, *m_Scene, *reload.Scene);
     m_Scene = std::move(reload.Scene);
-    BindEntities();
-    if (Marle::Camera* camera = m_CameraEntity.TryGet<Marle::Camera>())
-        camera->Zoom = zoom;
-    MRL_INFO("Reloaded {} ({} entities)", WorldFile, m_Scene->GetEntityCount());
+
+    // A recording or a replay follows from the file it was made on, started fresh: a reload that carries state
+    // over, or of a file that has changed, ends it. (A restart is a fresh load of the same file, and is fine.)
+    if (m_Recorder.IsRecording() && (carry || m_Reloader->GetSceneHash() != m_Recorder.GetSceneHash())) {
+        m_Recorder.Cancel();
+        Note(false, "Recording stopped and dropped: the scene was reloaded, so the run no longer follows from the file it started on");
+    }
+    if (m_Replay && (carry || m_Reloader->GetSceneHash() != m_Replay->GetRecording().SceneHash)) {
+        m_Replay.reset();
+        Note(false, "Replay stopped: the scene was reloaded, so it can no longer reproduce the run");
+        if (m_ExitWhenDone) m_App.Close();
+    }
+
+    m_Baseline = Marle::LoadScene(WorldFile, m_Registry).Scene;   // the file as it is now, never run
+    if (!m_Baseline) m_Baseline = std::make_unique<Marle::Scene>("Empty");
+    MRL_INFO("{} {} ({} entities)", what, WorldFile, m_Scene->GetEntityCount());
+}
+
+void WorldLayer::Note(bool good, const std::string& text)
+{
+    m_Notice = text;
+    m_NoticeGood = good;
+    if (good) MRL_INFO("{}", text); else MRL_ERROR("{}", text);
+}
+
+void WorldLayer::StartRecording(const std::string& file, bool restartFirst)
+{
+    if (m_Recorder.IsRecording()) return;
+    if (m_Replay && restartFirst) {
+        Note(false, "Cannot start a recording while a replay is playing");
+        return;
+    }
+    m_RecordFile = file;
+
+    // A recording starts from the scene as the file has it, so the world starts over first
+    if (restartFirst) {
+        RestartWorld();
+        if (m_Reloader->GetStatus().KeptPrevious) {
+            Note(false, "Cannot record: the scene file has problems, so it could not be restarted from the file");
+            return;
+        }
+    }
+    m_Recorder.Start(m_Scene->GetName(), m_Reloader->GetSceneHash(), m_Scene->GetSeed(), StepsPerSecond);
+    Note(true, "Recording to " + m_RecordFile + (restartFirst ? " (the scene was restarted)" : ""));
+}
+
+void WorldLayer::StopRecording(const char* why)
+{
+    if (!m_Recorder.IsRecording()) return;
+
+    const uint64_t checksum = Marle::Simulation::Checksum(m_Registry, *m_Scene);
+    Marle::InputRecording recording = m_Recorder.Finish(checksum);
+    Marle::RecordingWriteResult written = Marle::WriteRecording(recording);
+    if (!written.Ok()) {
+        for (const std::string& problem : written.Problems) MRL_ERROR("{}", problem);
+        Note(false, "The recording could not be written");
+        return;
+    }
+
+    std::string error;
+    if (!Marle::WriteTextFile(m_RecordFile, written.Text, &error))
+        Note(false, "The recording could not be saved: " + error);
+    else
+        Note(true, "Saved " + m_RecordFile + " (" + std::to_string(recording.GetStepCount()) + " steps, checksum " + Marle::Simulation::ChecksumText(checksum) + "; " + why + ")");
+}
+
+void WorldLayer::StartReplay(const std::string& file, bool exitWhenDone)
+{
+    std::ifstream in(file, std::ios::binary);
+    if (!in) {
+        Note(false, "Replay refused: cannot open " + file);
+        return;
+    }
+    std::stringstream text;
+    text << in.rdbuf();
+
+    Marle::RecordingReadResult read = Marle::ReadRecording(text.str());
+    if (!read.Ok()) {
+        for (const std::string& problem : read.Problems) MRL_ERROR("{}: {}", file, problem);
+        Note(false, "Replay refused: " + file + " has " + std::to_string(read.Problems.size()) + " problem(s)");
+        return;
+    }
+    std::string mismatch = Marle::RecordingMismatch(read.Recording, m_Scene->GetName(), m_Reloader->GetSceneHash(), m_Scene->GetSeed(), StepsPerSecond);
+    if (!mismatch.empty()) {
+        Note(false, "Replay refused: " + mismatch);
+        return;
+    }
+
+    m_Replay = std::make_unique<Marle::InputReplay>(std::move(read.Recording));
+    m_ExitWhenDone = exitWhenDone;
+    Note(true, "Replaying " + file + " (" + std::to_string(m_Replay->GetRecording().GetStepCount()) + " steps)");
+}
+
+void WorldLayer::FinishReplay()
+{
+    const Marle::InputRecording& recording = m_Replay->GetRecording();
+    const uint64_t checksum = Marle::Simulation::Checksum(m_Registry, *m_Scene);
+    if (!recording.HasChecksum)
+        Note(true, "Replay finished (the recording has no checksum to compare with; this run ended at " + Marle::Simulation::ChecksumText(checksum) + ")");
+    else if (checksum == recording.Checksum)
+        Note(true, "Replay finished: the checksum matches (" + Marle::Simulation::ChecksumText(checksum) + "), the run was reproduced exactly");
+    else
+        Note(false, "Replay finished: the checksum does NOT match (recorded " + Marle::Simulation::ChecksumText(recording.Checksum) + ", this run " + Marle::Simulation::ChecksumText(checksum) + ")");
+
+    StopRecording("the replay ended");
+    m_Replay.reset();
+    if (m_ExitWhenDone) m_App.Close();
+}
+
+void WorldLayer::RestartWorld()
+{
+    m_Scene->ClearRestartRequest();   // so a refused restart (a file with problems) is not asked again every step
+    PollScene(true, false, "Restarted");
 }
 
 float WorldLayer::GetZoom() const
 {
-    const Marle::Camera* camera = m_CameraEntity.TryGet<Marle::Camera>();
+    const Marle::Camera* camera = m_Scene->FindEntity("camera").TryGet<Marle::Camera>();
     return camera ? camera->Zoom : 1.0f;
 }
 
-void WorldLayer::Reset()
+float WorldLayer::GetCameraRotation() const
 {
-    m_Player = m_PlayerPrev = m_PlayerStart;
-    m_CameraRotation = m_CameraRotationStart;
-    if (Marle::Camera* camera = m_CameraEntity.TryGet<Marle::Camera>())
-        camera->Zoom = m_ZoomStart;
+    const Marle::Transform* camera = m_Scene->FindEntity("camera").TryGet<Marle::Transform>();
+    return camera ? camera->Rotation : 0.0f;
+}
+
+glm::vec2 WorldLayer::GetPlayerPosition() const
+{
+    const Marle::Transform* player = m_Scene->FindEntity("player").TryGet<Marle::Transform>();
+    return player ? player->Position : glm::vec2(0.0f);
 }
 
 void WorldLayer::OnAttach()
@@ -91,6 +186,7 @@ void WorldLayer::OnDetach()
 {
     // The renderer holds the scene's textures, and the framebuffer a GL object: release them while
     // the context is still alive.
+    StopRecording("the game was closed");
     m_Viewport.reset();
     m_Renderer.reset();
     m_Reloader.reset();
@@ -98,59 +194,26 @@ void WorldLayer::OnDetach()
 
 void WorldLayer::OnUpdate(double dt)
 {
-    using Marle::Input;
-    namespace Key = Marle::Key;
-
     if (--m_ReloadCountdown <= 0) {   // about six times a second
         m_ReloadCountdown = 10;
         PollScene();
     }
 
-    glm::vec2 move(0.0f);
-    if (Input::IsKeyPressed(Key::W) || Input::IsKeyPressed(Key::Up))    move.y += 1.0f;
-    if (Input::IsKeyPressed(Key::S) || Input::IsKeyPressed(Key::Down))  move.y -= 1.0f;
-    if (Input::IsKeyPressed(Key::D) || Input::IsKeyPressed(Key::Right)) move.x += 1.0f;
-    if (Input::IsKeyPressed(Key::A) || Input::IsKeyPressed(Key::Left))  move.x -= 1.0f;
+    if (m_Recorder.IsRecording())
+        m_Recorder.Record(m_App.GetInputFrame());
 
-    if (Input::IsKeyPressed(Key::Q)) m_CameraRotation += CameraTurnSpeed * (float)dt;
-    if (Input::IsKeyPressed(Key::E)) m_CameraRotation -= CameraTurnSpeed * (float)dt;
+    // Everything that moves is a behavior in the scene, run with this step's input
+    Marle::Simulation::Step(m_Registry, *m_Scene, m_App.GetInputFrame(), dt);
 
-    m_PlayerPrev = m_Player;
-    if (move != glm::vec2(0.0f)) {
-        // Movement is relative to the camera: W is always "up the screen".
-        float c = cosf(m_CameraRotation), s = sinf(m_CameraRotation);
-        glm::vec2 dir = glm::normalize(move);
-        dir = { dir.x * c - dir.y * s, dir.x * s + dir.y * c };
+    if (m_Scene->IsRestartRequested())
+        RestartWorld();
 
-        float speed = WalkSpeed * (Input::IsKeyPressed(Key::LeftShift) ? 2.0f : 1.0f);
-        m_Player += dir * speed * (float)dt;
-    }
-
-    // Stay inside the map's border tiles
-    const Marle::Tilemap* map = m_WorldEntity.TryGet<Marle::Tilemap>();
-    const Marle::Transform* mapTransform = m_WorldEntity.TryGet<Marle::Transform>();
-    if (map && !map->Rows.empty()) {
-        const glm::vec2 origin = mapTransform ? mapTransform->Position : glm::vec2(0.0f);
-        const glm::vec2 tile = map->TileSize * (mapTransform ? mapTransform->Scale : glm::vec2(1.0f));
-        const Marle::Transform* player = m_PlayerEntity.TryGet<Marle::Transform>();
-        const float margin = tile.x + (player ? player->Scale.x : 0.0f) * 0.5f;
-        const glm::vec2 size((float)map->Rows[0].size() * tile.x, (float)map->Rows.size() * tile.y);
-        m_Player.x = glm::clamp(m_Player.x, origin.x + margin, origin.x + size.x - margin);
-        m_Player.y = glm::clamp(m_Player.y, origin.y + margin, origin.y + size.y - margin);
-    }
-
-    m_SpinPrev = m_Spin;
-    m_Spin += 2.0f * (float)dt;
+    if (m_Replay && m_Replay->IsFinished())
+        FinishReplay();
 }
 
 void WorldLayer::OnRender(double alpha)
 {
-    using Marle::Input;
-
-    float a = (float)alpha;
-    glm::vec2 player = glm::mix(m_PlayerPrev, m_Player, a);
-    float spin = glm::mix(m_SpinPrev, m_Spin, a);
-
     // Render into the viewport panel's framebuffer when the panel was on screen last frame
     bool toPanel = m_PanelVisible;
     m_PanelVisible = false;   // OnImGuiRender sets it again if the panel is still on screen
@@ -169,24 +232,8 @@ void WorldLayer::OnRender(double alpha)
         }
     }
 
-    // The scene's Transforms follow the simulation, interpolated between fixed steps
-    if (Marle::Transform* camera = m_CameraEntity.TryGet<Marle::Transform>()) {
-        camera->Position = player;
-        camera->Rotation = m_CameraRotation;
-    }
-    if (Marle::Transform* transform = m_PlayerEntity.TryGet<Marle::Transform>())
-        transform->Position = player;
-    if (Marle::SpriteRenderer* sprite = m_PlayerEntity.TryGet<Marle::SpriteRenderer>())
-        sprite->Tint = Input::IsKeyPressed(Marle::Key::LeftShift) ? glm::vec4(1.0f, 0.65f, 0.3f, 1.0f) : glm::vec4(1.0f);   // running = orange
-    if (Marle::Transform* satellite = m_SatelliteEntity.TryGet<Marle::Transform>()) {
-        satellite->Position = player + SatelliteDistance * glm::vec2(cosf(spin), sinf(spin));
-        satellite->Rotation = spin * 3.0f;
-    }
-    for (size_t i = 0; i < m_Spinners.size(); i++)
-        if (Marle::Transform* spinner = m_Spinners[i].TryGet<Marle::Transform>())
-            spinner->Rotation = spin * (i % 2 ? 1.0f : -1.0f) + (float)i * HalfPi;
-
-    m_Renderer->Render(*m_Scene, target.x, target.y);
+    // Drawn between the previous and the current fixed step, so motion is smooth whatever the frame rate
+    m_Renderer->Render(*m_Scene, target.x, target.y, (float)alpha);
 
     if (toPanel)
         m_Viewport->Unbind();
@@ -222,6 +269,13 @@ void WorldLayer::DrawScenePanel()
         if (status.Failures > 0) ImGui::TextDisabled("%u reload%s refused so far", status.Failures, status.Failures == 1 ? "" : "s");
         if (ImGui::Button("Reload now")) PollScene(true);
 
+        if (m_Recorder.IsRecording())
+            coloredText(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), ("Recording: " + std::to_string(m_Recorder.GetStepCount()) + " steps (F5 stops)").c_str());
+        if (m_Replay)
+            coloredText(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), ("Replaying: " + std::to_string(m_Replay->GetStep()) + " / " + std::to_string(m_Replay->GetRecording().GetStepCount()) + " steps").c_str());
+        if (!m_Notice.empty())
+            coloredText(m_NoticeGood ? ImVec4(0.7f, 0.9f, 0.7f, 1.0f) : ImVec4(1.0f, 0.6f, 0.4f, 1.0f), m_Notice.c_str());
+
         if (!status.Problems.empty()) {
             ImGui::SeparatorText("Problems");
             ImGui::BeginChild("problems", ImVec2(width, 190.0f), ImGuiChildFlags_Borders);
@@ -233,7 +287,7 @@ void WorldLayer::DrawScenePanel()
             ImGui::PopTextWrapPos();
             ImGui::EndChild();
         }
-        ImGui::TextDisabled("F3 toggles this panel");
+        ImGui::TextDisabled("F3 toggles this panel, F5 records");
         ImGui::PopTextWrapPos();
     }
     ImGui::End();
@@ -269,24 +323,20 @@ void WorldLayer::OnImGuiRender()
 
 void WorldLayer::OnEvent(Marle::Event& e)
 {
-    if (e.GetEventType() == Marle::EventType::MouseScrolled) {
-        auto& scroll = static_cast<Marle::MouseScrolledEvent&>(e);
-        if (Marle::Camera* camera = m_CameraEntity.TryGet<Marle::Camera>())
-            camera->Zoom = glm::clamp(camera->Zoom * powf(1.1f, scroll.GetYOffset()), 0.25f, 4.0f);
+    if (e.GetEventType() != Marle::EventType::KeyPressed) return;
+
+    auto& key = static_cast<Marle::KeyPressedEvent&>(e);
+    if (key.GetKeyCode() == Marle::Key::F2 && key.GetRepeatCount() == 0) {
+        m_ShowPanel = !m_ShowPanel;
+        e.SetHandled();
     }
-    else if (e.GetEventType() == Marle::EventType::KeyPressed) {
-        auto& key = static_cast<Marle::KeyPressedEvent&>(e);
-        if (key.GetKeyCode() == Marle::Key::R && key.GetRepeatCount() == 0) {
-            Reset();
-            e.SetHandled();
-        }
-        else if (key.GetKeyCode() == Marle::Key::F2 && key.GetRepeatCount() == 0) {
-            m_ShowPanel = !m_ShowPanel;
-            e.SetHandled();
-        }
-        else if (key.GetKeyCode() == Marle::Key::F3 && key.GetRepeatCount() == 0) {
-            m_ShowScenePanel = !m_ShowScenePanel;
-            e.SetHandled();
-        }
+    else if (key.GetKeyCode() == Marle::Key::F3 && key.GetRepeatCount() == 0) {
+        m_ShowScenePanel = !m_ShowScenePanel;
+        e.SetHandled();
+    }
+    else if (key.GetKeyCode() == Marle::Key::F5 && key.GetRepeatCount() == 0) {
+        if (m_Recorder.IsRecording()) StopRecording("stopped");
+        else StartRecording(m_RecordFile, true);
+        e.SetHandled();
     }
 }

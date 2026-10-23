@@ -28,8 +28,11 @@ namespace Marle {
             SceneRenderer& operator=(const SceneRenderer&) = delete;
 
             // Draws the scene as one frame batch into the current framebuffer. The viewport size is
-            // in pixels; the camera shows that many world units at zoom 1.
-            void Render(const Scene& scene, float viewportWidth, float viewportHeight);
+            // in pixels; the camera shows that many world units at zoom 1. `alpha` (0 to 1) says how
+            // far the frame is between the previous simulation step and the current one: an entity
+            // with a PreviousTransform (recorded by Simulation::Step) is drawn that far from where it
+            // was toward where it is, camera included. 1, the default, draws the current state.
+            void Render(const Scene& scene, float viewportWidth, float viewportHeight, float alpha = 1.0f);
 
             static Entity FindPrimaryCamera(const Scene& scene);
 

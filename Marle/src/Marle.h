@@ -15,6 +15,7 @@
 
 // For use by Marle applications
 #include "Marle/Application.h"
+#include "Marle/CommandLine.h"
 #include "Marle/Log.h"
 #include "Marle/Window.h"
 #include "Marle/Layer.h"
@@ -31,6 +32,8 @@
 #include "Marle/Scene/SceneTool.h"
 #include "Marle/Scene/SceneRenderer.h"
 #include "Marle/Scene/SceneReloader.h"
+#include "Marle/Scene/Simulation.h"
+#include "Marle/Scene/InputRecording.h"
 
 // Events
 #include "Marle/Events/Event.h"
@@ -42,6 +45,8 @@
 #include "Marle/Core/KeyCodes.h"
 #include "Marle/Core/MouseCodes.h"
 #include "Marle/Input.h"
+#include "Marle/InputFrame.h"
+#include "Marle/Core/KeyNames.h"
 
 // Renderer
 #include "Marle/Renderer/OrthographicCamera.h"

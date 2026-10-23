@@ -23,6 +23,55 @@
       "minLength": 1,
       "description": "The scene's name."
     },
+    "components": {
+      "type": "object",
+      "description": "Components of the scene itself (such as its random seed), keyed by component name. Same rules as an entity's components.",
+      "additionalProperties": false,
+      "properties": {
+        "Transform": {
+          "$ref": "#/definitions/component_Transform"
+        },
+        "SpriteRenderer": {
+          "$ref": "#/definitions/component_SpriteRenderer"
+        },
+        "Camera": {
+          "$ref": "#/definitions/component_Camera"
+        },
+        "Tilemap": {
+          "$ref": "#/definitions/component_Tilemap"
+        },
+        "Random": {
+          "$ref": "#/definitions/component_Random"
+        },
+        "KeyboardMove": {
+          "$ref": "#/definitions/component_KeyboardMove"
+        },
+        "KeyboardRotate": {
+          "$ref": "#/definitions/component_KeyboardRotate"
+        },
+        "WheelZoom": {
+          "$ref": "#/definitions/component_WheelZoom"
+        },
+        "Follow": {
+          "$ref": "#/definitions/component_Follow"
+        },
+        "Spin": {
+          "$ref": "#/definitions/component_Spin"
+        },
+        "Orbit": {
+          "$ref": "#/definitions/component_Orbit"
+        },
+        "Wander": {
+          "$ref": "#/definitions/component_Wander"
+        },
+        "RestartOnKey": {
+          "$ref": "#/definitions/component_RestartOnKey"
+        },
+        "ClampPosition": {
+          "$ref": "#/definitions/component_ClampPosition"
+        }
+      }
+    },
     "entities": {
       "type": "array",
       "description": "The entities, in creation order.",
@@ -63,6 +112,36 @@
             },
             "Tilemap": {
               "$ref": "#/definitions/component_Tilemap"
+            },
+            "Random": {
+              "$ref": "#/definitions/component_Random"
+            },
+            "KeyboardMove": {
+              "$ref": "#/definitions/component_KeyboardMove"
+            },
+            "KeyboardRotate": {
+              "$ref": "#/definitions/component_KeyboardRotate"
+            },
+            "WheelZoom": {
+              "$ref": "#/definitions/component_WheelZoom"
+            },
+            "Follow": {
+              "$ref": "#/definitions/component_Follow"
+            },
+            "Spin": {
+              "$ref": "#/definitions/component_Spin"
+            },
+            "Orbit": {
+              "$ref": "#/definitions/component_Orbit"
+            },
+            "Wander": {
+              "$ref": "#/definitions/component_Wander"
+            },
+            "RestartOnKey": {
+              "$ref": "#/definitions/component_RestartOnKey"
+            },
+            "ClampPosition": {
+              "$ref": "#/definitions/component_ClampPosition"
             }
           }
         }
@@ -229,6 +308,718 @@
           },
           "description": "The tiles, one string per row, listed top to bottom as the map looks. Each character is a sprite sheet cell counted from the sheet's bottom-left cell, left to right then up, in base 36 (0-9 then a-z), or '.' for no tile. Every row must be the same length.",
           "default": []
+        }
+      }
+    },
+    "component_Random": {
+      "type": "object",
+      "description": "On the scene itself: where the scene's random numbers start, so the same seed gives the same sequence on every run. Nothing is ever seeded from the clock.",
+      "additionalProperties": false,
+      "properties": {
+        "seed": {
+          "type": "integer",
+          "description": "Any integer. The same seed always gives the same sequence of random numbers.",
+          "default": 1
+        }
+      }
+    },
+    "component_KeyboardMove": {
+      "type": "object",
+      "description": "Behavior: moves the entity's Transform with the keyboard (W A S D and/or the arrow keys), faster while the run key is held. Diagonal movement is as fast as straight. Put ClampPosition after it on the same entity to keep it inside an area. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "speed": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 100000.0,
+          "description": "World units per second.",
+          "default": 100.0
+        },
+        "runMultiplier": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 100.0,
+          "description": "How many times faster while the run key is held.",
+          "default": 2.0
+        },
+        "runKey": {
+          "type": "string",
+          "enum": [
+            "",
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J",
+            "K",
+            "L",
+            "M",
+            "N",
+            "O",
+            "P",
+            "Q",
+            "R",
+            "S",
+            "T",
+            "U",
+            "V",
+            "W",
+            "X",
+            "Y",
+            "Z",
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "Space",
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "Enter",
+            "Escape",
+            "Tab",
+            "Backspace",
+            "Insert",
+            "Delete",
+            "F1",
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6",
+            "F7",
+            "F8",
+            "F9",
+            "F10",
+            "F11",
+            "F12",
+            "LeftShift",
+            "RightShift",
+            "LeftControl",
+            "RightControl",
+            "LeftAlt",
+            "RightAlt",
+            "LeftSuper",
+            "RightSuper",
+            "NumPad0",
+            "NumPad1",
+            "NumPad2",
+            "NumPad3",
+            "NumPad4",
+            "NumPad5",
+            "NumPad6",
+            "NumPad7",
+            "NumPad8",
+            "NumPad9",
+            "NumPadDecimal",
+            "NumPadDivide",
+            "NumPadMultiply",
+            "NumPadSubtract",
+            "NumPadAdd",
+            "NumPadEnter",
+            "NumPadEqual",
+            "Apostrophe",
+            "Comma",
+            "Minus",
+            "Period",
+            "Slash",
+            "Semicolon",
+            "Equal",
+            "LeftBracket",
+            "Backslash",
+            "RightBracket",
+            "GraveAccent",
+            "CapsLock",
+            "ScrollLock",
+            "NumLock",
+            "PrintScreen",
+            "Pause",
+            "Menu"
+          ],
+          "description": "The key that runs; empty for no run key. One of 102 values, listed in enum.",
+          "default": "LeftShift"
+        },
+        "keys": {
+          "type": "string",
+          "enum": [
+            "wasd",
+            "arrows",
+            "both"
+          ],
+          "description": "Which keys move it: wasd, arrows or both. One of: wasd, arrows, both.",
+          "default": "both"
+        },
+        "relativeTo": {
+          "type": "string",
+          "description": "An entity (usually the camera) whose rotation turns the movement, so W goes up its screen; empty for the world's own axes. If that entity comes later in the file, its rotation is from the previous step. The name of another entity in the scene; empty means none.",
+          "default": ""
+        },
+        "tintWhenRunning": {
+          "type": "boolean",
+          "description": "Whether to set this entity's SpriteRenderer tint to runTint while running and idleTint otherwise.",
+          "default": false
+        },
+        "idleTint": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "The tint [r, g, b, a] when not running, used only when tintWhenRunning is true: set it to the sprite's normal tint.",
+          "default": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "runTint": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "The tint [r, g, b, a] while running, used only when tintWhenRunning is true.",
+          "default": [
+            1.0,
+            0.65,
+            0.3,
+            1.0
+          ]
+        }
+      }
+    },
+    "component_KeyboardRotate": {
+      "type": "object",
+      "description": "Behavior: turns the entity's Transform with two keys. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "speed": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 100.0,
+          "description": "Radians per second.",
+          "default": 1.0
+        },
+        "counterClockwiseKey": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J",
+            "K",
+            "L",
+            "M",
+            "N",
+            "O",
+            "P",
+            "Q",
+            "R",
+            "S",
+            "T",
+            "U",
+            "V",
+            "W",
+            "X",
+            "Y",
+            "Z",
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "Space",
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "Enter",
+            "Escape",
+            "Tab",
+            "Backspace",
+            "Insert",
+            "Delete",
+            "F1",
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6",
+            "F7",
+            "F8",
+            "F9",
+            "F10",
+            "F11",
+            "F12",
+            "LeftShift",
+            "RightShift",
+            "LeftControl",
+            "RightControl",
+            "LeftAlt",
+            "RightAlt",
+            "LeftSuper",
+            "RightSuper",
+            "NumPad0",
+            "NumPad1",
+            "NumPad2",
+            "NumPad3",
+            "NumPad4",
+            "NumPad5",
+            "NumPad6",
+            "NumPad7",
+            "NumPad8",
+            "NumPad9",
+            "NumPadDecimal",
+            "NumPadDivide",
+            "NumPadMultiply",
+            "NumPadSubtract",
+            "NumPadAdd",
+            "NumPadEnter",
+            "NumPadEqual",
+            "Apostrophe",
+            "Comma",
+            "Minus",
+            "Period",
+            "Slash",
+            "Semicolon",
+            "Equal",
+            "LeftBracket",
+            "Backslash",
+            "RightBracket",
+            "GraveAccent",
+            "CapsLock",
+            "ScrollLock",
+            "NumLock",
+            "PrintScreen",
+            "Pause",
+            "Menu"
+          ],
+          "description": "The key that turns it counter-clockwise. One of 101 values, listed in enum.",
+          "default": "Q"
+        },
+        "clockwiseKey": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J",
+            "K",
+            "L",
+            "M",
+            "N",
+            "O",
+            "P",
+            "Q",
+            "R",
+            "S",
+            "T",
+            "U",
+            "V",
+            "W",
+            "X",
+            "Y",
+            "Z",
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "Space",
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "Enter",
+            "Escape",
+            "Tab",
+            "Backspace",
+            "Insert",
+            "Delete",
+            "F1",
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6",
+            "F7",
+            "F8",
+            "F9",
+            "F10",
+            "F11",
+            "F12",
+            "LeftShift",
+            "RightShift",
+            "LeftControl",
+            "RightControl",
+            "LeftAlt",
+            "RightAlt",
+            "LeftSuper",
+            "RightSuper",
+            "NumPad0",
+            "NumPad1",
+            "NumPad2",
+            "NumPad3",
+            "NumPad4",
+            "NumPad5",
+            "NumPad6",
+            "NumPad7",
+            "NumPad8",
+            "NumPad9",
+            "NumPadDecimal",
+            "NumPadDivide",
+            "NumPadMultiply",
+            "NumPadSubtract",
+            "NumPadAdd",
+            "NumPadEnter",
+            "NumPadEqual",
+            "Apostrophe",
+            "Comma",
+            "Minus",
+            "Period",
+            "Slash",
+            "Semicolon",
+            "Equal",
+            "LeftBracket",
+            "Backslash",
+            "RightBracket",
+            "GraveAccent",
+            "CapsLock",
+            "ScrollLock",
+            "NumLock",
+            "PrintScreen",
+            "Pause",
+            "Menu"
+          ],
+          "description": "The key that turns it clockwise; with both keys held it does not turn. One of 101 values, listed in enum.",
+          "default": "E"
+        }
+      }
+    },
+    "component_WheelZoom": {
+      "type": "object",
+      "description": "Behavior: zooms the entity's Camera with the mouse wheel, within a range. The zoom is only changed (and held to the range) when the wheel moves. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "factor": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 10.0,
+          "description": "The zoom is multiplied by this for each wheel notch up, and divided by it for each notch down.",
+          "default": 1.1
+        },
+        "minZoom": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 100.0,
+          "description": "The smallest zoom.",
+          "default": 0.25
+        },
+        "maxZoom": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 100.0,
+          "description": "The largest zoom; not smaller than minZoom.",
+          "default": 4.0
+        }
+      }
+    },
+    "component_Follow": {
+      "type": "object",
+      "description": "Behavior: puts the entity at another entity's position plus an offset, every step. It does nothing while the target does not exist, has no Transform, or is this entity. Put it after the target in the file, or it follows where the target was a step ago. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "The entity to follow. The name of another entity in the scene; empty means none.",
+          "default": ""
+        },
+        "offset": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Where from the target [x, y], in world units.",
+          "default": [
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    "component_Spin": {
+      "type": "object",
+      "description": "Behavior: turns the entity's Transform at a steady rate, starting from the rotation it has. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "speed": {
+          "type": "number",
+          "minimum": -1000.0,
+          "maximum": 1000.0,
+          "description": "Radians per second; positive turns counter-clockwise, negative clockwise.",
+          "default": 1.0
+        }
+      }
+    },
+    "component_Orbit": {
+      "type": "object",
+      "description": "Behavior: moves the entity around another entity in a circle, and can turn it as it goes. It does nothing while the target does not exist, has no Transform, or is this entity. Put it after the target in the file, or it orbits where the target was a step ago. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "The entity to go around. The name of another entity in the scene; empty means none.",
+          "default": ""
+        },
+        "radius": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1000000.0,
+          "description": "Distance from the target, in world units.",
+          "default": 100.0
+        },
+        "speed": {
+          "type": "number",
+          "minimum": -1000.0,
+          "maximum": 1000.0,
+          "description": "Radians per second around the target; negative goes the other way.",
+          "default": 1.0
+        },
+        "angle": {
+          "type": "number",
+          "description": "Where on the circle it is now, in radians; 0 is to the right of the target. It advances every step and is saved with the scene; set it to start somewhere else.",
+          "default": 0.0
+        },
+        "rotationSpeed": {
+          "type": "number",
+          "minimum": -1000.0,
+          "maximum": 1000.0,
+          "description": "Radians per second the entity itself turns as it goes round; 0 keeps its rotation.",
+          "default": 0.0
+        }
+      }
+    },
+    "component_Wander": {
+      "type": "object",
+      "description": "Behavior: walks in a random direction and picks a new one now and then. The directions come from the scene's random numbers (its Random seed), so the same seed gives the same walk every run. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "speed": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 100000.0,
+          "description": "World units per second.",
+          "default": 50.0
+        },
+        "changeEvery": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 3600.0,
+          "description": "Seconds between new directions.",
+          "default": 1.0
+        },
+        "heading": {
+          "type": "number",
+          "description": "The direction it is walking now, in radians; it changes by itself.",
+          "default": 0.0
+        },
+        "timer": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 3600.0,
+          "description": "Seconds until the next new direction, counting down; 0 picks one on the first step.",
+          "default": 0.0
+        }
+      }
+    },
+    "component_RestartOnKey": {
+      "type": "object",
+      "description": "Behavior, for the scene itself (its top-level components): asks the host to restart the scene when the key is pressed. The Sandbox loads the scene from its file again, so everything goes back to how the file has it. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J",
+            "K",
+            "L",
+            "M",
+            "N",
+            "O",
+            "P",
+            "Q",
+            "R",
+            "S",
+            "T",
+            "U",
+            "V",
+            "W",
+            "X",
+            "Y",
+            "Z",
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "Space",
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "Enter",
+            "Escape",
+            "Tab",
+            "Backspace",
+            "Insert",
+            "Delete",
+            "F1",
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6",
+            "F7",
+            "F8",
+            "F9",
+            "F10",
+            "F11",
+            "F12",
+            "LeftShift",
+            "RightShift",
+            "LeftControl",
+            "RightControl",
+            "LeftAlt",
+            "RightAlt",
+            "LeftSuper",
+            "RightSuper",
+            "NumPad0",
+            "NumPad1",
+            "NumPad2",
+            "NumPad3",
+            "NumPad4",
+            "NumPad5",
+            "NumPad6",
+            "NumPad7",
+            "NumPad8",
+            "NumPad9",
+            "NumPadDecimal",
+            "NumPadDivide",
+            "NumPadMultiply",
+            "NumPadSubtract",
+            "NumPadAdd",
+            "NumPadEnter",
+            "NumPadEqual",
+            "Apostrophe",
+            "Comma",
+            "Minus",
+            "Period",
+            "Slash",
+            "Semicolon",
+            "Equal",
+            "LeftBracket",
+            "Backslash",
+            "RightBracket",
+            "GraveAccent",
+            "CapsLock",
+            "ScrollLock",
+            "NumLock",
+            "PrintScreen",
+            "Pause",
+            "Menu"
+          ],
+          "description": "The key that restarts the scene. One of 101 values, listed in enum.",
+          "default": "R"
+        }
+      }
+    },
+    "component_ClampPosition": {
+      "type": "object",
+      "description": "Behavior: keeps the entity's position inside the rectangle from min to max. Put it after whatever moves the entity (such as KeyboardMove) on the same entity. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The lower left corner [x, y], in world units.",
+          "default": [
+            0.0,
+            0.0
+          ]
+        },
+        "max": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The upper right corner [x, y], in world units; not smaller than min on either axis.",
+          "default": [
+            100.0,
+            100.0
+          ]
         }
       }
     }

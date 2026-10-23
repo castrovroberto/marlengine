@@ -28,8 +28,13 @@ namespace Marle {
         std::unique_ptr<Marle::Scene> Scene;
 
         // Everything that was wrong: repeated keys first (they are found while parsing), then the rest in
-        // file order. Empty means the file is fully valid.
+        // file order, then references to entities that do not exist (they need every entity loaded).
+        // Empty means the file is fully valid.
         std::vector<SceneProblem> Problems;
+
+        // FNV-1a hash of the text that was loaded (Simulation.h), to tell one version of a scene file from
+        // another, as an input recording does
+        uint64_t TextHash = 0;
 
         bool Ok() const { return Scene && Problems.empty(); }
     };

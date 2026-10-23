@@ -43,6 +43,7 @@ namespace Marle {
                     break;
                 case FieldType::String:
                     schema = Json::object({ { "type", "string" } });
+                    if (!field.OneOf.empty()) schema["enum"] = field.OneOf;
                     if (field.AssetPath) schema["pattern"] = AssetPathPattern;
                     break;
                 case FieldType::Vec2:  schema = Numbers("number", 2, field); break;
@@ -52,7 +53,12 @@ namespace Marle {
                     schema = Json::object({ { "type", "array" }, { "items", Json::object({ { "type", "string" } }) } });
                     break;
             }
-            schema["description"] = field.Description + (field.AssetPath ? " An asset file path, relative to the working directory, written with '/' and without '..'." : "");
+            std::string allowed;
+            for (size_t i = 0; i < field.OneOf.size(); i++) allowed += (i ? ", " : "") + field.OneOf[i];
+            schema["description"] = field.Description
+                + (field.OneOf.empty() ? "" : field.OneOf.size() <= 12 ? " One of: " + allowed + "." : " One of " + std::to_string(field.OneOf.size()) + " values, listed in enum.")
+                + (field.AssetPath ? " An asset file path, relative to the working directory, written with '/' and without '..'." : "")
+                + (field.EntityReference ? " The name of another entity in the scene; empty means none." : "");
             schema["default"] = field.Default;
             return schema;
         }
@@ -77,7 +83,7 @@ namespace Marle {
                 if (field.Required) required.push_back(field.Name);
             }
 
-            Json definition = Json::object({ { "type", "object" }, { "description", info->Description }, { "additionalProperties", false }, { "properties", properties } });
+            Json definition = Json::object({ { "type", "object" }, { "description", info->Description + (info->IsBehavior ? " A behavior: it runs every fixed step, in file order." : "") }, { "additionalProperties", false }, { "properties", properties } });
             if (!required.empty()) definition["required"] = required;
             definitions[DefinitionName(info->Name)] = definition;
             entityComponentProperties[info->Name] = Json::object({ { "$ref", "#/definitions/" + DefinitionName(info->Name) } });
@@ -110,6 +116,11 @@ namespace Marle {
             { "$schema", Json::object({ { "type", "string" }, { "description", "The path or URL of this schema, for editors; the engine ignores it." } }) },
             { "version", Json::object({ { "const", SceneFormatVersion }, { "description", "The scene file format version." } }) },
             { "name", Json::object({ { "type", "string" }, { "minLength", 1 }, { "description", "The scene's name." } }) },
+            { "components", Json::object({
+                { "type", "object" },
+                { "description", "Components of the scene itself (such as its random seed), keyed by component name. Same rules as an entity's components." },
+                { "additionalProperties", false },
+                { "properties", entityComponentProperties } }) },
             { "entities", Json::object({ { "type", "array" }, { "description", "The entities, in creation order." }, { "items", Json::object({ { "$ref", "#/definitions/entity" } }) } }) }
         });
 
