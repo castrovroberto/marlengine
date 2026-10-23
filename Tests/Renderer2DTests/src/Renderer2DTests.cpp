@@ -2,6 +2,7 @@
 // Exits non-zero if any check fails.
 #include "Marle/Application.h"
 #include "Marle/Renderer/Renderer2D.h"
+#include "Marle/Platform/OpenGL/OpenGLFramebuffer.h"
 #include <glad/gl.h>
 #include <memory>
 #include <vector>
@@ -329,6 +330,77 @@ protected:
             Quadrants(200, 300, 16, "JPG");   // lossy: allow a little drift
             CHECK(Near(Read(300, 300), 200, 200, 200), "grayscale+alpha PNG expands to RGB gray (got %d,%d,%d)", Read(300, 300).r, Read(300, 300).g, Read(300, 300).b);
             CHECK(Near(Read(390, 290), 255, 0, 255) && Near(Read(410, 310), 255, 0, 255), "truncated PNG draws the error checker");
+        }
+
+        // 9c. framebuffers: render into a texture, then back to the window
+        {
+            auto Viewport = [](GLint v[4]) { glGetIntegerv(GL_VIEWPORT, v); };
+            auto Binding = []() { GLint b = -1; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &b); return b; };
+            GLint vp[4];
+
+            OpenGLFramebuffer fb(256, 128);
+            CHECK(fb.IsComplete() && fb.GetWidth() == 256 && fb.GetHeight() == 128 && fb.GetColorAttachment() != 0, "framebuffer is complete and reports its size");
+
+            glClear(GL_COLOR_BUFFER_BIT);
+            fb.Bind();
+            Viewport(vp);
+            CHECK(vp[2] == 256 && vp[3] == 128, "Bind sets the viewport to the framebuffer size (got %dx%d)", vp[2], vp[3]);
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(256, 128);
+            Renderer2D::DrawQuad({64, 64}, {40, 40}, glm::vec4(1, 0, 0, 1));
+            Renderer2D::EndBatch();
+            CHECK(Near(Read(64, 64), 255, 0, 0), "a quad drawn between Bind and Unbind lands in the framebuffer");
+            CHECK(Near(Read(200, 100), bg.r, bg.g, bg.b), "outside the quad is the clear color");
+            fb.Unbind();
+
+            Viewport(vp);
+            CHECK(Binding() == 0 && vp[2] == (int)W && vp[3] == (int)H, "Unbind restores the window framebuffer and viewport (got %dx%d)", vp[2], vp[3]);
+            CHECK(Near(Read(64, 64), bg.r, bg.g, bg.b), "nothing drawn into the framebuffer reached the window");
+
+            // the color attachment is an ordinary texture holding the result
+            std::vector<unsigned char> pixels(256 * 128 * 4);
+            glBindTexture(GL_TEXTURE_2D, fb.GetColorAttachment());
+            glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+            glBindTexture(GL_TEXTURE_2D, 0);
+            const unsigned char* red = &pixels[(64 + 64 * 256) * 4];
+            CHECK(red[0] == 255 && red[1] == 0 && red[2] == 0, "the color attachment texture holds the rendered pixels (got %d,%d,%d)", red[0], red[1], red[2]);
+
+            // resize keeps the texture id and gives a new size
+            GLuint textureBefore = fb.GetColorAttachment();
+            fb.Resize(64, 32);
+            CHECK(fb.GetWidth() == 64 && fb.GetHeight() == 32 && fb.GetColorAttachment() == textureBefore, "Resize changes the size and keeps the texture id");
+            fb.Bind();
+            Viewport(vp);
+            CHECK(vp[2] == 64 && vp[3] == 32, "Bind uses the resized viewport (got %dx%d)", vp[2], vp[3]);
+            Renderer2D::BeginBatch(64, 32);
+            Renderer2D::DrawQuad({32, 16}, {64, 32}, glm::vec4(0, 1, 0, 1));
+            Renderer2D::EndBatch();
+            CHECK(Near(Read(1, 1), 0, 255, 0) && Near(Read(62, 30), 0, 255, 0), "the resized framebuffer renders across its whole area");
+            fb.Unbind();
+
+            // a framebuffer bound inside another restores the outer one's target on Unbind
+            OpenGLFramebuffer inner(32, 32);
+            fb.Bind();
+            inner.Bind();
+            Viewport(vp);
+            CHECK(vp[2] == 32 && vp[3] == 32, "nested Bind uses the inner size");
+            inner.Unbind();
+            Viewport(vp);
+            CHECK(Binding() != 0 && vp[2] == 64 && vp[3] == 32, "nested Unbind returns to the outer framebuffer (got %dx%d)", vp[2], vp[3]);
+            fb.Unbind();
+            Viewport(vp);
+            CHECK(Binding() == 0 && vp[2] == (int)W, "outer Unbind returns to the window");
+
+            // a framebuffer that failed to create is inert
+            OpenGLFramebuffer bad(0, 10);
+            CHECK(!bad.IsComplete(), "a zero-size framebuffer is not complete");
+            bad.Bind();
+            bad.Resize(8, 8);
+            Viewport(vp);
+            CHECK(Binding() == 0 && vp[2] == (int)W && !bad.IsComplete(), "Bind and Resize on a failed framebuffer leave GL state alone");
+            bad.Unbind();
+            Viewport(vp);
+            CHECK(Binding() == 0 && vp[2] == (int)W, "Unbind without a Bind leaves GL state alone");
         }
 
         // 10. GL errors
