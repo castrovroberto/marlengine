@@ -5,7 +5,7 @@ A personal 2D game engine: a shared library that clients link, with a layered ap
 ## Language
 
 **Scene**:
-A named collection of entities that a layer updates and draws, defined by a scene file.
+A named collection of entities, and components of its own, that a layer updates and draws, defined by a scene file.
 _Avoid_: Level, world, render pass
 
 **Entity**:
@@ -14,10 +14,18 @@ _Avoid_: Object, actor, node, game object
 
 **Component**:
 One piece of data on an entity, such as its transform or sprite, identified by a name that scene files use.
-_Avoid_: Property, trait, behavior
+_Avoid_: Property, trait
+
+**Behavior**:
+A component that makes its entity (or the scene) do something every fixed step, such as move, follow another entity or spin, configured by its fields in the scene file.
+_Avoid_: Script, controller, AI
+
+**Input frame**:
+What the player's input was during one fixed step, as behaviors see it; a recording is a list of them.
+_Avoid_: Input event, polled input
 
 **Scene file**:
-The plain-text file that defines a scene's entities and their components, written by hand or by an AI and versioned in git.
+The plain-text file that defines a scene's entities and components, and any components of the scene itself, written by hand or by an AI and versioned in git.
 _Avoid_: Level file, prefab, save file
 
 **Frame batch**:
