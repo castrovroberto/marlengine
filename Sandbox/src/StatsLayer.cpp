@@ -32,7 +32,7 @@ void StatsLayer::OnImGuiRender()
         ImGui::Text("Rotation: %.1f deg", glm::degrees(m_World.GetCameraRotation()));
         ImGui::Text("Player: %.0f, %.0f", m_World.GetPlayerPosition().x, m_World.GetPlayerPosition().y);
 
-        ImGui::TextDisabled("F1 toggles this panel, F2 the viewport");
+        ImGui::TextDisabled("F1 toggles this panel, F2 the viewport, F3 the scene");
     }
     ImGui::End();
 }
