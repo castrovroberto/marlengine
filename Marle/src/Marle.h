@@ -37,5 +37,6 @@
 #include "Marle/Renderer/SubTexture2D.h"
 #include "Marle/Renderer/Renderer2D.h"
 #include "Marle/Platform/OpenGL/OpenGLTexture.h"
+#include "Marle/Platform/OpenGL/OpenGLFramebuffer.h"
 
 // Note: the entry point (main) is separate. Include <Marle/EntryPoint.h> in exactly one source file.

@@ -1,5 +1,6 @@
 #include "WorldLayer.h"
 #include <cmath>
+#include <imgui.h>
 
 static constexpr int MapWidth = 32, MapHeight = 24;
 static constexpr float TileSize = 64.0f;
@@ -50,7 +51,8 @@ void WorldLayer::OnAttach()
 
 void WorldLayer::OnDetach()
 {
-    // Textures hold GL objects: release them while the context is still alive.
+    // Textures and framebuffers hold GL objects: release them while the context is still alive.
+    m_Viewport.reset();
     m_Cells.clear();
     m_Sheet.reset();
     m_PlayerTexture.reset();
@@ -98,9 +100,27 @@ void WorldLayer::OnRender(double alpha)
     glm::vec2 player = glm::mix(m_PlayerPrev, m_Player, a);
     float spin = glm::mix(m_SpinPrev, m_Spin, a);
 
+    // Render into the viewport panel's framebuffer when the panel was on screen last frame
+    bool toPanel = m_PanelVisible;
+    m_PanelVisible = false;   // OnImGuiRender sets it again if the panel is still on screen
+    glm::vec2 target((float)m_App.GetWidth(), (float)m_App.GetHeight());
+    if (toPanel) {
+        target = m_PanelSize;
+        uint32_t w = (uint32_t)target.x, h = (uint32_t)target.y;
+        if (!m_Viewport)
+            m_Viewport = std::make_unique<Marle::OpenGLFramebuffer>(w, h);
+        else if (m_Viewport->GetWidth() != w || m_Viewport->GetHeight() != h)
+            m_Viewport->Resize(w, h);
+        toPanel = m_Viewport->IsComplete();
+        if (toPanel) {
+            m_Viewport->Bind();
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
+    }
+
     // The visible area shrinks as we zoom in; the camera sits on the player.
-    float halfW = (float)m_App.GetWidth() * 0.5f / m_Zoom;
-    float halfH = (float)m_App.GetHeight() * 0.5f / m_Zoom;
+    float halfW = target.x * 0.5f / m_Zoom;
+    float halfH = target.y * 0.5f / m_Zoom;
     Marle::OrthographicCamera camera(-halfW, halfW, -halfH, halfH);
     camera.SetPosition(player);
     camera.SetRotation(m_CameraRotation);
@@ -124,6 +144,35 @@ void WorldLayer::OnRender(double alpha)
     Renderer2D::DrawRotatedQuad(player + 44.0f * glm::vec2(cosf(spin), sinf(spin)), { 16.0f, 16.0f }, spin * 3.0f, glm::vec4(1.0f, 0.9f, 0.2f, 1.0f));
 
     Renderer2D::EndBatch();
+
+    if (toPanel)
+        m_Viewport->Unbind();
+}
+
+void WorldLayer::OnImGuiRender()
+{
+    if (!m_ShowPanel) return;
+
+    ImGui::SetNextWindowPos(ImVec2(340.0f, 40.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(900.0f, 540.0f), ImGuiCond_FirstUseEver);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    bool open = ImGui::Begin("Viewport", &m_ShowPanel, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+
+    if (open) {
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        m_PanelSize = { glm::max(avail.x, 1.0f), glm::max(avail.y, 1.0f) };
+        m_PanelVisible = true;
+
+        if (m_Viewport && m_Viewport->IsComplete()) {
+            // Framebuffer rows run bottom to top, so flip v
+            ImGui::Image((ImTextureID)(intptr_t)m_Viewport->GetColorAttachment(), avail, ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
+            // Let the world see the mouse wheel (zoom) while the pointer is over the picture
+            if (ImGui::IsItemHovered())
+                ImGui::SetNextFrameWantCaptureMouse(false);
+        }
+    }
+    ImGui::End();
 }
 
 void WorldLayer::OnEvent(Marle::Event& e)
@@ -136,6 +185,10 @@ void WorldLayer::OnEvent(Marle::Event& e)
         auto& key = static_cast<Marle::KeyPressedEvent&>(e);
         if (key.GetKeyCode() == Marle::Key::R && key.GetRepeatCount() == 0) {
             Reset();
+            e.SetHandled();
+        }
+        else if (key.GetKeyCode() == Marle::Key::F2 && key.GetRepeatCount() == 0) {
+            m_ShowPanel = !m_ShowPanel;
             e.SetHandled();
         }
     }

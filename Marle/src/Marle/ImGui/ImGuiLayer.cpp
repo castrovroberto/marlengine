@@ -96,6 +96,7 @@ namespace Marle {
         ImGuiIO& io = ImGui::GetIO();
         io.IniFilename = nullptr; // don't write imgui.ini into the working directory
         io.BackendPlatformName = "marle";
+        io.ConfigWindowsMoveFromTitleBarOnly = true; // dragging inside a window (e.g. a viewport image) must not move it
 
         ImGui::StyleColorsDark();
         ImGui_ImplOpenGL3_Init("#version 330 core");

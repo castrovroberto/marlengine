@@ -16,6 +16,7 @@ public:
     void OnUpdate(double fixed_dt) override;
     void OnRender(double interpolation_alpha) override;
     void OnEvent(Marle::Event& e) override;
+    void OnImGuiRender() override;
 
     float GetZoom() const { return m_Zoom; }
     float GetCameraRotation() const { return m_CameraRotation; }   // radians
@@ -25,6 +26,15 @@ private:
     void Reset();
 
     Marle::Application& m_App;
+
+    // Viewport panel: with an ImGuiLayer in the stack the world is rendered into a framebuffer
+    // that OnImGuiRender shows in an ImGui window (F2 toggles it); otherwise it goes straight
+    // to the window. OnImGuiRender runs after OnRender in the same frame, so the panel reports
+    // its visibility and size for the next frame.
+    std::unique_ptr<Marle::OpenGLFramebuffer> m_Viewport;
+    bool m_ShowPanel = true;        // the user wants the panel
+    bool m_PanelVisible = false;    // the panel was on screen last frame
+    glm::vec2 m_PanelSize = { 900.0f, 520.0f };
 
     std::unique_ptr<Marle::OpenGLTexture2D> m_Sheet;
     std::unique_ptr<Marle::OpenGLTexture2D> m_PlayerTexture;
