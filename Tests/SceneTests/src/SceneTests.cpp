@@ -161,6 +161,27 @@ static ToolRun RunProcess(const std::string& command)
     return run;
 }
 
+// Keys, running, turning and the wheel, chosen by a seeded generator so a script is always the same:
+// mostly up and to the right, so the player reaches the walls
+static InputFrame ScriptedFrame(RandomGenerator& script)
+{
+    InputFrame in;
+    if (script.Chance(0.7f)) in.Hold(Key::W);
+    if (script.Chance(0.1f)) in.Hold(Key::A);
+    if (script.Chance(0.1f)) in.Hold(Key::S);
+    if (script.Chance(0.7f)) in.Hold(Key::D);
+    if (script.Chance(0.05f)) in.Hold(Key::Up);
+    if (script.Chance(0.05f)) in.Hold(Key::Down);
+    if (script.Chance(0.05f)) in.Hold(Key::Left);
+    if (script.Chance(0.05f)) in.Hold(Key::Right);
+    if (script.Chance(0.5f)) in.Hold(Key::LeftShift);
+    float turnRoll = script.NextFloat();
+    if (turnRoll < 0.12f) in.Hold(Key::Q); else if (turnRoll < 0.24f) in.Hold(Key::E);   // never both: the old code left a rounding residue then
+    float wheel = script.NextFloat();
+    in.Scroll = wheel < 0.05f ? 1.0f : wheel < 0.1f ? -1.0f : 0.0f;
+    return in;
+}
+
 static bool HasProblem(const SceneLoadResult& result, const std::string& path, const std::string& text)
 {
     for (const SceneProblem& p : result.Problems)
@@ -961,7 +982,7 @@ int main(int argc, char** argv)
 
         // directories
         ToolRun scenes = RunTool(registry, { "validate", "Assets/Scenes" });
-        CHECK(scenes.Code == 0 && scenes.Out == ok.Out + "OK    Assets/Scenes/world.json: 8 entities, 16 components\n2 files, 0 with problems\n", "a directory means its scene files, and the schema file is not one of them");
+        CHECK(scenes.Code == 0 && scenes.Out == ok.Out + "OK    Assets/Scenes/world.json: 8 entities, 27 components\n2 files, 0 with problems\n", "a directory means its scene files, and the schema file is not one of them");
         WriteFile((work / "b.json").string(), R"({"version": 1, "name": "b", "entities": []})");
         WriteFile((work / "sub" / "a.json").string(), R"({"version": 1, "name": "a", "entities": []})");
         WriteFile((work / "notes.txt").string(), "not a scene");
@@ -1227,10 +1248,23 @@ int main(int argc, char** argv)
 
         std::string names;
         for (Entity e : world.Scene->GetEntities()) names += e.GetName() + " ";
-        CHECK(names == "camera world spinner_0 spinner_1 spinner_2 spinner_3 player satellite ", "its entities are the ones WorldLayer drives, in draw order");
+        CHECK(names == "world spinner_0 spinner_1 spinner_2 spinner_3 player satellite camera ", "its entities are in draw order, with the camera after the player and the satellite it follows");
 
         Entity camera = world.Scene->FindEntity("camera"), player = world.Scene->FindEntity("player"), map = world.Scene->FindEntity("world");
         CHECK(camera.Get<Camera>().Primary && camera.Get<Camera>().Zoom == 1.0f && camera.Get<Transform>().Position == player.Get<Transform>().Position && player.Get<Transform>().Position == glm::vec2(1024.0f, 518.0f), "the camera is primary and starts on the player");
+
+        // what makes it move is in the file
+        const KeyboardMove& move = player.Get<KeyboardMove>();
+        CHECK(move.Speed == 300.0f && move.RunMultiplier == 2.0f && move.RunKey == "LeftShift" && move.Keys == "both" && move.RelativeTo == "camera" && move.TintWhenRunning && move.IdleTint == glm::vec4(1.0f) && move.RunTint == glm::vec4(1.0f, 0.65f, 0.3f, 1.0f) && player.Get<ClampPosition>().Min == glm::vec2(88.0f) && player.Get<ClampPosition>().Max == glm::vec2(1960.0f, 1448.0f), "the player walks at 300, runs at double, relative to the camera, turns orange running, and stays inside the border tiles");
+        CHECK(camera.Get<KeyboardRotate>().Speed == 1.0f && camera.Get<KeyboardRotate>().CounterClockwiseKey == "Q" && camera.Get<KeyboardRotate>().ClockwiseKey == "E" && camera.Get<WheelZoom>().Factor == 1.1f && camera.Get<WheelZoom>().MinZoom == 0.25f && camera.Get<WheelZoom>().MaxZoom == 4.0f && camera.Get<Follow>().Target == "player", "the camera follows the player, turns with Q and E and zooms with the wheel between 0.25 and 4");
+        Entity satelliteEntity = world.Scene->FindEntity("satellite");
+        CHECK(satelliteEntity.Get<Orbit>().Target == "player" && satelliteEntity.Get<Orbit>().Radius == 44.0f && satelliteEntity.Get<Orbit>().Speed == 2.0f && satelliteEntity.Get<Orbit>().RotationSpeed == 6.0f, "the satellite orbits the player at 44 units, 2 radians a second, turning three times as fast");
+        bool spinnersOk = true;
+        for (int i = 0; i < 4; i++) {
+            Entity spinner = world.Scene->FindEntity("spinner_" + std::to_string(i));
+            spinnersOk = spinnersOk && spinner.Get<Spin>().Speed == (i % 2 ? 2.0f : -2.0f) && spinner.Get<Transform>().Rotation == i * 1.5707963f;
+        }
+        CHECK(spinnersOk && world.Scene->GetSceneEntity().Get<RestartOnKey>().Key == "R", "the spinners turn two radians a second, alternately each way, from a quarter turn apart, and R restarts the scene");
         CHECK(player.Get<SpriteRenderer>().Texture == "Assets/Textures/test_sprite.tga" && player.Get<Transform>().Scale == glm::vec2(48.0f, 48.0f) && world.Scene->FindEntity("satellite").Get<SpriteRenderer>().Texture.empty(), "the player is a textured sprite and the satellite a flat color");
         CHECK(world.Scene->FindEntity("spinner_1").Get<Transform>().Position == glm::vec2(1024.0f, 938.0f) && world.Scene->FindEntity("spinner_3").Get<SpriteRenderer>().Cell == glm::ivec2(3, 3), "the spinners sit around the pond on sheet cell [3, 3]");
 
@@ -1259,6 +1293,112 @@ int main(int argc, char** argv)
         RegisterBuiltinComponents(again);
         CHECK(SchemaErrors(GenerateSceneSchema(again), ParseWithComments(ReadFile(file))).empty(), "and it validates against the schema");
         CHECK(RunTool(registry, { "format", "--check", file }).Code == 0 && RunTool(registry, { "validate", file }).Code == 0, "marle-scene validates it and finds it already formatted");
+    }
+
+    // the Sandbox world, played by its behaviors, against the movement code it replaced
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        SceneLoadResult now = LoadScene("Assets/Scenes/world.json", registry);
+        CHECK(now.Ok(), "the world loads");
+
+        // The Sandbox's old movement code, line for line, with one change: the order of the file. The player
+        // is before the camera, so it moves by the rotation the camera had at the end of the previous step,
+        // where the old code had turned the camera first.
+        struct OldSandbox {
+            glm::vec2 player = { 1024.0f, 518.0f }, satellite = { 1068.0f, 518.0f }, camera = { 1024.0f, 518.0f };
+            float cameraRotation = 0.0f, zoom = 1.0f, orbit = 0.0f, satelliteRotation = 0.0f, spinners[4] = { 0.0f * 1.5707963f, 1.0f * 1.5707963f, 2.0f * 1.5707963f, 3.0f * 1.5707963f };   // a quarter turn apart, as in the file
+            glm::vec4 tint = { 1.0f, 1.0f, 1.0f, 1.0f };
+            void Step(const InputFrame& in, double dtSeconds)
+            {
+                const float dt = (float)dtSeconds;
+                glm::vec2 move(0.0f);
+                if (in.IsDown(Key::W) || in.IsDown(Key::Up))    move.y += 1.0f;
+                if (in.IsDown(Key::S) || in.IsDown(Key::Down))  move.y -= 1.0f;
+                if (in.IsDown(Key::D) || in.IsDown(Key::Right)) move.x += 1.0f;
+                if (in.IsDown(Key::A) || in.IsDown(Key::Left))  move.x -= 1.0f;
+                if (move != glm::vec2(0.0f)) {
+                    float c = cosf(cameraRotation), s = sinf(cameraRotation);
+                    glm::vec2 dir = glm::normalize(move);
+                    dir = { dir.x * c - dir.y * s, dir.x * s + dir.y * c };
+                    float speed = 300.0f * (in.IsDown(Key::LeftShift) ? 2.0f : 1.0f);
+                    player += dir * speed * dt;
+                }
+                const float margin = 64.0f + 48.0f * 0.5f;
+                player.x = glm::clamp(player.x, margin, 32 * 64.0f - margin);
+                player.y = glm::clamp(player.y, margin, 24 * 64.0f - margin);
+                tint = in.IsDown(Key::LeftShift) ? glm::vec4(1.0f, 0.65f, 0.3f, 1.0f) : glm::vec4(1.0f);
+
+                orbit += 2.0f * dt;
+                satellite = player + 44.0f * glm::vec2(cosf(orbit), sinf(orbit));
+                satelliteRotation += 6.0f * dt;
+                for (int i = 0; i < 4; i++) spinners[i] += (i % 2 ? 2.0f : -2.0f) * dt;
+
+                float turn = 0.0f;
+                if (in.IsDown(Key::Q)) turn += 1.0f * dt;
+                if (in.IsDown(Key::E)) turn -= 1.0f * dt;
+                cameraRotation += turn;
+                if (in.Scroll != 0.0f) zoom = glm::clamp(zoom * powf(1.1f, in.Scroll), 0.25f, 4.0f);
+                camera = player;
+            }
+        };
+
+        OldSandbox then;
+        RandomGenerator script(11);
+        bool identical = true, spinnersClose = true, satelliteClose = true, sawWall = false, sawRestart = false;
+        float worstSpinner = 0.0f;
+        float spin = 0.0f;   // the old code's spin, for comparing the spinners with its own formula
+        for (int i = 0; i < 900 && identical; i++) {
+            InputFrame in = ScriptedFrame(script);
+            then.Step(in, 1.0 / 60.0);
+            spin += 2.0f * (float)(1.0 / 60.0);
+            Simulation::Step(registry, *now.Scene, in, 1.0 / 60.0);
+
+            Entity player = now.Scene->FindEntity("player"), camera = now.Scene->FindEntity("camera"), satellite = now.Scene->FindEntity("satellite");
+            identical = player.Get<Transform>().Position == then.player && player.Get<SpriteRenderer>().Tint == then.tint
+                && camera.Get<Transform>().Position == then.camera && camera.Get<Transform>().Rotation == then.cameraRotation && camera.Get<Camera>().Zoom == then.zoom
+                && satellite.Get<Transform>().Position == then.satellite && satellite.Get<Transform>().Rotation == then.satelliteRotation && satellite.Get<Orbit>().Angle == then.orbit;
+            for (int k = 0; k < 4; k++) {
+                float rotation = now.Scene->FindEntity("spinner_" + std::to_string(k)).Get<Transform>().Rotation;
+                identical = identical && rotation == then.spinners[k];
+                float oldFormula = spin * (k % 2 ? 1.0f : -1.0f) + (float)k * 1.5707963f;     // what the old code drew
+                worstSpinner = std::max(worstSpinner, std::fabs(rotation - oldFormula));
+            }
+            satelliteClose = satelliteClose && std::fabs(satellite.Get<Transform>().Rotation - spin * 3.0f) < 1e-3f;
+            sawWall = sawWall || then.player.x == 88.0f || then.player.y == 88.0f || then.player.x == 1960.0f || then.player.y == 1448.0f;
+            if (!identical) printf("      differs at step %d: player %.6f,%.6f vs %.6f,%.6f\n", i, player.Get<Transform>().Position.x, player.Get<Transform>().Position.y, then.player.x, then.player.y);
+        }
+        spinnersClose = worstSpinner < 1e-3f;
+        CHECK(identical, "900 scripted steps through the real world file give exactly the old code's player, tint, camera, zoom, satellite and spinners");
+        CHECK(spinnersClose && satelliteClose, "and the spinners and the satellite's turn are the old formulas to well under a thousandth of a radian");
+        CHECK(sawWall, "the script drives the player into the walls");
+        CHECK(Simulation::Checksum(registry, *now.Scene) != Simulation::Checksum(registry, *LoadScene("Assets/Scenes/world.json", registry).Scene), "and the world has moved on from the file");
+
+        // R restarts: the scene asks, and loading the file again gives back the start
+        SceneLoadResult restart = LoadScene("Assets/Scenes/world.json", registry);
+        RandomGenerator script2(3);
+        for (int i = 0; i < 120; i++) Simulation::Step(registry, *restart.Scene, ScriptedFrame(script2), 1.0 / 60.0);
+        CHECK(!restart.Scene->IsRestartRequested(), "the world does not ask for a restart by itself");
+        Simulation::Step(registry, *restart.Scene, InputFrame().Press(Key::R), 1.0 / 60.0);
+        CHECK(restart.Scene->IsRestartRequested(), "pressing R makes it ask");
+        sawRestart = Simulation::Checksum(registry, *LoadScene("Assets/Scenes/world.json", registry).Scene) == Simulation::Checksum(registry, *LoadScene("Assets/Scenes/world.json", registry).Scene) && Simulation::Checksum(registry, *restart.Scene) != Simulation::Checksum(registry, *LoadScene("Assets/Scenes/world.json", registry).Scene);
+        CHECK(sawRestart, "and loading the file again is the start, different from the world as it has become");
+
+        // the same input played twice ends in the same state
+        SceneLoadResult one = LoadScene("Assets/Scenes/world.json", registry), two = LoadScene("Assets/Scenes/world.json", registry);
+        RandomGenerator a(21), b(21);
+        for (int i = 0; i < 600; i++) { Simulation::Step(registry, *one.Scene, ScriptedFrame(a), 1.0 / 60.0); Simulation::Step(registry, *two.Scene, ScriptedFrame(b), 1.0 / 60.0); }
+        CHECK(Simulation::Checksum(registry, *one.Scene) == Simulation::Checksum(registry, *two.Scene), "the same input played twice ends in the same state");
+
+        // an edit to the file while the world runs: it carries on, and what the author changed is the file's
+        const std::string text = ReadFile("Assets/Scenes/world.json");
+        SceneLoadResult baseline = LoadSceneFromText(text, "baseline", registry);
+        SceneLoadResult edited = LoadSceneFromText(text.substr(0, text.find("\"speed\": 300")) + "\"speed\": 450" + text.substr(text.find("\"speed\": 300") + 12), "edited", registry);
+        CHECK(edited.Ok() && edited.Scene->FindEntity("player").Get<KeyboardMove>().Speed == 450.0f, "an edited copy of the world has the player faster");
+        glm::vec2 where = one.Scene->FindEntity("player").Get<Transform>().Position;
+        float turned = one.Scene->FindEntity("camera").Get<Transform>().Rotation, zoomed = one.Scene->FindEntity("camera").Get<Camera>().Zoom, around = one.Scene->FindEntity("satellite").Get<Orbit>().Angle;
+        CarryOverState(registry, *baseline.Scene, *one.Scene, *edited.Scene);
+        CHECK(edited.Scene->FindEntity("player").Get<KeyboardMove>().Speed == 450.0f && edited.Scene->FindEntity("player").Get<Transform>().Position == where && edited.Scene->FindEntity("camera").Get<Transform>().Rotation == turned && edited.Scene->FindEntity("camera").Get<Camera>().Zoom == zoomed && edited.Scene->FindEntity("satellite").Get<Orbit>().Angle == around, "after a reload the player is where it was, the camera turned and zoomed as it was, the satellite where it was round, and the new speed is in force");
     }
 
     // scene reloader
@@ -2370,23 +2510,7 @@ int main(int argc, char** argv)
         SceneLoadResult now = LoadSceneFromText(world, "world", registry);
         CHECK(now.Ok(), "the scene that replaces the Sandbox's movement code loads with no problems");
         // keys, running, turning and the wheel, chosen by a seeded generator so the script is always the same
-        auto scriptedFrame = [](RandomGenerator& script) {
-            InputFrame in;
-            if (script.Chance(0.7f)) in.Hold(Key::W);          // mostly up and to the right, so the walls are reached
-            if (script.Chance(0.1f)) in.Hold(Key::A);
-            if (script.Chance(0.1f)) in.Hold(Key::S);
-            if (script.Chance(0.7f)) in.Hold(Key::D);
-            if (script.Chance(0.05f)) in.Hold(Key::Up);
-            if (script.Chance(0.05f)) in.Hold(Key::Down);
-            if (script.Chance(0.05f)) in.Hold(Key::Left);
-            if (script.Chance(0.05f)) in.Hold(Key::Right);
-            if (script.Chance(0.5f)) in.Hold(Key::LeftShift);
-            float turnRoll = script.NextFloat();
-            if (turnRoll < 0.12f) in.Hold(Key::Q); else if (turnRoll < 0.24f) in.Hold(Key::E);   // never both: the old code left a rounding residue then
-            float wheel = script.NextFloat();
-            in.Scroll = wheel < 0.05f ? 1.0f : wheel < 0.1f ? -1.0f : 0.0f;
-            return in;
-        };
+        auto scriptedFrame = [](RandomGenerator& script) { return ScriptedFrame(script); };
 
         OldSandbox then;
         RandomGenerator script(5);

@@ -1,14 +1,10 @@
 {
   "version": 1,
   "name": "The Sunken Orangerie",
+  "components": {
+    "RestartOnKey": { "key": "R" }
+  },
   "entities": [
-    {
-      "name": "camera",
-      "components": {
-        "Transform": { "position": [1024, 518], "rotation": 0, "scale": [1, 1] },
-        "Camera": { "zoom": 1, "primary": true }
-      }
-    },
     {
       "name": "world",
       "components": {
@@ -50,42 +46,59 @@
       "name": "spinner_0",
       "components": {
         "Transform": { "position": [1194, 768], "rotation": 0, "scale": [56, 56] },
-        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] },
+        "Spin": { "speed": -2 }
       }
     },
     {
       "name": "spinner_1",
       "components": {
-        "Transform": { "position": [1024, 938], "rotation": 0, "scale": [56, 56] },
-        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+        "Transform": { "position": [1024, 938], "rotation": 1.5707963, "scale": [56, 56] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] },
+        "Spin": { "speed": 2 }
       }
     },
     {
       "name": "spinner_2",
       "components": {
-        "Transform": { "position": [854, 768], "rotation": 0, "scale": [56, 56] },
-        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+        "Transform": { "position": [854, 768], "rotation": 3.1415925, "scale": [56, 56] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] },
+        "Spin": { "speed": -2 }
       }
     },
     {
       "name": "spinner_3",
       "components": {
-        "Transform": { "position": [1024, 598], "rotation": 0, "scale": [56, 56] },
-        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+        "Transform": { "position": [1024, 598], "rotation": 4.712389, "scale": [56, 56] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] },
+        "Spin": { "speed": 2 }
       }
     },
     {
       "name": "player",
       "components": {
         "Transform": { "position": [1024, 518], "rotation": 0, "scale": [48, 48] },
-        "SpriteRenderer": { "texture": "Assets/Textures/test_sprite.tga", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 1, 1, 1] }
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sprite.tga", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 1, 1, 1] },
+        "KeyboardMove": { "speed": 300, "runMultiplier": 2, "runKey": "LeftShift", "keys": "both", "relativeTo": "camera", "tintWhenRunning": true, "idleTint": [1, 1, 1, 1], "runTint": [1, 0.65, 0.3, 1] },
+        "ClampPosition": { "min": [88, 88], "max": [1960, 1448] }
       }
     },
     {
       "name": "satellite",
       "components": {
         "Transform": { "position": [1068, 518], "rotation": 0, "scale": [16, 16] },
-        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 0.9, 0.2, 1] }
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 0.9, 0.2, 1] },
+        "Orbit": { "target": "player", "radius": 44, "speed": 2, "angle": 0, "rotationSpeed": 6 }
+      }
+    },
+    {
+      "name": "camera",
+      "components": {
+        "Transform": { "position": [1024, 518], "rotation": 0, "scale": [1, 1] },
+        "Camera": { "zoom": 1, "primary": true },
+        "KeyboardRotate": { "speed": 1, "counterClockwiseKey": "Q", "clockwiseKey": "E" },
+        "WheelZoom": { "factor": 1.1, "minZoom": 0.25, "maxZoom": 4 },
+        "Follow": { "target": "player", "offset": [0, 0] }
       }
     }
   ]

@@ -2,12 +2,13 @@
 
 #include <Marle.h>
 #include <memory>
-#include <vector>
 
-// A scrolling tile world with a player, driven by polled input and viewed through a camera that
-// follows the player (Q/E rotate, mouse wheel zooms, R resets). The world itself is data: entities in
-// Assets/Scenes/world.json, drawn by a SceneRenderer. The layer finds the ones it moves by name
-// (camera, world, player, satellite, spinner_0 to spinner_3) and writes their Transforms each frame.
+// A scrolling tile world with a player, viewed through a camera that follows the player (WASD or arrows
+// move, Shift runs, Q/E turn the camera, the wheel zooms, R restarts). The world is data, and so is what
+// happens in it: Assets/Scenes/world.json holds the entities and their behaviors (KeyboardMove, Follow,
+// Orbit, Spin, ...), which Simulation::Step runs each fixed step. This layer loads the scene, steps it,
+// draws it (into a viewport panel when ImGui is there), reloads it when the file changes (keeping what the
+// simulation had worked out) and restarts it when the scene asks for that.
 class WorldLayer : public Marle::Layer
 {
 public:
@@ -20,21 +21,22 @@ public:
     void OnEvent(Marle::Event& e) override;
     void OnImGuiRender() override;
 
+    // Read from the scene, for the HUD and the stats panel
     float GetZoom() const;
-    float GetCameraRotation() const { return m_CameraRotation; }   // radians
-    glm::vec2 GetPlayerPosition() const { return m_Player; }
+    float GetCameraRotation() const;   // radians
+    glm::vec2 GetPlayerPosition() const;
 
 private:
-    // Reads the scene file and finds the entities this layer drives; problems are logged, and a file
-    // that cannot be used at all leaves an empty scene (everything is then skipped safely)
+    // Reads the scene file; problems are logged, and a file that cannot be used at all leaves an empty
+    // scene (everything then does nothing, safely)
     void LoadWorld();
-    // Finds the entities this layer drives in the current scene and where the file starts them
-    void BindEntities();
-    // Checks whether the scene file changed and swaps in the new scene if it is valid; the
-    // simulation (player, camera rotation, zoom, spin) carries on from where it was
-    void PollScene(bool force = false);
+
+    // Checks whether the scene file changed (or `force`) and swaps in the new scene if it is fully valid.
+    // With `carry` the simulation carries on from where it was (CarryOverState); without it the scene
+    // starts from the file, which is what a restart is.
+    void PollScene(bool force = false, bool carry = true, const char* what = "Reloaded");
+    void RestartWorld();
     void DrawScenePanel();
-    void Reset();
 
     Marle::Application& m_App;
 
@@ -52,18 +54,6 @@ private:
     int m_ReloadCountdown = 0;      // fixed steps until the file is checked again
     bool m_ShowScenePanel = true;   // F3
     std::unique_ptr<Marle::Scene> m_Scene;
+    std::unique_ptr<Marle::Scene> m_Baseline;   // the file as it was last loaded, never run: what a reload compares with
     std::unique_ptr<Marle::SceneRenderer> m_Renderer;
-    Marle::Entity m_CameraEntity, m_WorldEntity, m_PlayerEntity, m_SatelliteEntity;
-    std::vector<Marle::Entity> m_Spinners;
-
-    // Where the scene file put things, for Reset()
-    glm::vec2 m_PlayerStart = { 0.0f, 0.0f };
-    float m_CameraRotationStart = 0.0f, m_ZoomStart = 1.0f;
-
-    // Simulation state is kept for the previous and current fixed step so rendering
-    // can interpolate between them; the scene's Transforms are written from it each frame.
-    glm::vec2 m_PlayerPrev, m_Player;
-    float m_SpinPrev = 0.0f, m_Spin = 0.0f;
-
-    float m_CameraRotation = 0.0f;
 };
