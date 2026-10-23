@@ -1,0 +1,65 @@
+// A small worked example of a scene file; see docs/scene-format.md for the rules.
+// Comments like these are allowed in files you write by hand.
+{
+  "version": 1,
+  "name": "Example garden",
+  "entities": [
+    {
+      "name": "camera",
+      "components": {
+        "Transform": { "position": [1024, 518], "rotation": 0, "scale": [1, 1] },
+        "Camera": { "zoom": 1, "primary": true }
+      }
+    },
+    {
+      "name": "player",
+      "components": {
+        // Scale is the size on screen, in world units.
+        "Transform": { "position": [1024, 518], "rotation": 0, "scale": [48, 48] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sprite.tga", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 1, 1, 1] }
+      }
+    },
+    {
+      "name": "grass_west",
+      "components": {
+        "Transform": { "position": [960, 518], "rotation": 0, "scale": [64, 64] },
+        // One cell of a sprite sheet: cell is [column, row] with row 0 at the bottom, cellSize is in pixels.
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [0, 0], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+      }
+    },
+    {
+      "name": "grass_east",
+      "components": {
+        "Transform": { "position": [1088, 518], "rotation": 0, "scale": [64, 64] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [1, 0], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+      }
+    },
+    {
+      "name": "pond",
+      "components": {
+        "Transform": { "position": [1024, 454], "rotation": 0, "scale": [64, 64] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [0, 2], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+      }
+    },
+    {
+      "name": "spinner",
+      "components": {
+        // Rotation is in radians, counter-clockwise.
+        "Transform": { "position": [1024, 582], "rotation": 0.7854, "scale": [56, 56] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+      }
+    },
+    {
+      "name": "marker",
+      "components": {
+        // No texture: a flat color quad.
+        "Transform": { "position": [1100, 600], "rotation": 0, "scale": [16, 16] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 0.9, 0.2, 1] }
+      }
+    },
+    {
+      // An entity with no components is fine.
+      "name": "spawn_point"
+    }
+  ]
+}

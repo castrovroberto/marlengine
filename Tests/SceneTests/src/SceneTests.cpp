@@ -3,7 +3,11 @@
 #include "Marle/Scene/Scene.h"
 #include "Marle/Scene/Components.h"
 #include "Marle/Scene/ComponentRegistry.h"
+#include <cctype>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -15,6 +19,47 @@ static int fails = 0;
 struct Position { float x = 0.0f, y = 0.0f; Position() = default; Position(float x, float y) : x(x), y(y) {} };
 struct Health { int points = 10; };
 struct Door { std::string Target; int Level = 1; bool Locked = false; };   // Target is required
+
+// A stand-in for the scene loader (issue #25): applies the rules in docs/scene-format.md using the
+// real component registry, so the example file and the spec's own snippet stay valid.
+static bool IsValidEntityName(const std::string& name)
+{
+    if (name.empty() || name.size() > 64 || name.find('/') != std::string::npos) return false;
+    if (std::isspace((unsigned char)name.front()) || std::isspace((unsigned char)name.back())) return false;
+    for (unsigned char c : name) if (c < 0x20 || c == 0x7f) return false;
+    return true;
+}
+
+static std::vector<std::string> CheckSceneFile(const Json& root, const ComponentRegistry& registry, Scene& scene)
+{
+    std::vector<std::string> problems;
+    if (!root.is_object()) return { "the top level must be an object" };
+
+    for (auto it = root.begin(); it != root.end(); ++it)
+        if (it.key() != "version" && it.key() != "name" && it.key() != "entities" && it.key() != "$schema")
+            problems.push_back("unknown top-level key '" + it.key() + "'");
+    if (!root.contains("version") || !root["version"].is_number_integer() || root["version"] != 1) problems.push_back("version must be 1");
+    if (!root.contains("name") || !root["name"].is_string() || root["name"].get<std::string>().empty()) problems.push_back("name must be a non-empty string");
+    if (!root.contains("entities") || !root["entities"].is_array()) { problems.push_back("entities must be an array"); return problems; }
+
+    int index = 0;
+    for (const Json& entry : root["entities"]) {
+        std::string at = "/entities/" + std::to_string(index++);
+        if (!entry.is_object()) { problems.push_back(at + ": an entity must be an object"); continue; }
+        for (auto it = entry.begin(); it != entry.end(); ++it)
+            if (it.key() != "name" && it.key() != "components") problems.push_back(at + ": unknown key '" + it.key() + "'");
+        if (!entry.contains("name") || !entry["name"].is_string() || !IsValidEntityName(entry["name"].get<std::string>())) { problems.push_back(at + "/name: not a valid entity name"); continue; }
+
+        Entity entity = scene.CreateEntity(entry["name"].get<std::string>());
+        if (!entity) { problems.push_back(at + "/name: duplicate entity name"); continue; }
+        if (!entry.contains("components")) continue;
+        if (!entry["components"].is_object()) { problems.push_back(at + "/components: must be an object"); continue; }
+        for (auto it = entry["components"].begin(); it != entry["components"].end(); ++it)
+            for (const ValidationError& e : registry.Read(entity, it.key(), it.value()))
+                problems.push_back(at + "/components/" + it.key() + e.Path + ": " + e.Message);
+    }
+    return problems;
+}
 
 static bool HasError(const std::vector<ValidationError>& errors, const std::string& path, const std::string& text)
 {
@@ -311,6 +356,65 @@ int main()
         bool threw = false;
         try { Json bad = Json::parse("{\"position\": [3, 4,]}"); (void)bad; } catch (const Json::exception&) { threw = true; }
         CHECK(threw, "a trailing comma is a parse error");
+    }
+
+    // scene files: the worked example and the spec's snippet follow the format
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+
+        std::ifstream file("Assets/Scenes/example.json");
+        std::stringstream text;
+        text << file.rdbuf();
+        Json root = Json::parse(text.str(), nullptr, true, true);
+
+        Scene scene;
+        std::vector<std::string> problems = CheckSceneFile(root, registry, scene);
+        for (const std::string& problem : problems) printf("      %s\n", problem.c_str());
+        CHECK(file.is_open() && problems.empty(), "Assets/Scenes/example.json follows the format");
+        CHECK(scene.GetEntityCount() == root["entities"].size() && scene.GetEntityCount() == 8, "every entity in the example loads");
+        CHECK(scene.FindEntity("player").Has<Transform>() && scene.FindEntity("camera").Get<Camera>().Primary && !scene.FindEntity("spawn_point").Has<Transform>(), "the example's components read as written");
+
+        bool texturesExist = true;
+        for (const Json& entity : root["entities"])
+            if (entity.contains("components") && entity["components"].contains("SpriteRenderer")) {
+                std::string path = entity["components"]["SpriteRenderer"]["texture"].get<std::string>();
+                if (!path.empty() && !std::filesystem::exists(path)) { printf("      missing texture %s\n", path.c_str()); texturesExist = false; }
+            }
+        CHECK(texturesExist, "every texture the example refers to exists");
+
+        // the example is written the way the format says to write it: every field of every component
+        bool everyField = true;
+        for (const Json& entity : root["entities"])
+            if (entity.contains("components"))
+                for (auto it = entity["components"].begin(); it != entity["components"].end(); ++it)
+                    everyField = everyField && it.value().size() == registry.Find(it.key())->Fields.size();
+        CHECK(everyField, "the example writes every field of each component");
+
+        // the first jsonc block in docs/scene-format.md is a complete, valid scene file
+        std::ifstream doc("docs/scene-format.md");
+        std::stringstream docText;
+        docText << doc.rdbuf();
+        std::string all = docText.str();
+        size_t begin = all.find("```jsonc\n"), end = begin == std::string::npos ? std::string::npos : all.find("\n```", begin);
+        CHECK(doc.is_open() && begin != std::string::npos && end != std::string::npos, "the spec has a jsonc example");
+        if (begin != std::string::npos && end != std::string::npos) {
+            Json snippet = Json::parse(all.substr(begin + 8, end - begin - 8), nullptr, true, true);
+            Scene snippetScene;
+            std::vector<std::string> snippetProblems = CheckSceneFile(snippet, registry, snippetScene);
+            for (const std::string& problem : snippetProblems) printf("      %s\n", problem.c_str());
+            CHECK(snippetProblems.empty() && snippetScene.FindEntity("player").Get<Transform>().Position == glm::vec2(10.0f, 20.0f), "the spec's own example is a valid scene");
+        }
+
+        // the checker really rejects what the spec forbids
+        Scene bad;
+        CHECK(!CheckSceneFile(Json::parse(R"({"version": 2, "name": "x", "entities": []})"), registry, bad).empty(), "an unsupported version is rejected");
+        CHECK(!CheckSceneFile(Json::parse(R"({"version": 1, "name": "x", "entities": [], "extra": 1})"), registry, bad).empty(), "an unknown top-level key is rejected");
+        CHECK(!CheckSceneFile(Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "a"}, {"name": "a"}]})"), registry, bad).empty(), "a duplicate entity name is rejected");
+        CHECK(!CheckSceneFile(Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "a/b"}]})"), registry, bad).empty(), "a name with a slash is rejected");
+        CHECK(!CheckSceneFile(Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": " a"}]})"), registry, bad).empty(), "a name with leading whitespace is rejected");
+        CHECK(!CheckSceneFile(Json::parse(R"({"version": 1, "name": "x", "entities": [{"nam": "a"}]})"), registry, bad).empty(), "a misspelled entity key is rejected");
+        CHECK(CheckSceneFile(Json::parse(R"({"$schema": "schema.json", "version": 1, "name": "x", "entities": []})"), registry, bad).empty(), "$schema is allowed");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);
