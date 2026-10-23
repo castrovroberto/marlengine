@@ -83,7 +83,7 @@ namespace Marle {
                 if (field.Required) required.push_back(field.Name);
             }
 
-            Json definition = Json::object({ { "type", "object" }, { "description", info->Description }, { "additionalProperties", false }, { "properties", properties } });
+            Json definition = Json::object({ { "type", "object" }, { "description", info->Description + (info->IsBehavior ? " A behavior: it runs every fixed step, in file order." : "") }, { "additionalProperties", false }, { "properties", properties } });
             if (!required.empty()) definition["required"] = required;
             definitions[DefinitionName(info->Name)] = definition;
             entityComponentProperties[info->Name] = Json::object({ { "$ref", "#/definitions/" + DefinitionName(info->Name) } });

@@ -39,6 +39,7 @@ namespace Marle {
             // none, and loading a scene starts it there. It is runtime state: a saved scene restarts its
             // sequence from the seed.
             RandomGenerator& GetRandom() { return m_Random; }
+            const RandomGenerator& GetRandom() const { return m_Random; }
 
             // Restarts the generator from the seed in the scene's own Random component (seed 1 if none)
             void ResetRandom();

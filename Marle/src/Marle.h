@@ -31,6 +31,7 @@
 #include "Marle/Scene/SceneTool.h"
 #include "Marle/Scene/SceneRenderer.h"
 #include "Marle/Scene/SceneReloader.h"
+#include "Marle/Scene/Simulation.h"
 
 // Events
 #include "Marle/Events/Event.h"

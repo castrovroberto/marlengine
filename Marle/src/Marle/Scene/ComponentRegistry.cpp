@@ -151,6 +151,12 @@ namespace Marle {
         return names;
     }
 
+    void ComponentRegistry::RunBehaviors(Entity entity, BehaviorContext& context) const
+    {
+        for (const auto& component : m_Components)
+            if (component->Info.IsBehavior && component->Has(entity)) component->RunBehavior(entity, context);
+    }
+
     void RegisterBuiltinComponents(ComponentRegistry& registry)
     {
         registry.Register<Transform>("Transform", "Where an entity is, how it is turned and how big it is.")

@@ -24,6 +24,15 @@ namespace Marle {
         glm::vec4 Tint = { 1.0f, 1.0f, 1.0f, 1.0f };   // multiplied with the texture, RGBA 0 to 1
     };
 
+    // Where an entity's Transform was before the last simulation step, so rendering can draw between the
+    // previous and the current step. Runtime only: it is not registered, so it is never written to a
+    // scene file, validated, in the schema or in a checksum.
+    struct PreviousTransform {
+        glm::vec2 Position = { 0.0f, 0.0f };
+        float Rotation = 0.0f;
+        glm::vec2 Scale = { 1.0f, 1.0f };
+    };
+
     // A grid of tiles cut from a sprite sheet. The entity's Transform.Position is the bottom-left corner
     // of the map and Transform.Scale multiplies the tile size; rotation is not used. Rows are listed top
     // to bottom, as the map looks. Each character is one tile: a cell of the sprite sheet counted from

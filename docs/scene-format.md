@@ -104,6 +104,15 @@ The engine draws a scene (`SceneRenderer`) like this, so the order and values in
 
 `Assets/Scenes/world.json` is the Sandbox's world and a complete example of all of this: a camera, a 32 by 24 tilemap, sprites cut from a sheet, and a flat colored one.
 
+## Behaviors
+
+A **behavior** is a component that does something every fixed step (60 times a second in the Sandbox): move its entity, follow another, spin, and so on. You use one like any other component, by naming it and setting its fields; the schema says which components are behaviors. Behaviors are configured, not programmed (ADR-0002).
+
+- **Order is file order.** Each step runs the scene's own components first, then each entity in the order it appears in the file, and within an entity its behaviors in the order the component table lists them. So an entity that follows another must come **after** it in the file, or it follows where the other was one step ago.
+- **Repeatable.** A behavior knows only the fixed step, the player's input for that step, and the scene's seeded random numbers, so the same scene, seed and input always play out the same way (on the same build and platform).
+- **State lives in the scene.** What a behavior changes is ordinary component data (a `Spin` changes `Transform.rotation`), so a scene saved while it runs holds where everything got to. The one exception is the position in the random sequence, which restarts from the seed when the saved scene is loaded.
+- **Drawing between steps.** The engine remembers where each `Transform` was before the last step and draws between that and the current one, so motion stays smooth when the display and the steps do not line up. That memory is never written to a file.
+
 ## Written form
 
 The engine reads any layout that follows the rules above. When it writes a scene file (`SaveScene`), the output is canonical, so loading a canonical file and writing it again gives the same bytes, and a change to one component changes exactly one line:

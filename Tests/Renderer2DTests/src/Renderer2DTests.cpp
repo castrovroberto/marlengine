@@ -6,6 +6,7 @@
 #include "Marle/Scene/SceneLoader.h"
 #include "Marle/Scene/SceneRenderer.h"
 #include "Marle/Scene/Components.h"
+#include "Marle/Scene/Simulation.h"
 #include <glad/gl.h>
 #include <memory>
 #include <vector>
@@ -58,6 +59,8 @@ static std::string WriteAlphaTexture(unsigned char alpha)
     for (int i = 0; i < 64; i++) { unsigned char bgra[4] = { 255, 255, 255, alpha }; f.write((const char*)bgra, 4); }
     return path;
 }
+
+struct Slide { glm::vec2 Velocity = { 0.0f, 0.0f }; };   // a behavior for the interpolation test
 
 class RendererTestApp : public Application {
     std::vector<std::unique_ptr<OpenGLTexture2D>> tex;
@@ -669,6 +672,77 @@ protected:
             Render({ Camera(1024, 768, 1, true), TilemapEntity(bigRows, R"({"position": [0, 0]})"), Quad("on_top", 1024, 768, 30, red) });
             auto bigStats = Renderer2D::GetStats();
             CHECK(bigStats.QuadCount == 769 && bigStats.DrawCalls == 1 && Near(Read(512, 384), 255, 0, 0), "a 32 x 24 map is 768 quads in one draw call, with a sprite on top");
+        }
+
+        // 9f. drawing between simulation steps
+        {
+            ComponentRegistry registry;
+            RegisterBuiltinComponents(registry);
+            registry.Register<Slide>("Slide", "Slides.").Field(&Slide::Velocity, "velocity", "v")
+                .Behavior([](Slide& slide, BehaviorContext& ctx) { if (Transform* t = ctx.Self.TryGet<Transform>()) t->Position += slide.Velocity * (float)ctx.Dt; });
+            SceneRenderer sceneRenderer;
+
+            auto Frame = [&]() {
+                std::vector<unsigned char> pixels((size_t)W * (size_t)H * 4);
+                glReadPixels(0, 0, (int)W, (int)H, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+                return pixels;
+            };
+            const std::string camera = R"({"name": "camera", "components": {"Transform": {}, "Camera": {"primary": true}}})";
+            auto Scene1 = [&](const std::string& entities) {
+                return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [)" + camera + "," + entities + "]}", "inline", registry);
+            };
+            auto Draw = [&](const Scene& scene, float alpha) { glClear(GL_COLOR_BUFFER_BIT); sceneRenderer.Render(scene, W, H, alpha); return Frame(); };
+            auto Direct = [&](glm::vec2 center, glm::vec2 size, float rotation) {   // a red quad drawn straight through Renderer2D, in pixels
+                glClear(GL_COLOR_BUFFER_BIT);
+                Renderer2D::BeginBatch(W, H);
+                Renderer2D::DrawRotatedQuad({ 512.0f + center.x, 384.0f + center.y }, size, rotation, glm::vec4(1, 0, 0, 1));
+                Renderer2D::EndBatch();
+                return Frame();
+            };
+            const std::string slider = R"({"name": "q", "components": {"Transform": {"scale": [40, 40]}, "SpriteRenderer": {"tint": [1, 0, 0, 1]}, "Slide": {"velocity": [6000, 0]}}})";
+
+            // a step moves the entity 100 units (6000 per second for 1/60 s); the picture is where it was, between, or where it is
+            SceneLoadResult slide = Scene1(slider);
+            Simulation::Step(registry, *slide.Scene, InputFrame(), 1.0 / 60.0);
+            CHECK(glm::length(slide.Scene->FindEntity("q").Get<Transform>().Position - glm::vec2(100.0f, 0.0f)) < 0.001f && slide.Scene->FindEntity("q").Get<PreviousTransform>().Position == glm::vec2(0.0f), "a step moves the entity (about 100 units: 6000 per second for 1/60 s) and records where it was");
+            std::vector<unsigned char> atStart = Draw(*slide.Scene, 0.0f), half = Draw(*slide.Scene, 0.5f), atEnd = Draw(*slide.Scene, 1.0f);
+            CHECK(atStart == Direct({ 0, 0 }, { 40, 40 }, 0.0f), "alpha 0 draws it where it was");
+            CHECK(half == Direct({ 50, 0 }, { 40, 40 }, 0.0f), "alpha one half draws it halfway");
+            CHECK(atEnd == Direct({ 100, 0 }, { 40, 40 }, 0.0f), "alpha 1 draws it where it is");
+            glClear(GL_COLOR_BUFFER_BIT);
+            sceneRenderer.Render(*slide.Scene, W, H);
+            CHECK(Frame() == atEnd, "without an alpha the current state is drawn");
+            CHECK(Draw(*slide.Scene, -3.0f) == atStart && Draw(*slide.Scene, 7.0f) == atEnd, "an alpha outside 0 to 1 is held to it");
+            Draw(*slide.Scene, 0.5f);
+            CHECK(Near(Read(562, 384), 255, 0, 0) && Near(Read(512, 384), bg.r, bg.g, bg.b) && Near(Read(612, 384), bg.r, bg.g, bg.b), "at one half the sprite is neither where it was nor where it is");
+            Simulation::Step(registry, *slide.Scene, InputFrame(), 1.0 / 60.0);
+            CHECK(Draw(*slide.Scene, 0.5f) == Direct({ 150, 0 }, { 40, 40 }, 0.0f), "after the next step it is drawn between the last two positions");
+
+            // rotation and scale are drawn between too
+            SceneLoadResult turning = Scene1(R"({"name": "q", "components": {"Transform": {"rotation": 1.5707963, "scale": [60, 20]}, "SpriteRenderer": {"tint": [1, 0, 0, 1]}}})");
+            turning.Scene->FindEntity("q").Add<PreviousTransform>() = PreviousTransform{ { 0.0f, 0.0f }, 0.0f, { 20.0f, 60.0f } };
+            CHECK(Draw(*turning.Scene, 0.5f) == Direct({ 0, 0 }, { 40, 40 }, 0.78539815f), "rotation and scale are blended too");
+
+            // the camera moves between steps, so a still sprite appears to move the other way
+            SceneLoadResult panning = Scene1(R"({"name": "still", "components": {"Transform": {"position": [50, 0], "scale": [40, 40]}, "SpriteRenderer": {"tint": [1, 0, 0, 1]}}})");
+            panning.Scene->FindEntity("camera").Get<Transform>().Position = { 100.0f, 0.0f };
+            panning.Scene->FindEntity("camera").Add<PreviousTransform>() = PreviousTransform{ { 0.0f, 0.0f }, 0.0f, { 1.0f, 1.0f } };
+            CHECK(Draw(*panning.Scene, 0.5f) == Direct({ 0, 0 }, { 40, 40 }, 0.0f) && Draw(*panning.Scene, 1.0f) == Direct({ -50, 0 }, { 40, 40 }, 0.0f) && Draw(*panning.Scene, 0.0f) == Direct({ 50, 0 }, { 40, 40 }, 0.0f), "the camera is drawn between steps too");
+
+            // an entity with no previous transform is drawn where it is, whatever the alpha
+            SceneLoadResult fresh = Scene1(R"({"name": "new", "components": {"Transform": {"position": [100, 0], "scale": [40, 40]}, "SpriteRenderer": {"tint": [1, 0, 0, 1]}}})");
+            CHECK(Draw(*fresh.Scene, 0.0f) == Direct({ 100, 0 }, { 40, 40 }, 0.0f), "an entity that has not been through a step is drawn where it is");
+
+            // a tilemap moves with its transform
+            SceneLoadResult map = Scene1(R"({"name": "ground", "components": {"Transform": {"position": [64, 0]}, "Tilemap": {"texture": "Assets/Textures/test_sheet.tga", "cellSize": [32, 32], "tileSize": [64, 64], "rows": ["0"]}}})");
+            map.Scene->FindEntity("ground").Add<PreviousTransform>() = PreviousTransform{ { 0.0f, 0.0f }, 0.0f, { 1.0f, 1.0f } };
+            std::vector<unsigned char> tile = Draw(*map.Scene, 0.5f);
+            OpenGLTexture2D sheet("Assets/Textures/test_sheet.tga");
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawQuad({ 512.0f + 32.0f + 32.0f, 384.0f + 32.0f }, { 64, 64 }, SubTexture2D::CreateFromCoords(&sheet, { 0, 0 }, { 32, 32 }));
+            Renderer2D::EndBatch();
+            CHECK(tile == Frame(), "a tilemap is drawn halfway between where it was and where it is");
         }
 
         // 10. GL errors

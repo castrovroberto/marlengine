@@ -9,6 +9,7 @@
 #include "Marle/Scene/SceneTool.h"
 #include "Marle/Scene/SceneReloader.h"
 #include "Marle/Scene/RandomGenerator.h"
+#include "Marle/Scene/Simulation.h"
 #include "Marle/Core/KeyNames.h"
 #include "Marle/Core/KeyCodes.h"
 #include <nlohmann/json-schema.hpp>
@@ -36,6 +37,44 @@ struct Position { float x = 0.0f, y = 0.0f; Position() = default; Position(float
 struct Health { int points = 10; };
 struct Gravity { float Strength = 9.8f; };
 struct Follow { std::string Target; glm::vec2 Offset = { 0.0f, 0.0f }; };
+// Components with behaviors, for the simulation tests
+static std::vector<std::string> g_BehaviorLog;
+struct LogA { std::string Label; };
+struct LogB { std::string Label; };
+struct Counter { int Count = 0; int Every = 1; };
+struct Drift { glm::vec2 Velocity = { 0.0f, 0.0f }; };
+struct Stamp { float Elapsed = 0.0f; };
+struct Dice { int Last = 0; int Sum = 0; };
+struct Keyed { int Presses = 0; int FramesDown = 0; float Scroll = 0.0f; };
+struct Mischief { int Mode = 0; std::string Target; int Done = 0; };   // 1 destroys Target, 2 creates an entity each step
+
+static ComponentRegistry MakeSimulationRegistry()
+{
+    ComponentRegistry registry;
+    RegisterBuiltinComponents(registry);
+    registry.Register<LogA>("LogA", "Logs.").Field(&LogA::Label, "label", "l")
+        .Behavior([](LogA& c, BehaviorContext& ctx) { g_BehaviorLog.push_back(ctx.Self.GetName() + ":A:" + c.Label); });
+    registry.Register<LogB>("LogB", "Logs.").Field(&LogB::Label, "label", "l")
+        .Behavior([](LogB& c, BehaviorContext& ctx) { g_BehaviorLog.push_back(ctx.Self.GetName() + ":B:" + c.Label); });
+    registry.Register<Counter>("Counter", "Counts.").Field(&Counter::Count, "count", "c").Field(&Counter::Every, "every", "e")
+        .Behavior([](Counter& c, BehaviorContext&) { c.Count += c.Every; });
+    registry.Register<Drift>("Drift", "Moves.").Field(&Drift::Velocity, "velocity", "v")
+        .Behavior([](Drift& c, BehaviorContext& ctx) { if (Transform* t = ctx.Self.TryGet<Transform>()) t->Position += c.Velocity * (float)ctx.Dt; });
+    registry.Register<Stamp>("Stamp", "Time.").Field(&Stamp::Elapsed, "elapsed", "e")
+        .Behavior([](Stamp& c, BehaviorContext& ctx) { c.Elapsed += (float)ctx.Dt; });
+    registry.Register<Dice>("Dice", "Rolls.").Field(&Dice::Last, "last", "l").Field(&Dice::Sum, "sum", "s")
+        .Behavior([](Dice& c, BehaviorContext& ctx) { c.Last = ctx.Random.IntBetween(1, 6); c.Sum += c.Last; });
+    registry.Register<Keyed>("Keyed", "Reads input.").Field(&Keyed::Presses, "presses", "p").Field(&Keyed::FramesDown, "framesDown", "f").Field(&Keyed::Scroll, "scroll", "s")
+        .Behavior([](Keyed& c, BehaviorContext& ctx) { c.Presses += ctx.Input.WasPressed(Key::W); c.FramesDown += ctx.Input.IsDown(Key::W); c.Scroll += ctx.Input.Scroll; });
+    registry.Register<Mischief>("Mischief", "Changes the scene.").Field(&Mischief::Mode, "mode", "m").Field(&Mischief::Target, "target", "t").Field(&Mischief::Done, "done", "d")
+        .Behavior([](Mischief& c, BehaviorContext& ctx) {
+            if (c.Mode == 1) ctx.Scene.DestroyEntity(ctx.Scene.FindEntity(c.Target));
+            if (c.Mode == 2) ctx.Scene.CreateEntity("spawned" + std::to_string(c.Done)).Add<Counter>();
+            c.Done++;
+        });
+    return registry;
+}
+
 struct Binding { std::string Key = "Q"; };
 struct Pad { std::string Keys = "both"; std::string Label; int Count = 0; };
 struct Door { std::string Target; int Level = 1; bool Locked = false; };   // Target is required
@@ -1836,6 +1875,212 @@ int main(int argc, char** argv)
         ComponentRegistry other;
         other.Register<Pad>("Pad", "A pad.").Field(&Pad::Keys, "keys", "k").OneOf(KeyNames());   // the default 'both' is not a key
         CHECK(other.Find("Pad")->Fields[0].OneOf.empty(), "the usual guard applies: a default outside the names refuses the set");
+    }
+
+    // behaviors and the simulation step
+    {
+        ComponentRegistry registry = MakeSimulationRegistry();
+        auto load = [&](const std::string& text) { return LoadSceneFromText(text, "inline", registry); };
+        auto step = [&](Scene& scene, int n, const InputFrame& input = InputFrame(), double dt = 1.0 / 60.0) { for (int i = 0; i < n; i++) Simulation::Step(registry, scene, input, dt); };
+
+        // a behavior is a component with an update, and nothing else about it changes
+        CHECK(registry.Find("Counter")->IsBehavior && registry.Find("LogA")->IsBehavior && !registry.Find("Transform")->IsBehavior && !registry.Find("Tilemap")->IsBehavior, "a component with an update is a behavior, the others are not");
+        ComponentRegistry none;
+        none.Register<Counter>("Counter", "c").Field(&Counter::Count, "count", "c").Behavior(nullptr);
+        CHECK(!none.Find("Counter")->IsBehavior, "an empty update does not make a behavior");
+        SceneLoadResult counted = load(R"({"version": 1, "name": "c", "entities": [{"name": "a", "components": {"Counter": {"every": 3}}}]})");
+        CHECK(counted.Ok() && counted.Scene->FindEntity("a").Get<Counter>().Every == 3 && Contains(SaveSceneToText(*counted.Scene, registry).Text, R"("Counter": { "count": 0, "every": 3 })"), "a behavior loads and writes like any component");
+        const Json schema = GenerateSceneSchema(registry);
+        CHECK(Contains(schema["definitions"]["component_Counter"]["description"].get<std::string>(), "A behavior: it runs every fixed step, in file order.") && !Contains(schema["definitions"]["component_Transform"]["description"].get<std::string>(), "behavior"), "the schema says which components are behaviors");
+
+        // the order: the scene's own components, then entities in file order, in an entity by registration order
+        g_BehaviorLog.clear();
+        SceneLoadResult ordered = load(R"({"version": 1, "name": "o",
+            "components": {"LogB": {"label": "scene"}, "LogA": {"label": "scene"}},
+            "entities": [
+              {"name": "e1", "components": {"LogB": {"label": "b"}, "LogA": {"label": "a"}}},
+              {"name": "e2", "components": {"LogA": {"label": "a"}}},
+              {"name": "e3"},
+              {"name": "e4", "components": {"LogB": {"label": "b"}}}]})");
+        step(*ordered.Scene, 2);
+        const std::vector<std::string> once = { "(scene):A:scene", "(scene):B:scene", "e1:A:a", "e1:B:b", "e2:A:a", "e4:B:b" };
+        std::vector<std::string> twice = once;
+        twice.insert(twice.end(), once.begin(), once.end());
+        CHECK(g_BehaviorLog == twice, "behaviors run for the scene first, then each entity in file order, and in an entity in registration order, every step");
+
+        // counting, and components that are not behaviors
+        SceneLoadResult counts = load(R"({"version": 1, "name": "c", "components": {"Counter": {"every": 5}}, "entities": [{"name": "a", "components": {"Counter": {}}}, {"name": "b", "components": {"Counter": {"every": 3}, "Tilemap": {"rows": ["a"]}}}]})");
+        step(*counts.Scene, 100);
+        CHECK(counts.Scene->FindEntity("a").Get<Counter>().Count == 100 && counts.Scene->FindEntity("b").Get<Counter>().Count == 300 && counts.Scene->GetSceneEntity().Get<Counter>().Count == 500, "every behavior runs once per step, on entities and on the scene");
+        CHECK(counts.Scene->FindEntity("b").Get<Tilemap>().Rows == std::vector<std::string>({ "a" }), "a component without an update is left alone");
+
+        // time is the step given, and nothing else
+        SceneLoadResult timed = load(R"({"version": 1, "name": "t", "entities": [{"name": "a", "components": {"Stamp": {}}}]})");
+        step(*timed.Scene, 4, InputFrame(), 0.25);
+        CHECK(timed.Scene->FindEntity("a").Get<Stamp>().Elapsed == 1.0f, "dt is the step the caller gives");
+        SceneLoadResult sixty = load(R"({"version": 1, "name": "t", "entities": [{"name": "a", "components": {"Stamp": {}}}]})");
+        float expected = 0.0f;
+        for (int i = 0; i < 60; i++) expected += (float)(1.0 / 60.0);
+        step(*sixty.Scene, 60);
+        CHECK(sixty.Scene->FindEntity("a").Get<Stamp>().Elapsed == expected, "sixty steps of 1/60 add up the way the same arithmetic does");
+        step(*sixty.Scene, 10, InputFrame(), 0.0);
+        CHECK(sixty.Scene->FindEntity("a").Get<Stamp>().Elapsed == expected, "a step of no time changes nothing");
+
+        // moving the transform of the entity
+        SceneLoadResult drifting = load(R"({"version": 1, "name": "d", "entities": [{"name": "a", "components": {"Transform": {"position": [10, 20]}, "Drift": {"velocity": [60, -30]}}}, {"name": "no_transform", "components": {"Drift": {"velocity": [1, 1]}}}]})");
+        glm::vec2 position(10.0f, 20.0f);
+        for (int i = 0; i < 90; i++) position += glm::vec2(60.0f, -30.0f) * (float)(1.0 / 60.0);
+        step(*drifting.Scene, 90);
+        CHECK(drifting.Scene->FindEntity("a").Get<Transform>().Position == position && !drifting.Scene->FindEntity("no_transform").Has<Transform>(), "a behavior moves its entity's Transform, and does nothing on one without");
+
+        // input is the frame of the step
+        SceneLoadResult keyed = load(R"({"version": 1, "name": "k", "entities": [{"name": "a", "components": {"Keyed": {}}}]})");
+        Keyed& k = keyed.Scene->FindEntity("a").Get<Keyed>();
+        step(*keyed.Scene, 1, InputFrame().Press(Key::W));
+        CHECK(k.Presses == 1 && k.FramesDown == 1 && k.Scroll == 0.0f, "a step sees the press and the key held");
+        InputFrame held; held.Hold(Key::W); held.Scroll = 2.5f;
+        step(*keyed.Scene, 3, held);
+        CHECK(k.Presses == 1 && k.FramesDown == 4 && k.Scroll == 7.5f, "held keys are not new presses, and the wheel adds up");
+        step(*keyed.Scene, 2);
+        InputFrame tap; tap.Press(Key::W).Release(Key::W);
+        step(*keyed.Scene, 1, tap);
+        CHECK(k.Presses == 2 && k.FramesDown == 4, "a tap counts as a press and not as held");
+
+        // randomness is the scene's generator, in order
+        SceneLoadResult dice = load(R"({"version": 1, "name": "r", "components": {"Random": {"seed": 42}}, "entities": [{"name": "d1", "components": {"Dice": {}}}, {"name": "d2", "components": {"Dice": {}}}]})");
+        RandomGenerator reference(42);
+        bool rolls = true;
+        for (int i = 0; i < 20; i++) {
+            step(*dice.Scene, 1);
+            rolls = rolls && dice.Scene->FindEntity("d1").Get<Dice>().Last == reference.IntBetween(1, 6) && dice.Scene->FindEntity("d2").Get<Dice>().Last == reference.IntBetween(1, 6);
+        }
+        CHECK(rolls && dice.Scene->GetRandom().GetState() == reference.GetState(), "behaviors draw from the scene's generator in the order they run");
+
+        // the previous transform, for drawing between steps
+        SceneLoadResult moving = load(R"({"version": 1, "name": "m", "entities": [{"name": "a", "components": {"Transform": {"position": [0, 0], "scale": [2, 2]}, "Drift": {"velocity": [60, 0]}}}, {"name": "plain"}]})");
+        Entity a = moving.Scene->FindEntity("a");
+        CHECK(!a.Has<PreviousTransform>(), "before any step there is no previous transform");
+        step(*moving.Scene, 1);
+        CHECK(a.Has<PreviousTransform>() && a.Get<PreviousTransform>().Position == glm::vec2(0.0f) && a.Get<PreviousTransform>().Scale == glm::vec2(2.0f) && a.Get<Transform>().Position == glm::vec2(1.0f, 0.0f), "a step records where the transform was before it ran the behaviors");
+        step(*moving.Scene, 1);
+        CHECK(a.Get<PreviousTransform>().Position == glm::vec2(1.0f, 0.0f) && a.Get<Transform>().Position == glm::vec2(2.0f, 0.0f), "and the next step records the one after");
+        CHECK(!moving.Scene->FindEntity("plain").Has<PreviousTransform>(), "an entity with no transform has none");
+        moving.Scene->FindEntity("plain").Add<Transform>().Position = { 5.0f, 5.0f };
+        step(*moving.Scene, 1);
+        CHECK(moving.Scene->FindEntity("plain").Get<PreviousTransform>().Position == glm::vec2(5.0f), "one that gets a transform later is recorded from the next step");
+        CHECK(registry.GetComponentNames(a) == std::vector<std::string>({ "Transform", "Drift" }) && !Contains(SaveSceneToText(*moving.Scene, registry).Text, "Previous") && SchemaErrors(schema, Json::parse(SaveSceneToText(*moving.Scene, registry).Text)).empty(), "it is not a registered component: not listed, not written, not in the file");
+        SceneLoadResult still = load(R"({"version": 1, "name": "s", "entities": [{"name": "a", "components": {"Transform": {"position": [3, 4]}}}]})");
+        uint64_t beforeStep = Simulation::Checksum(registry, *still.Scene);
+        step(*still.Scene, 5);
+        CHECK(still.Scene->FindEntity("a").Has<PreviousTransform>() && Simulation::Checksum(registry, *still.Scene) == beforeStep, "recording previous transforms does not change the checksum");
+
+        // changes made during a step
+        SceneLoadResult mischief = load(R"({"version": 1, "name": "x", "entities": [{"name": "killer", "components": {"Mischief": {"mode": 1, "target": "victim"}}}, {"name": "victim", "components": {"Counter": {}}}, {"name": "last", "components": {"Counter": {}}}]})");
+        step(*mischief.Scene, 1);
+        CHECK(!mischief.Scene->FindEntity("victim") && mischief.Scene->GetEntityCount() == 2 && mischief.Scene->FindEntity("last").Get<Counter>().Count == 1, "an entity destroyed during a step is skipped, and the others still run");
+        step(*mischief.Scene, 3);
+        CHECK(mischief.Scene->GetEntityCount() == 2 && mischief.Scene->FindEntity("last").Get<Counter>().Count == 4, "and destroying one that is not there is harmless");
+        SceneLoadResult spawner = load(R"({"version": 1, "name": "x", "entities": [{"name": "maker", "components": {"Mischief": {"mode": 2}}}]})");
+        step(*spawner.Scene, 1);
+        CHECK(spawner.Scene->FindEntity("spawned0") && spawner.Scene->FindEntity("spawned0").Get<Counter>().Count == 0, "an entity created during a step does not run in it");
+        step(*spawner.Scene, 1);
+        CHECK(spawner.Scene->FindEntity("spawned0").Get<Counter>().Count == 1 && spawner.Scene->FindEntity("spawned1").Get<Counter>().Count == 0 && spawner.Scene->GetEntities().back().GetName() == "spawned1", "it runs from the next step, and goes last in the order");
+        BehaviorContext context{ *spawner.Scene, Entity(), InputFrame(), spawner.Scene->GetRandom(), 0.0 };
+        const size_t entityCount = spawner.Scene->GetEntityCount();
+        registry.RunBehaviors(Entity(), context);
+        CHECK(spawner.Scene->GetEntityCount() == entityCount, "running behaviors for an invalid entity does nothing");
+        registry.RunBehaviors(spawner.Scene->FindEntity("maker"), context);
+        CHECK(spawner.Scene->GetEntityCount() == entityCount + 1 && spawner.Scene->FindEntity("spawned2"), "and for a valid one runs just its behaviors");
+    }
+
+    // the checksum of a scene's state, and runs that must match
+    {
+        ComponentRegistry registry = MakeSimulationRegistry();
+        auto load = [&](const std::string& text) { return LoadSceneFromText(text, "inline", registry); };
+        auto step = [&](Scene& scene, int n, const InputFrame& input = InputFrame()) { for (int i = 0; i < n; i++) Simulation::Step(registry, scene, input, 1.0 / 60.0); };
+
+        // FNV-1a 64: the published test vectors
+        CHECK(Fnv1a64("", 0) == 0xcbf29ce484222325ull && Fnv1a64("a", 1) == 0xaf63dc4c8601ec8cull && Fnv1a64("foobar", 6) == 0x85944171f73967e8ull, "the hash is FNV-1a 64 bit, matching the published vectors");
+        CHECK(Simulation::ChecksumText(0xbc939d54723477b5ull) == "bc939d54723477b5" && Simulation::ChecksumText(0) == "0000000000000000" && Simulation::ChecksumText(0xFFull) == "00000000000000ff", "a checksum is written as 16 hex digits");
+
+        // a golden value, worked out apart from the engine (an independent script mixing the same pieces
+        // with FNV-1a): ten steps of two counters, and the generator still at the start of seed 1
+        const std::string counters = R"({"version": 1, "name": "g", "entities": [{"name": "a", "components": {"Counter": {}}}, {"name": "b", "components": {"Counter": {"every": 2}}}]})";
+        SceneLoadResult golden = load(counters);
+        step(*golden.Scene, 10);
+        CHECK(Simulation::Checksum(registry, *golden.Scene) == 0xbc939d54723477b5ull, "the checksum of a known state is the value worked out independently");
+
+        // equal runs, equal checksums
+        SceneLoadResult one = load(counters), two = load(counters);
+        step(*one.Scene, 25); step(*two.Scene, 25);
+        CHECK(Simulation::Checksum(registry, *one.Scene) == Simulation::Checksum(registry, *two.Scene), "two runs of the same scene end with the same checksum");
+        uint64_t atStart = Simulation::Checksum(registry, *load(counters).Scene);
+        CHECK(atStart == Simulation::Checksum(registry, *load(counters).Scene) && atStart != Simulation::Checksum(registry, *one.Scene), "the checksum of a scene that has not run is the same every time, and running changes it");
+
+        // anything that is state changes it
+        uint64_t base = Simulation::Checksum(registry, *one.Scene);
+        one.Scene->FindEntity("a").Get<Counter>().Count++;
+        CHECK(Simulation::Checksum(registry, *one.Scene) != base, "a change to one value changes the checksum");
+        one.Scene->FindEntity("a").Get<Counter>().Count--;
+        CHECK(Simulation::Checksum(registry, *one.Scene) == base, "and changing it back restores it");
+        one.Scene->GetSceneEntity().Add<Counter>();
+        CHECK(Simulation::Checksum(registry, *one.Scene) != base, "so does a component on the scene itself");
+        one.Scene->GetSceneEntity().Remove<Counter>();
+        one.Scene->GetRandom().NextU32();
+        CHECK(Simulation::Checksum(registry, *one.Scene) != base, "and so does the position in the random sequence");
+        one.Scene->GetRandom().Seed(1);
+        CHECK(Simulation::Checksum(registry, *one.Scene) == base, "which is restored by starting it again");
+
+        SceneLoadResult swapped = load(R"({"version": 1, "name": "g", "entities": [{"name": "b", "components": {"Counter": {"every": 2}}}, {"name": "a", "components": {"Counter": {}}}]})");
+        step(*swapped.Scene, 10);
+        CHECK(Simulation::Checksum(registry, *swapped.Scene) != 0xbc939d54723477b5ull, "the order of entities is part of the state");
+        SceneLoadResult renamed = load(R"({"version": 1, "name": "g", "entities": [{"name": "a", "components": {"Counter": {}}}, {"name": "c", "components": {"Counter": {"every": 2}}}]})");
+        step(*renamed.Scene, 10);
+        CHECK(Simulation::Checksum(registry, *renamed.Scene) != 0xbc939d54723477b5ull, "and so are the names");
+        SceneLoadResult renamedScene = load(R"({"version": 1, "name": "another name", "entities": [{"name": "a", "components": {"Counter": {}}}, {"name": "b", "components": {"Counter": {"every": 2}}}]})");
+        step(*renamedScene.Scene, 10);
+        CHECK(Simulation::Checksum(registry, *renamedScene.Scene) == 0xbc939d54723477b5ull, "but what the scene is called is not");
+
+        // seeds
+        const std::string rolls = R"({"version": 1, "name": "r", "components": {"Random": {"seed": SEED}}, "entities": [{"name": "d", "components": {"Dice": {}}}]})";
+        auto withSeed = [&](int seed) { std::string text = rolls; text.replace(text.find("SEED"), 4, std::to_string(seed)); return load(text); };
+        SceneLoadResult s1 = withSeed(7), s2 = withSeed(7), s3 = withSeed(8);
+        step(*s1.Scene, 30); step(*s2.Scene, 30); step(*s3.Scene, 30);
+        CHECK(Simulation::Checksum(registry, *s1.Scene) == Simulation::Checksum(registry, *s2.Scene) && Simulation::Checksum(registry, *s1.Scene) != Simulation::Checksum(registry, *s3.Scene), "the same seed gives the same run and another seed a different one");
+
+        // no hidden state: a scene saved halfway and loaded carries on exactly as the one that did not stop
+        const std::string moving = R"({"version": 1, "name": "m", "entities": [
+            {"name": "a", "components": {"Transform": {"position": [1, 2], "rotation": 0.5}, "Drift": {"velocity": [13.5, -7.25]}, "Counter": {"every": 3}, "Stamp": {}}},
+            {"name": "b", "components": {"Counter": {}, "Keyed": {}}}]})";
+        InputFrame keys; keys.Press(Key::W); keys.Scroll = 0.5f;
+        SceneLoadResult straight = load(moving);
+        step(*straight.Scene, 100, keys);
+
+        SceneLoadResult first = load(moving);
+        step(*first.Scene, 50, keys);
+        SceneSaveResult saved = SaveSceneToText(*first.Scene, registry);
+        SceneLoadResult resumed = load(saved.Text);
+        step(*resumed.Scene, 50, keys);
+        CHECK(saved.Ok() && resumed.Ok() && Simulation::Checksum(registry, *resumed.Scene) == Simulation::Checksum(registry, *straight.Scene), "a scene saved halfway, loaded and run on ends where an unbroken run does (all its state is in the scene)");
+
+        // the same with randomness, once the position in the sequence is carried over too
+        SceneLoadResult diceStraight = withSeed(99);
+        step(*diceStraight.Scene, 100);
+        SceneLoadResult diceFirst = withSeed(99);
+        step(*diceFirst.Scene, 50);
+        SceneLoadResult diceResumed = load(SaveSceneToText(*diceFirst.Scene, registry).Text);
+        diceResumed.Scene->GetRandom().SetState(diceFirst.Scene->GetRandom().GetState());
+        step(*diceResumed.Scene, 50);
+        CHECK(Simulation::Checksum(registry, *diceResumed.Scene) == Simulation::Checksum(registry, *diceStraight.Scene), "and with random numbers when the generator's state is carried over");
+        SceneLoadResult diceRestarted = load(SaveSceneToText(*diceFirst.Scene, registry).Text);
+        step(*diceRestarted.Scene, 50);
+        CHECK(Simulation::Checksum(registry, *diceRestarted.Scene) != Simulation::Checksum(registry, *diceStraight.Scene), "while a saved scene alone restarts the sequence from its seed, as documented");
+
+        // stepping several scenes in turn does not mix them up
+        SceneLoadResult x = load(moving), y = load(moving), reference = load(moving);
+        for (int i = 0; i < 40; i++) { step(*x.Scene, 1, keys); step(*y.Scene, 1); }
+        step(*reference.Scene, 40, keys);
+        CHECK(Simulation::Checksum(registry, *x.Scene) == Simulation::Checksum(registry, *reference.Scene) && Simulation::Checksum(registry, *y.Scene) != Simulation::Checksum(registry, *x.Scene), "stepping two scenes alternately gives each the same result as stepping it alone");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

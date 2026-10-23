@@ -2,6 +2,9 @@
 
 #include "Marle/Core.h"
 #include "Entity.h"
+#include "Marle/InputFrame.h"
+#include "RandomGenerator.h"
+#include "Scene.h"
 #include <nlohmann/json.hpp>
 #include <glm/glm.hpp>
 #include <algorithm>
@@ -46,9 +49,21 @@ namespace Marle {
         std::vector<std::string> OneOf;         // for a string: the only values allowed, empty means any string
     };
 
+    // What a behavior is given each fixed step (ADR-0002). There is no clock here on purpose: time is
+    // the fixed step `Dt`, input is the step's frame, randomness is the scene's generator, so the same
+    // scene, seed and input always give the same result.
+    struct BehaviorContext {
+        Marle::Scene& Scene;
+        Entity Self;                    // the entity the behavior is on; the scene's own entity for a scene-level one
+        const InputFrame& Input;
+        RandomGenerator& Random;        // the scene's generator, the only source of random numbers
+        double Dt;                      // the fixed step in seconds
+    };
+
     struct ComponentInfo {
         std::string Name;
         std::string Description;
+        bool IsBehavior = false;                // has an update function that runs every fixed step
         std::vector<FieldInfo> Fields;          // in declaration order
     };
 
@@ -257,6 +272,7 @@ namespace Marle {
             virtual bool Has(const Entity& entity) const = 0;
             virtual void Read(Entity& entity, const Json& data, std::vector<ValidationError>& errors) const = 0;
             virtual Json Write(const Entity& entity, bool skipDefaults) const = 0;
+            virtual void RunBehavior(Entity, BehaviorContext&) const {}
         };
 
         template<typename T>
@@ -267,6 +283,7 @@ namespace Marle {
             };
             std::vector<FieldOps> Ops;     // parallel to Info.Fields
             std::function<void(const T&, std::vector<ValidationError>&)> Validator;   // rules that span fields
+            std::function<void(T&, BehaviorContext&)> BehaviorFn;
 
             TypedComponentImpl(std::string name, std::string description)
             {
@@ -319,6 +336,12 @@ namespace Marle {
                     return;
                 }
                 entity.Add<T>(std::move(value));
+            }
+
+            void RunBehavior(Entity entity, BehaviorContext& context) const override
+            {
+                if (BehaviorFn)
+                    if (T* component = entity.TryGet<T>()) BehaviorFn(*component, context);
             }
 
             Json Write(const Entity& entity, bool skipDefaults) const override
@@ -407,6 +430,20 @@ namespace Marle {
             ComponentBuilder& Max(double value) { if (m_Last) m_Last->Max = value; return *this; }
             ComponentBuilder& Range(double min, double max) { return Min(min).Max(max); }
 
+            // Makes this component a behavior: `update` runs for it every fixed step (Simulation::Step), with
+            // the component and a BehaviorContext. Scene-level components run first, then entities in the
+            // order of the file, and within an entity behaviors in registration order, so something that
+            // follows another entity belongs after it in the file. An update may change components of any
+            // entity but must not add or remove components or create or destroy entities; it must use only
+            // what the context gives it (no clock, no unseeded randomness, no polling Input), which is what
+            // keeps a run repeatable. Loading, writing, validating and the schema need nothing more.
+            ComponentBuilder& Behavior(std::function<void(T&, BehaviorContext&)> update)
+            {
+                m_Impl->BehaviorFn = std::move(update);
+                m_Impl->Info.IsBehavior = (bool)m_Impl->BehaviorFn;
+                return *this;
+            }
+
             // A check for rules that span fields, such as rows that must be the same length. It runs only
             // when every field was read without problems, and reports problems with paths inside the
             // component (e.g. "/rows/3"). The generated schema cannot express these rules.
@@ -453,6 +490,9 @@ namespace Marle {
 
             // The names of the components the entity has, in registration order
             std::vector<std::string> GetComponentNames(const Entity& entity) const;
+
+            // Runs the entity's behavior components, in registration order
+            void RunBehaviors(Entity entity, BehaviorContext& context) const;
 
         private:
             bool Add(const std::shared_ptr<detail::ComponentImpl>& impl);
