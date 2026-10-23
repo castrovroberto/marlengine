@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Marlengine scene file",
+  "description": "A scene: its entities and their components. Generated from the component registry; see docs/scene-format.md. The engine's loader is the authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "name",
+    "entities"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "The path or URL of this schema, for editors; the engine ignores it."
+    },
+    "version": {
+      "const": 1,
+      "description": "The scene file format version."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The scene's name."
+    },
+    "entities": {
+      "type": "array",
+      "description": "The entities, in creation order.",
+      "items": {
+        "$ref": "#/definitions/entity"
+      }
+    }
+  },
+  "definitions": {
+    "entity": {
+      "type": "object",
+      "description": "A named thing in the scene, made of components.",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\x20/\\u007f](?:[^\\u0000-\\u001f/\\u007f]*[^\\u0000-\\x20/\\u007f])?$",
+          "description": "Unique within the scene. 1 to 64 characters, no control characters, no leading or trailing whitespace, no '/'. Other entities refer to this one by this name."
+        },
+        "components": {
+          "type": "object",
+          "description": "The entity's components, keyed by component name.",
+          "additionalProperties": false,
+          "properties": {
+            "Transform": {
+              "$ref": "#/definitions/component_Transform"
+            },
+            "SpriteRenderer": {
+              "$ref": "#/definitions/component_SpriteRenderer"
+            },
+            "Camera": {
+              "$ref": "#/definitions/component_Camera"
+            }
+          }
+        }
+      }
+    },
+    "component_Transform": {
+      "type": "object",
+      "description": "Where an entity is, how it is turned and how big it is.",
+      "additionalProperties": false,
+      "properties": {
+        "position": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "World position [x, y], in world units.",
+          "default": [
+            0.0,
+            0.0
+          ]
+        },
+        "rotation": {
+          "type": "number",
+          "description": "Turn about the position, in radians, counter-clockwise.",
+          "default": 0.0
+        },
+        "scale": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Size [width, height], in world units.",
+          "default": [
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    "component_SpriteRenderer": {
+      "type": "object",
+      "description": "Draws the entity as a quad at its Transform: a flat color, a texture, or one cell of a sprite sheet.",
+      "additionalProperties": false,
+      "properties": {
+        "texture": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.:)(?![\\s\\S]*\\\\)(?!(?:[\\s\\S]*/)?\\.\\.(?:/|$))[\\s\\S]*$",
+          "description": "Image path relative to the working directory; empty draws a flat color. An asset file path, relative to the working directory, written with '/' and without '..'.",
+          "default": ""
+        },
+        "cell": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0.0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Sprite sheet cell [column, row], row 0 at the bottom.",
+          "default": [
+            0,
+            0
+          ]
+        },
+        "cellSize": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0.0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "One sprite sheet cell [width, height] in pixels; [0, 0] uses the whole texture.",
+          "default": [
+            0.0,
+            0.0
+          ]
+        },
+        "tint": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "Color [r, g, b, a], each 0 to 1, multiplied with the texture.",
+          "default": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    },
+    "component_Camera": {
+      "type": "object",
+      "description": "Views the scene from the entity's Transform.",
+      "additionalProperties": false,
+      "properties": {
+        "zoom": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 100.0,
+          "description": "How much to magnify the view; larger shows less of the world.",
+          "default": 1.0
+        },
+        "primary": {
+          "type": "boolean",
+          "description": "Whether the scene is drawn through this camera.",
+          "default": false
+        }
+      }
+    }
+  }
+}

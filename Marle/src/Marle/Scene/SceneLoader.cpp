@@ -17,7 +17,9 @@ namespace Marle {
 
     bool IsValidEntityName(const std::string& name)
     {
-        if (name.empty() || name.size() > 64 || name.find('/') != std::string::npos) return false;
+        // length counts characters (UTF-8 code points), not bytes
+        size_t length = std::count_if(name.begin(), name.end(), [](unsigned char c) { return (c & 0xC0) != 0x80; });
+        if (length == 0 || length > 64 || name.find('/') != std::string::npos) return false;
         if (std::isspace((unsigned char)name.front()) || std::isspace((unsigned char)name.back())) return false;
         return std::none_of(name.begin(), name.end(), [](unsigned char c) { return c < 0x20 || c == 0x7f; });
     }

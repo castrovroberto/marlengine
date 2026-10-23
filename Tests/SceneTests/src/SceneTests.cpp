@@ -5,10 +5,14 @@
 #include "Marle/Scene/ComponentRegistry.h"
 #include "Marle/Scene/SceneLoader.h"
 #include "Marle/Scene/SceneWriter.h"
+#include "Marle/Scene/SceneSchema.h"
+#include <nlohmann/json-schema.hpp>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -36,6 +40,49 @@ static std::vector<std::string> SplitLines(const std::string& text)
     std::stringstream stream(text);
     for (std::string line; std::getline(stream, line);) lines.push_back(line);
     return lines;
+}
+
+// MARLE_UPDATE_GOLDEN=1 rewrites the committed generated files (the schema and the canonical fixture)
+// instead of failing when they are stale.
+static bool UpdateGolden()
+{
+    const char* value = std::getenv("MARLE_UPDATE_GOLDEN");
+    return value && value[0] == '1';
+}
+
+static void WriteFile(const std::string& path, const std::string& text)
+{
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << text;
+}
+
+// Checks scene JSON against a JSON Schema and collects every error as "pointer: message"
+class CollectingHandler : public nlohmann::json_schema::basic_error_handler {
+    public:
+        std::vector<std::string> Errors;
+        void error(const nlohmann::json::json_pointer& pointer, const nlohmann::json& instance, const std::string& message) override
+        {
+            nlohmann::json_schema::basic_error_handler::error(pointer, instance, message);
+            Errors.push_back(pointer.to_string() + ": " + message);
+        }
+};
+
+static std::vector<std::string> SchemaErrors(const Json& schema, const Json& instance)
+{
+    nlohmann::json_schema::json_validator validator;
+    validator.set_root_schema(nlohmann::json::parse(schema.dump()));
+    CollectingHandler handler;
+    validator.validate(nlohmann::json::parse(instance.dump()), handler);
+    return handler.Errors;
+}
+
+static Json ParseWithComments(const std::string& text) { return Json::parse(text, nullptr, true, true); }
+
+// The entity a pointer like "/entities/7/..." is inside, or -1
+static int EntityIndexOf(const std::string& pointer)
+{
+    if (pointer.rfind("/entities/", 0) != 0) return -1;
+    return std::atoi(pointer.c_str() + 10);
 }
 
 static bool HasProblem(const SceneLoadResult& result, const std::string& path, const std::string& text)
@@ -381,6 +428,10 @@ int main()
         CHECK(many.Ok() && many.Scene->GetEntityCount() == 2000 && many.Scene->FindEntity("e1999").Has<Transform>(), "a large scene loads");
 
         CHECK(IsValidEntityName("player") && IsValidEntityName("Tile 3-b.x") && IsValidEntityName(std::string(64, 'a')), "ordinary names are valid");
+        std::string accented64, accented65;
+        for (int i = 0; i < 64; i++) accented64 += "\xC3\xA9";   // 64 characters, 128 bytes
+        accented65 = accented64 + "\xC3\xA9";
+        CHECK(IsValidEntityName(accented64) && !IsValidEntityName(accented65), "the length limit counts characters, not bytes");
         CHECK(!IsValidEntityName("") && !IsValidEntityName(std::string(65, 'a')) && !IsValidEntityName("a/b") && !IsValidEntityName(" a") && !IsValidEntityName("a ") && !IsValidEntityName("a\tb") && !IsValidEntityName("a\nb"), "empty, long, slash, edge-whitespace and control-character names are not");
 
         const FieldInfo& texture = registry.Find("SpriteRenderer")->Fields[0];
@@ -527,7 +578,8 @@ int main()
         CHECK(back.Ok() && SaveSceneToText(*back.Scene, registry).Text == golden, "loading the canonical text and writing it again changes nothing");
         CHECK(back.Scene->FindEntity("a").Get<Transform>().Position == glm::vec2(0.1f, -2.5f) && back.Scene->FindEntity("sprite").Get<SpriteRenderer>().Tint.w == 0.1f, "the values read back exactly");
 
-        // the canonical fixture is the example without its comments
+        // the canonical fixture is the example without its comments (and its $schema key)
+        if (UpdateGolden()) WriteFile("Tests/SceneTests/fixtures/canonical.json", SaveSceneToText(*LoadScene("Assets/Scenes/example.json", registry).Scene, registry).Text);
         std::string canonical = ReadFile("Tests/SceneTests/fixtures/canonical.json");
         SceneLoadResult fromFixture = LoadScene("Tests/SceneTests/fixtures/canonical.json", registry);
         CHECK(!canonical.empty() && fromFixture.Ok() && SaveSceneToText(*fromFixture.Scene, registry).Text == canonical, "a canonical file round-trips byte for byte");
@@ -638,6 +690,139 @@ int main()
 
         CHECK(!SaveScene(Scene("x"), registry, (std::filesystem::temp_directory_path() / "marle_no_such_dir" / "x.json").string()), "an unwritable path reports failure");
         std::filesystem::remove(file);
+    }
+
+    // scene schema: generation
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+
+        Json schema = GenerateSceneSchema(registry);
+        CHECK(schema == GenerateSceneSchema(registry) && SceneSchemaToText(registry) == SceneSchemaToText(registry), "the schema is generated deterministically");
+        std::string text = SceneSchemaToText(registry);
+        CHECK(text.back() == '\n' && text[text.size() - 2] != '\n' && text.find('\r') == std::string::npos && Json::parse(text) == schema, "the schema text is JSON with one trailing newline");
+        CHECK(schema["$schema"] == "http://json-schema.org/draft-07/schema#" && schema["type"] == "object" && schema["additionalProperties"] == false, "it is a draft-07 schema that forbids unknown keys");
+
+        std::string order;
+        for (auto it = schema["definitions"].begin(); it != schema["definitions"].end(); ++it) order += it.key() + " ";
+        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera ", "components are described in registration order");
+        CHECK(schema["definitions"]["entity"]["properties"]["components"]["properties"]["Camera"]["$ref"] == "#/definitions/component_Camera", "an entity's components point at their definitions");
+
+        bool everyField = true, described = !schema["description"].get<std::string>().empty();
+        for (const ComponentInfo* info : registry.GetComponents()) {
+            const Json& definition = schema["definitions"]["component_" + info->Name];
+            described = described && definition["description"] == info->Description && definition["additionalProperties"] == false;
+            for (const FieldInfo& field : info->Fields) {
+                const Json& property = definition["properties"][field.Name];
+                everyField = everyField && !property.is_null() && property["default"] == field.Default && property["description"].get<std::string>().find(field.Description) == 0 && !field.Description.empty();
+            }
+            everyField = everyField && definition["properties"].size() == info->Fields.size();
+        }
+        CHECK(everyField && described, "every field has its default and description, every component its description");
+
+        const Json& sprite = schema["definitions"]["component_SpriteRenderer"]["properties"];
+        const Json& camera = schema["definitions"]["component_Camera"]["properties"];
+        CHECK(schema["definitions"]["component_Transform"]["properties"]["position"] == Json::parse(R"({"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "World position [x, y], in world units.", "default": [0.0, 0.0]})"), "a vec2 is an array of exactly two numbers");
+        CHECK(sprite["cell"]["items"] == Json::parse(R"({"type": "integer", "minimum": 0.0})") && sprite["tint"]["minItems"] == 4 && sprite["tint"]["items"]["maximum"] == 1.0, "an ivec2 holds integers, a vec4 four numbers, and ranges apply to each element");
+        CHECK(camera["zoom"]["type"] == "number" && camera["zoom"]["minimum"] == 0.01 && camera["zoom"]["maximum"] == 100.0 && camera["primary"]["type"] == "boolean", "numbers and bools carry their range and type");
+        CHECK(sprite["texture"]["type"] == "string" && sprite["texture"].contains("pattern") && !sprite["cell"].contains("pattern"), "only asset paths have the path pattern");
+        CHECK(!schema["definitions"]["component_Camera"].contains("required"), "a component with no required fields has no required list");
+
+        // a client component shows up, with its required fields
+        registry.Register<Door>("Door", "Leads somewhere.")
+            .Field(&Door::Target, "target", "Name of the entity to go to.").Required()
+            .Field(&Door::Level, "level", "Key level needed.").Range(1, 5);
+        Json withDoor = GenerateSceneSchema(registry);
+        CHECK(withDoor["definitions"]["component_Door"]["required"] == Json::array({ "target" }) && withDoor["definitions"]["component_Door"]["properties"]["level"]["maximum"] == 5.0 && withDoor["definitions"]["entity"]["properties"]["components"]["properties"].contains("Door"), "a registered client component is in the schema");
+
+        // the committed schema is the generated one
+        ComponentRegistry builtins;
+        RegisterBuiltinComponents(builtins);
+        if (UpdateGolden()) WriteFile("Assets/Scenes/scene.schema.json", SceneSchemaToText(builtins));
+        CHECK(ReadFile("Assets/Scenes/scene.schema.json") == SceneSchemaToText(builtins), "Assets/Scenes/scene.schema.json is up to date (MARLE_UPDATE_GOLDEN=1 regenerates it)");
+    }
+
+    // scene schema: validating scene files
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const Json schema = GenerateSceneSchema(registry);
+        auto errorsFor = [&](const std::string& json) { return SchemaErrors(schema, ParseWithComments(json)); };
+        auto entityWith = [&](const std::string& body) { return R"({"version": 1, "name": "x", "entities": [)" + body + "]}"; };
+        auto componentWith = [&](const std::string& component) { return entityWith(R"({"name": "e", "components": {)" + component + "}}"); };
+        auto mentions = [](const std::vector<std::string>& errors, const std::string& text) {
+            for (const std::string& e : errors) if (e.find(text) != std::string::npos) return true;
+            return false;
+        };
+
+        // valid files
+        CHECK(errorsFor(ReadFile("Assets/Scenes/example.json")).empty(), "the example scene validates against the schema");
+        CHECK(errorsFor(ReadFile("Tests/SceneTests/fixtures/canonical.json")).empty(), "the canonical fixture validates");
+        CHECK(errorsFor(ReadFile("Assets/Scenes/scene.schema.json")).size() > 0, "the schema file is not itself a scene");
+        CHECK(errorsFor(R"({"version": 1, "name": "x", "entities": []})").empty() && errorsFor(R"({"$schema": "scene.schema.json", "version": 1, "name": "x", "entities": [{"name": "a"}]})").empty(), "an empty scene, $schema and an entity without components validate");
+
+        Scene written("Written");
+        written.CreateEntity("n").Add<Transform>() = Transform{ { 16777216.0f, -3.0f }, 1e-7f, { 3e38f, 0.1f } };
+        written.FindEntity("n").Add<Camera>().Zoom = 0.33333334f;
+        written.CreateEntity("t").Add<SpriteRenderer>().Texture = "Assets/ñandú.png";
+        written.CreateEntity(std::string(64, 'a'));
+        CHECK(errorsFor(SaveSceneToText(written, registry).Text).empty(), "what the writer produces validates");
+
+        // what it rejects, and where it says so
+        CHECK(!errorsFor(R"({"version": 2, "name": "x", "entities": []})").empty() && !errorsFor(R"({"name": "x", "entities": []})").empty() && !errorsFor(R"({"version": 1, "entities": []})").empty() && !errorsFor(R"({"version": 1, "name": "", "entities": []})").empty() && !errorsFor(R"({"version": 1, "name": "x"})").empty(), "a wrong or missing version, name or entities is rejected");
+        CHECK(!errorsFor(R"({"version": 1, "name": "x", "entities": [], "extra": 1})").empty() && !errorsFor(R"([])").empty() && !errorsFor(entityWith(R"({"name": "a", "colour": "red"})")).empty() && !errorsFor(entityWith(R"({"components": {}})")).empty() && !errorsFor(entityWith(R"("a")")).empty(), "unknown keys, a wrong top level, a nameless entity and a non-object entity are rejected");
+        CHECK(!errorsFor(componentWith(R"("Transfrom": {})")).empty() && !errorsFor(componentWith(R"("Transform": [])")).empty() && !errorsFor(entityWith(R"({"name": "e", "components": []})")).empty(), "an unknown component and a component or components that is not an object are rejected");
+        CHECK(mentions(errorsFor(componentWith(R"("Camera": {"zoom": 0})")), "/entities/0/components/Camera/zoom"), "an out-of-range value is rejected, with its pointer");
+        CHECK(!errorsFor(componentWith(R"("Camera": {"zoom": 101})")).empty() && errorsFor(componentWith(R"("Camera": {"zoom": 0.01})")).empty() && errorsFor(componentWith(R"("Camera": {"zoom": 100})")).empty(), "the range ends are inclusive");
+        CHECK(!errorsFor(componentWith(R"("Camera": {"primary": "yes"})")).empty() && !errorsFor(componentWith(R"("Camera": {"zom": 1})")).empty() && !errorsFor(componentWith(R"("SpriteRenderer": {"texture": 5})")).empty(), "a wrong type and an unknown field are rejected");
+        CHECK(!errorsFor(componentWith(R"("Transform": {"position": [1]})")).empty() && !errorsFor(componentWith(R"("Transform": {"position": [1, 2, 3]})")).empty() && !errorsFor(componentWith(R"("Transform": {"position": [1, "x"]})")).empty() && errorsFor(componentWith(R"("Transform": {"position": [1, 2]})")).empty(), "a vector must be exactly the right length of numbers");
+        CHECK(!errorsFor(componentWith(R"("SpriteRenderer": {"cell": [1.5, 0]})")).empty() && !errorsFor(componentWith(R"("SpriteRenderer": {"cell": [-1, 0]})")).empty() && !errorsFor(componentWith(R"("SpriteRenderer": {"tint": [2, 0, 0, 1]})")).empty() && errorsFor(componentWith(R"("SpriteRenderer": {"cell": [3, 0], "tint": [1, 0, 0, 0.5]})")).empty(), "integers and ranges apply to each element of a vector");
+
+        // entity names
+        auto nameErrors = [&](const std::string& name) { return errorsFor(entityWith(R"({"name": )" + Json(name).dump() + "}")); };
+        std::string accented64, accented65;
+        for (int i = 0; i < 64; i++) accented64 += "\xC3\xA9";
+        accented65 = accented64 + "\xC3\xA9";
+        CHECK(nameErrors("player").empty() && nameErrors("Tile 3-b.x").empty() && nameErrors("a").empty() && nameErrors(std::string(64, 'a')).empty() && nameErrors(accented64).empty(), "ordinary names validate, up to 64 characters");
+        CHECK(!nameErrors("").empty() && !nameErrors(std::string(65, 'a')).empty() && !nameErrors(accented65).empty() && !nameErrors("a/b").empty() && !nameErrors(" a").empty() && !nameErrors("a ").empty() && !nameErrors("a\tb").empty() && !nameErrors("\ta").empty() && !nameErrors("a\n").empty(), "empty, too long, slash, edge-whitespace and control-character names are rejected");
+        for (const char* name : { "player", "a", "a b", "a/b", " a", "a ", "", "a\tb", "x.y-z_1" })
+            CHECK(nameErrors(name).empty() == IsValidEntityName(name), (std::string("the schema and the loader agree about the name '") + name + "'").c_str());
+
+        // asset paths
+        auto pathErrors = [&](const std::string& path) { return errorsFor(componentWith(R"("SpriteRenderer": {"texture": )" + Json(path).dump() + "}")); };
+        CHECK(pathErrors("").empty() && pathErrors("Assets/Textures/a.png").empty() && pathErrors("Assets/a..b.png").empty() && pathErrors("a.png").empty() && pathErrors("dir/.hidden").empty(), "relative asset paths validate");
+        CHECK(!pathErrors("../x.png").empty() && !pathErrors("a/../b.png").empty() && !pathErrors("a/..").empty() && !pathErrors("..").empty() && !pathErrors("/etc/passwd").empty() && !pathErrors("C:/x.png").empty() && !pathErrors("a\\b.png").empty(), "paths that leave the working directory are rejected");
+        for (const char* path : { "", "a.png", "A/b/c.png", "a..b", "..", "../x", "a/../b", "a/..", "/x", "C:/x", "a\\b", "..x", "x..", ".../x" })
+            CHECK(pathErrors(path).empty() == AssetPathProblem(path).empty(), (std::string("the schema and the loader agree about the path '") + path + "'").c_str());
+
+        // required fields of a client component
+        registry.Register<Door>("Door", "Leads somewhere.").Field(&Door::Target, "target", "Where to.").Required().Field(&Door::Level, "level", "Key level.").Range(1, 5);
+        const Json withDoor = GenerateSceneSchema(registry);
+        CHECK(!SchemaErrors(withDoor, ParseWithComments(componentWith(R"("Door": {"level": 2})"))).empty() && SchemaErrors(withDoor, ParseWithComments(componentWith(R"("Door": {"target": "cellar"})"))).empty() && !SchemaErrors(withDoor, ParseWithComments(componentWith(R"("Door": {"target": "c", "level": 9})"))).empty(), "a required field must be present");
+
+        // the schema agrees with the loader on every fixture file
+        // (it cannot see duplicate entity names, missing asset files or keys repeated within an object)
+        const std::string dir = "Tests/SceneTests/fixtures/";
+        bool agree = true;
+        for (const char* name : { "canonical.json", "future_version.json", "missing_version.json", "version_not_integer.json", "top_level_array.json", "entities_not_array.json", "top_level_problems.json" }) {
+            bool schemaValid = SchemaErrors(schema, ParseWithComments(ReadFile(dir + name))).empty();
+            bool loaderValid = LoadScene(dir + name, registry).Ok();
+            if (schemaValid != loaderValid) { printf("      schema and loader disagree about %s\n", name); agree = false; }
+        }
+        CHECK(agree, "the schema and the loader agree about every fixture file");
+        CHECK(SchemaErrors(schema, ParseWithComments(ReadFile(dir + "repeated_top_key.json"))).empty() && !LoadScene(dir + "repeated_top_key.json", registry).Ok(), "a repeated key is the one thing only the loader can see");
+
+        // and about every entity in the file full of mistakes
+        Json mixed = ParseWithComments(ReadFile(dir + "mixed_errors.json"));
+        std::set<int> schemaBad, loaderBad;
+        for (const std::string& e : SchemaErrors(schema, mixed)) if (EntityIndexOf(e) >= 0) schemaBad.insert(EntityIndexOf(e));
+        for (const SceneProblem& p : LoadScene(dir + "mixed_errors.json", registry).Problems) if (EntityIndexOf(p.Path) >= 0) loaderBad.insert(EntityIndexOf(p.Path));
+        for (int onlyLoader : { 4, 7, 9 }) loaderBad.erase(onlyLoader);   // duplicate name, missing file, repeated key
+        std::string schemaList, loaderList;
+        for (int i : schemaBad) schemaList += std::to_string(i) + " ";
+        for (int i : loaderBad) loaderList += std::to_string(i) + " ";
+        printf("      entities the schema rejects: %s\n      entities the loader reports (less the three it alone can see): %s\n", schemaList.c_str(), loaderList.c_str());
+        CHECK(schemaBad == loaderBad && !schemaBad.empty(), "the schema rejects exactly the entities in the mixed file that the loader reports");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

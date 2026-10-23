@@ -29,7 +29,7 @@ A scene file is a plain-text JSON file that defines a **scene**: its entities an
 | `version` | integer | Required. The format version, currently `1`. A file with a newer version than the engine knows is rejected. |
 | `name` | string | Required. The scene's name. |
 | `entities` | array | Required, may be empty. The entities, in creation order. |
-| `$schema` | string | Optional. A path or URL of the generated JSON Schema, for editors; the engine ignores its value. |
+| `$schema` | string | Optional. A path or URL of the generated JSON Schema (`scene.schema.json`, next to the scenes), so an editor can check the file as you type; the engine ignores its value. |
 
 **Entity.** An object with these keys:
 
@@ -44,7 +44,7 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 
 - Keys are the component's field names. A field that is left out takes its default; a field marked required must appear.
 - Values must have the field's type and be inside its range. Vectors are arrays of exactly the right length, such as `[x, y]` or `[r, g, b, a]`.
-- The built-in components and their fields are in the table below. The generated JSON Schema (issue #27) is the complete reference for every registered component, including your own.
+- The built-in components and their fields are in the table below. The generated JSON Schema, `Assets/Scenes/scene.schema.json`, is the complete reference for every registered component, including your own (see Schema).
 
 | Component | Field | Type | Default | Meaning |
 |---|---|---|---|---|
@@ -97,10 +97,16 @@ Some mistakes make the file unusable, and then no scene is loaded and the proble
 
 Problems come back as a list: repeated keys first (they are found while parsing), then the rest in file order. A misspelled field, component or key name comes with a suggestion and the list of valid names.
 
+## Schema
+
+`Assets/Scenes/scene.schema.json` is a JSON Schema (draft-07) generated from the component registry, so it lists exactly the components and fields the engine knows, each with its type, default, range and description. Editors use it for completion and checking, and an AI can read it to learn what is allowed. It is committed, and a test fails if it is out of date after a component changes; regenerate it (and the canonical test fixture) with `MARLE_UPDATE_GOLDEN=1 ./bin/Debug-linux-x86_64/SceneTests/SceneTests`, from the repository root.
+
+The schema accepts and rejects the same files as the loader, with three exceptions that a schema cannot express: two entities with the same name, an asset file that does not exist, and a key repeated within an object. The loader is the authority. A test checks the agreement against every fixture file and against the name and asset path rules.
+
 ## For AI authors
 
 1. Start from `Assets/Scenes/example.json` and change names and values; keep the same shape.
 2. Give every entity a unique `name`; refer to entities by that name.
 3. Write every field of a component you use, so the file shows what it is.
-4. Use only the components and fields in the table above or the generated schema; guessing a name is an error with a suggestion.
+4. Use only the components and fields in the table above or in `scene.schema.json`; guessing a name is an error with a suggestion.
 5. Run the validate command (issue #28) before running the game and fix every reported path.

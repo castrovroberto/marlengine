@@ -1,6 +1,8 @@
 // A small worked example of a scene file; see docs/scene-format.md for the rules.
 // Comments like these are allowed in files you write by hand.
 {
+  // Lets an editor check this file against the schema (generated from the component registry).
+  "$schema": "scene.schema.json",
   "version": 1,
   "name": "Example garden",
   "entities": [

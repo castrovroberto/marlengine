@@ -253,7 +253,8 @@ project "Sandbox"
         optimize "On"
 
 -- Test executables live in Tests/<name>/src and exit non-zero on failure.
-local function testProject(name)
+-- `extra` may add { files = {...}, includedirs = {...} } for test-only dependencies.
+local function testProject(name, extra)
     project (name)
         location ("Tests/" .. name)
         kind "ConsoleApp"
@@ -277,6 +278,11 @@ local function testProject(name)
             "Marle/vendor/glm",
             "Marle/vendor/imgui"
         }
+
+        if extra then
+            files(extra.files or {})
+            includedirs(extra.includedirs or {})
+        end
 
         links { "Marle" }
 
@@ -318,6 +324,10 @@ testProject "Renderer2DTests"   -- pixel readback; needs a display, run from the
 testProject "InputTests"        -- headless
 testProject "LogTests"          -- headless
 testProject "LayerStackTests"   -- headless
-testProject "SceneTests"        -- headless
+-- headless; json-schema-validator is a test-only dependency, used to check scene files against the generated schema
+testProject("SceneTests", {
+    files = { "Tests/vendor/json-schema-validator/src/**.cpp" },
+    includedirs = { "Tests/vendor/json-schema-validator/src" }
+})
 testProject "ApplicationTests"  -- needs a display
 testProject "ImGuiLayerTests"   -- needs a display; pixel readback of ImGui output
