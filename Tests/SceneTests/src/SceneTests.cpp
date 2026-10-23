@@ -3169,6 +3169,118 @@ int main(int argc, char** argv)
         CHECK(GetCommandLine().empty() && !HasCommandLineFlag("--replay"), "with nothing after the program's name there are no arguments");
     }
 
+    // determinism (ADR-0002): world.json with a scripted input and a golden checksum
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::string world = "Assets/Scenes/world.json";
+        const std::string golden = "Tests/SceneTests/fixtures/world_run.recording.json";
+        const int steps = 1200;
+        SceneLoadResult loaded = LoadScene(world, registry);
+        CHECK(loaded.Ok(), "world.json loads cleanly for the determinism run");
+
+        // the scripted run, recorded
+        auto fresh = [&] { return LoadScene(world, registry); };
+        SceneLoadResult live = fresh();
+        InputRecorder recorder;
+        recorder.Start(live.Scene->GetName(), live.TextHash, live.Scene->GetSeed(), 60);
+        RandomGenerator script(2024);
+        for (int i = 0; i < steps; i++) {
+            InputFrame frame = ScriptedFrame(script);
+            recorder.Record(frame);
+            Simulation::Step(registry, *live.Scene, frame, 1.0 / 60.0);
+        }
+        const uint64_t liveChecksum = Simulation::Checksum(registry, *live.Scene);
+        const std::string recordingText = WriteRecording(recorder.Finish(liveChecksum)).Text;
+
+        // the committed copy is this run: if world.json, a behavior or the generator changes the run, this
+        // fails, and MARLE_UPDATE_GOLDEN=1 rewrites it once the change is meant
+        if (UpdateGolden()) WriteFile(golden, recordingText);
+        const std::string committed = ReadFile(golden);
+        CHECK(committed == recordingText, "the committed recording is the scripted run of world.json (MARLE_UPDATE_GOLDEN=1 regenerates it)");
+
+        // the golden checksum, from the file and replayed from scratch
+        RecordingReadResult read = ReadRecording(committed);
+        CHECK(read.Ok() && read.Recording.HasChecksum && read.Recording.GetStepCount() == steps, "the committed recording reads, with its checksum");
+        SceneLoadResult replayed = fresh();
+        CHECK(RecordingMismatch(read.Recording, replayed.Scene->GetName(), replayed.TextHash, replayed.Scene->GetSeed(), 60).empty(), "and is for this version of world.json");
+        CHECK(ReplayRecording(registry, *replayed.Scene, read.Recording) == read.Recording.Checksum, "replaying it reaches the golden checksum");
+
+        // the same run twice is identical, step by step
+        SceneLoadResult a = fresh(), b = fresh();
+        bool sameAlways = true;
+        for (int i = 0; i < steps; i++) {
+            Simulation::Step(registry, *a.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+            Simulation::Step(registry, *b.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+            if (i % 50 == 0) sameAlways = sameAlways && Simulation::Checksum(registry, *a.Scene) == Simulation::Checksum(registry, *b.Scene);
+        }
+        CHECK(sameAlways && Simulation::Checksum(registry, *a.Scene) == read.Recording.Checksum, "two runs agree all the way, and end on the golden checksum");
+
+        // however the steps are split up (looking at the scene, saving it, other scenes stepping in between), the run is the same
+        SceneLoadResult c = fresh(), d = fresh();
+        RandomGenerator chunker(5);
+        int at = 0;
+        std::string scratch;
+        while (at < steps) {
+            int chunk = chunker.IntBetween(1, 97);
+            for (int i = 0; i < chunk && at + i < steps; i++) Simulation::Step(registry, *c.Scene, read.Recording.Frames[at + i], 1.0 / 60.0);
+            // another scene taking steps in between, and a read of this one (checksum, written text), must not matter
+            for (int i = 0; i < chunk && at + i < steps; i++) Simulation::Step(registry, *d.Scene, InputFrame(), 1.0 / 60.0);
+            scratch = SaveSceneToText(*c.Scene, registry).Text;
+            (void)Simulation::Checksum(registry, *c.Scene);
+            at += chunk;
+        }
+        CHECK(Simulation::Checksum(registry, *c.Scene) == read.Recording.Checksum, "stepping in uneven chunks with other scenes in between ends on the same checksum");
+        CHECK(Simulation::Checksum(registry, *d.Scene) != read.Recording.Checksum, "and a scene given no input does end elsewhere, so the input matters");
+
+        // the step the input is given on matters: shifting the recording by one step is another run
+        SceneLoadResult shifted = fresh();
+        Simulation::Step(registry, *shifted.Scene, InputFrame(), 1.0 / 60.0);
+        for (int i = 0; i < steps - 1; i++) Simulation::Step(registry, *shifted.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+        CHECK(Simulation::Checksum(registry, *shifted.Scene) != read.Recording.Checksum, "the same input one step later is another run");
+
+        // the tool agrees
+        std::ostringstream out, err;
+        CHECK(RunSceneTool({ "simulate", world, "--recording", golden, "--expect", Simulation::ChecksumText(read.Recording.Checksum) }, registry, out, err) == 0, "marle-scene simulate reaches the golden checksum from the committed file");
+    }
+
+    // determinism (ADR-0002): the seed changes a Wander walk and nothing else
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto sceneText = [](int seed) {
+            return R"({"version": 1, "name": "Walk", "components": {"Random": {"seed": )" + std::to_string(seed) + R"(}}, "entities": [
+                {"name": "rock", "components": {"Transform": {"position": [10, 20]}}},
+                {"name": "top", "components": {"Transform": {}, "Spin": {"speed": 3}}},
+                {"name": "rabbit", "components": {"Transform": {"position": [300, 300]}, "Wander": {"speed": 90, "changeEvery": 0.4}}}]})";
+        };
+        auto run = [&](int seed, int steps) {
+            SceneLoadResult result = LoadSceneFromText(sceneText(seed), "inline", registry);
+            for (int i = 0; i < steps; i++) Simulation::Step(registry, *result.Scene, InputFrame(), 1.0 / 60.0);
+            return result;
+        };
+        auto written = [&](const SceneLoadResult& result, const std::string& entity, const std::string& component) {
+            return registry.Write(result.Scene->FindEntity(entity), component).dump();
+        };
+
+        SceneLoadResult one = run(1, 600), oneAgain = run(1, 600), two = run(2, 600), three = run(3, 600);
+        CHECK(written(one, "rabbit", "Transform") == written(oneAgain, "rabbit", "Transform") && written(one, "rabbit", "Wander") == written(oneAgain, "rabbit", "Wander"), "the same seed always gives the same walk");
+        CHECK(Simulation::Checksum(registry, *one.Scene) == Simulation::Checksum(registry, *oneAgain.Scene), "and the same checksum");
+        CHECK(written(one, "rabbit", "Transform") != written(two, "rabbit", "Transform") && written(two, "rabbit", "Transform") != written(three, "rabbit", "Transform") && written(one, "rabbit", "Transform") != written(three, "rabbit", "Transform"), "another seed gives another walk");
+        CHECK(written(one, "rock", "Transform") == written(two, "rock", "Transform") && written(one, "top", "Transform") == written(two, "top", "Transform") && written(one, "top", "Spin") == written(two, "top", "Spin"), "and nothing else about the scene changes");
+        CHECK(Simulation::Checksum(registry, *one.Scene) != Simulation::Checksum(registry, *two.Scene), "though the checksum tells them apart");
+
+        // the walk is a function of the seed alone, not of how many scenes ran before it in this process
+        SceneLoadResult early = run(2, 600);
+        CHECK(written(early, "rabbit", "Transform") == written(two, "rabbit", "Transform"), "a seed gives the same walk no matter what ran before");
+
+        // a prefix of the walk is the same under the same seed: more steps only carry on
+        SceneLoadResult shortRun = run(1, 300);
+        SceneLoadResult carryOn = run(1, 300);
+        for (int i = 0; i < 300; i++) Simulation::Step(registry, *carryOn.Scene, InputFrame(), 1.0 / 60.0);
+        CHECK(written(shortRun, "rabbit", "Transform") != written(one, "rabbit", "Transform") && written(carryOn, "rabbit", "Transform") == written(one, "rabbit", "Transform"), "stopping and carrying on is the same as one run");
+    }
+
     // marle-scene: simulate
     {
         ComponentRegistry registry;
