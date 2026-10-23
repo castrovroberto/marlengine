@@ -105,7 +105,7 @@ void WorldLayer::OnRender(double alpha)
     camera.SetPosition(player);
     camera.SetRotation(m_CameraRotation);
 
-    Renderer2D::BeginScene(camera);
+    Renderer2D::BeginBatch(camera);
 
     for (int y = 0; y < MapHeight; y++)
         for (int x = 0; x < MapWidth; x++)
@@ -123,7 +123,7 @@ void WorldLayer::OnRender(double alpha)
     Renderer2D::DrawQuad(player, { PlayerSize, PlayerSize }, m_PlayerTexture.get(), tint);
     Renderer2D::DrawRotatedQuad(player + 44.0f * glm::vec2(cosf(spin), sinf(spin)), { 16.0f, 16.0f }, spin * 3.0f, glm::vec4(1.0f, 0.9f, 0.2f, 1.0f));
 
-    Renderer2D::EndScene();
+    Renderer2D::EndBatch();
 }
 
 void WorldLayer::OnEvent(Marle::Event& e)

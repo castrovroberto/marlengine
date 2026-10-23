@@ -151,12 +151,12 @@ namespace Marle {
         MRL_CORE_TRACE("Renderer2D shutdown complete");
     }
 
-    void Renderer2D::BeginScene(float viewportWidth, float viewportHeight)
+    void Renderer2D::BeginBatch(float viewportWidth, float viewportHeight)
     {
-        BeginScene(OrthographicCamera(0.0f, viewportWidth, 0.0f, viewportHeight));
+        BeginBatch(OrthographicCamera(0.0f, viewportWidth, 0.0f, viewportHeight));
     }
 
-    void Renderer2D::BeginScene(const OrthographicCamera& camera)
+    void Renderer2D::BeginBatch(const OrthographicCamera& camera)
     {
         if (!s_Data) {
             ReportOnce("Renderer2D not initialized!");
@@ -170,7 +170,7 @@ namespace Marle {
         s_Data->TextureSlotCount = 1;
     }
 
-    void Renderer2D::EndScene()
+    void Renderer2D::EndBatch()
     {
         if (!s_Data) return;
 

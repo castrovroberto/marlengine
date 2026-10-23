@@ -20,7 +20,7 @@ void HudLayer::OnRender(double)
         const glm::vec4 off(0.18f, 0.18f, 0.24f, 1.0f), on(0.95f, 0.85f, 0.25f, 1.0f);
         auto lit = [&](bool pressed) { return pressed ? on : off; };
 
-        Renderer2D::BeginScene((float)m_App.GetWidth(), (float)m_App.GetHeight());
+        Renderer2D::BeginBatch((float)m_App.GetWidth(), (float)m_App.GetHeight());
 
         // WASD cluster (arrows light the same keys)
         const float k = 30.0f, gap = 6.0f, x0 = 40.0f, y0 = 70.0f;
@@ -51,7 +51,7 @@ void HudLayer::OnRender(double)
         Renderer2D::DrawQuad(mouse, { 22.0f, 2.0f }, reticle);
         Renderer2D::DrawQuad(mouse, { 2.0f, 22.0f }, reticle);
 
-        Renderer2D::EndScene();
+        Renderer2D::EndBatch();
     }
 
     // Once a second, report how many draw calls the frame took

@@ -10,10 +10,10 @@
 
 namespace Marle {
     
-    // Batched 2D quad renderer. Quads are collected between BeginScene() and EndScene()
+    // Batched 2D quad renderer. Quads are collected between BeginBatch() and EndBatch()
     // and submitted in as few draw calls as possible (at most 16 distinct textures per call).
-    // Positions are quad centers in world space. BeginScene(w, h) uses pixel space with the origin
-    // at the bottom-left; BeginScene(camera) uses the camera's view and projection.
+    // Positions are quad centers in world space. BeginBatch(w, h) uses pixel space with the origin
+    // at the bottom-left; BeginBatch(camera) uses the camera's view and projection.
     // Quads are alpha-blended (texture alpha * tint alpha) in the order they are submitted, so draw
     // back to front. Textures are straight (non-premultiplied) alpha.
     // Rotations are in radians, counter-clockwise positive, about the quad center.
@@ -27,9 +27,9 @@ namespace Marle {
         static void Init();
         static void Shutdown();
 
-        static void BeginScene(const OrthographicCamera& camera);
-        static void BeginScene(float viewportWidth, float viewportHeight); // pixel space, no camera
-        static void EndScene();
+        static void BeginBatch(const OrthographicCamera& camera);
+        static void BeginBatch(float viewportWidth, float viewportHeight); // pixel space, no camera
+        static void EndBatch();
 
         static void DrawQuad(const glm::vec2& position, const glm::vec2& size, OpenGLTexture2D* texture);
         static void DrawQuad(const glm::vec2& position, const glm::vec2& size, OpenGLTexture2D* texture, const glm::vec4& tint);
