@@ -28,6 +28,7 @@
 #include "Marle/Scene/SceneLoader.h"
 #include "Marle/Scene/SceneWriter.h"
 #include "Marle/Scene/SceneSchema.h"
+#include "Marle/Scene/SceneTool.h"
 
 // Events
 #include "Marle/Events/Event.h"

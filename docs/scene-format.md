@@ -103,10 +103,25 @@ Problems come back as a list: repeated keys first (they are found while parsing)
 
 The schema accepts and rejects the same files as the loader, with three exceptions that a schema cannot express: two entities with the same name, an asset file that does not exist, and a key repeated within an object. The loader is the authority. A test checks the agreement against every fixture file and against the name and asset path rules.
 
+## Command line
+
+`marle-scene` checks and tidies scene files without opening a window. Build it with `make SceneTool` (it lands in `bin/<Config>-<system>-<arch>/SceneTool/marle-scene`) and run it from the repository root, since asset paths are relative to the working directory.
+
+| Command | What it does |
+|---|---|
+| `marle-scene validate <file\|dir>...` | Loads each scene file and prints every problem as `file /pointer: message`, then `OK` or `FAIL` with counts. A directory means every `.json` file in it and below, except `*.schema.json`. |
+| `marle-scene format [--check] [--drop-comments] [--schema <path>] <file\|dir>...` | Rewrites files in canonical form and keeps an existing `$schema` key. It refuses a file that has problems (writing it would drop what failed to load) and leaves a file with comments alone unless you pass `--drop-comments`. `--check` only reports what would change. `--schema` adds a `$schema` key. |
+| `marle-scene schema [--output <file> \| --check <file>]` | Prints the JSON Schema, writes it to a file, or checks that a file is up to date. |
+| `marle-scene help` | Shows the usage. |
+
+Exit status: `0` everything is fine, `1` problems were found (or, with `--check`, files differ), `2` the command line is wrong. That makes `validate` and the `--check` modes usable in CI, and as the feedback loop for an AI: edit, validate, fix the reported paths, repeat.
+
+The tool knows the built-in components. A game with components of its own builds its own tool with its own registry: `Marle::RunSceneTool(args, registry, std::cout, std::cerr)` is the whole program (see `tools/marle-scene/src/main.cpp`).
+
 ## For AI authors
 
 1. Start from `Assets/Scenes/example.json` and change names and values; keep the same shape.
 2. Give every entity a unique `name`; refer to entities by that name.
 3. Write every field of a component you use, so the file shows what it is.
 4. Use only the components and fields in the table above or in `scene.schema.json`; guessing a name is an error with a suggestion.
-5. Run the validate command (issue #28) before running the game and fix every reported path.
+5. Run `marle-scene validate <file>` before running the game and fix every reported path (see Command line).

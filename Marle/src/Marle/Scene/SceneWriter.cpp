@@ -129,6 +129,31 @@ namespace Marle {
         return result;
     }
 
+    bool WriteTextFile(const std::string& file, const std::string& text, std::string* error)
+    {
+        auto fail = [&](const std::string& why) { if (error) *error = why; return false; };
+
+        const std::string temporary = file + ".tmp";
+        {
+            std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+            out.write(text.data(), (std::streamsize)text.size());
+            out.close();
+            if (!out) {
+                std::error_code ignored;
+                std::filesystem::remove(temporary, ignored);
+                return fail("cannot write " + temporary);
+            }
+        }
+
+        std::error_code ec;
+        std::filesystem::rename(temporary, file, ec);
+        if (ec) {
+            std::filesystem::remove(temporary, ec);
+            return fail("cannot replace " + file + " (" + ec.message() + ")");
+        }
+        return true;
+    }
+
     bool SaveScene(const Scene& scene, const ComponentRegistry& registry, const std::string& file, const SceneWriteOptions& options)
     {
         SceneSaveResult result = SaveSceneToText(scene, registry, options);
@@ -138,25 +163,9 @@ namespace Marle {
             return false;
         }
 
-        // Write beside the target and rename over it, so a failure never leaves a half-written scene
-        const std::string temporary = file + ".tmp";
-        {
-            std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-            out.write(result.Text.data(), (std::streamsize)result.Text.size());
-            out.close();
-            if (!out) {
-                MRL_CORE_ERROR("Cannot save scene '{}': cannot write {}", scene.GetName(), temporary);
-                std::error_code ignored;
-                std::filesystem::remove(temporary, ignored);
-                return false;
-            }
-        }
-
-        std::error_code ec;
-        std::filesystem::rename(temporary, file, ec);
-        if (ec) {
-            MRL_CORE_ERROR("Cannot save scene '{}': cannot replace {} ({})", scene.GetName(), file, ec.message());
-            std::filesystem::remove(temporary, ec);
+        std::string error;
+        if (!WriteTextFile(file, result.Text, &error)) {
+            MRL_CORE_ERROR("Cannot save scene '{}': {}", scene.GetName(), error);
             return false;
         }
         return true;

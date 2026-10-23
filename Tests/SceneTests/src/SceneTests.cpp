@@ -6,6 +6,7 @@
 #include "Marle/Scene/SceneLoader.h"
 #include "Marle/Scene/SceneWriter.h"
 #include "Marle/Scene/SceneSchema.h"
+#include "Marle/Scene/SceneTool.h"
 #include <nlohmann/json-schema.hpp>
 #include <cctype>
 #include <cstdio>
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <sys/wait.h>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -85,6 +87,30 @@ static int EntityIndexOf(const std::string& pointer)
     return std::atoi(pointer.c_str() + 10);
 }
 
+struct ToolRun { int Code; std::string Out, Err; };
+
+static ToolRun RunTool(const ComponentRegistry& registry, const std::vector<std::string>& args)
+{
+    std::ostringstream out, err;
+    int code = RunSceneTool(args, registry, out, err);
+    return { code, out.str(), err.str() };
+}
+
+static bool Contains(const std::string& text, const std::string& part) { return text.find(part) != std::string::npos; }
+
+// Runs a shell command, returning its exit status and everything it printed
+static ToolRun RunProcess(const std::string& command)
+{
+    ToolRun run{ -1, "", "" };
+    FILE* pipe = popen((command + " 2>&1").c_str(), "r");
+    if (!pipe) return run;
+    char buffer[4096];
+    while (size_t n = fread(buffer, 1, sizeof(buffer), pipe)) run.Out.append(buffer, n);
+    int status = pclose(pipe);
+    run.Code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    return run;
+}
+
 static bool HasProblem(const SceneLoadResult& result, const std::string& path, const std::string& text)
 {
     for (const SceneProblem& p : result.Problems)
@@ -99,7 +125,7 @@ static bool HasError(const std::vector<ValidationError>& errors, const std::stri
     return false;
 }
 
-int main()
+int main(int argc, char** argv)
 {
     // naming
     {
@@ -823,6 +849,177 @@ int main()
         for (int i : loaderBad) loaderList += std::to_string(i) + " ";
         printf("      entities the schema rejects: %s\n      entities the loader reports (less the three it alone can see): %s\n", schemaList.c_str(), loaderList.c_str());
         CHECK(schemaBad == loaderBad && !schemaBad.empty(), "the schema rejects exactly the entities in the mixed file that the loader reports");
+    }
+
+    // marle-scene: validate
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::string dir = "Tests/SceneTests/fixtures/";
+        const std::filesystem::path work = std::filesystem::temp_directory_path() / "marle_scene_tool_test";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work / "sub");
+
+        ToolRun ok = RunTool(registry, { "validate", "Assets/Scenes/example.json" });
+        CHECK(ok.Code == 0 && ok.Out == "OK    Assets/Scenes/example.json: 8 entities, 14 components\n" && ok.Err.empty(), "validate says OK for a good file, with counts");
+
+        ToolRun bad = RunTool(registry, { "validate", dir + "mixed_errors.json" });
+        CHECK(bad.Code == 1 && Contains(bad.Out, dir + "mixed_errors.json /entities/10/components/Camera/zoom: must be at least 0.01, got 0.0; the component is skipped\n"), "validate prints every problem as file, path and message, and exits 1");
+        CHECK(Contains(bad.Out, "FAIL  " + dir + "mixed_errors.json: 14 problems (loaded 10 entities, 7 components)\n") && bad.Err.empty(), "validate ends a bad file with a summary of what loaded");
+
+        ToolRun missing = RunTool(registry, { "validate", dir + "nope.json" });
+        CHECK(missing.Code == 1 && Contains(missing.Out, "cannot open the file") && Contains(missing.Out, "FAIL  " + dir + "nope.json: 1 problem (nothing could be loaded)"), "validate reports a missing file");
+        CHECK(Contains(RunTool(registry, { "validate", dir + "bad_syntax.json" }).Out, "parse error at line 5"), "validate reports where a syntax error is");
+
+        ToolRun two = RunTool(registry, { "validate", "Assets/Scenes/example.json", dir + "future_version.json" });
+        CHECK(two.Code == 1 && Contains(two.Out, "OK    Assets/Scenes/example.json") && Contains(two.Out, "needs a newer engine") && Contains(two.Out, "2 files, 1 with problems\n"), "validate checks several files and counts the ones with problems");
+
+        WriteFile((work / "one.json").string(), R"({"version": 1, "name": "t", "entities": [{"name": "a", "components": {"Camera": {}}}]})");
+        CHECK(RunTool(registry, { "validate", (work / "one.json").generic_string() }).Out == "OK    " + (work / "one.json").generic_string() + ": 1 entity, 1 component\n", "counts say '1 entity, 1 component'");
+
+        // directories
+        ToolRun scenes = RunTool(registry, { "validate", "Assets/Scenes" });
+        CHECK(scenes.Code == 0 && scenes.Out == ok.Out, "a directory means its scene files, and the schema file is not one of them");
+        WriteFile((work / "b.json").string(), R"({"version": 1, "name": "b", "entities": []})");
+        WriteFile((work / "sub" / "a.json").string(), R"({"version": 1, "name": "a", "entities": []})");
+        WriteFile((work / "notes.txt").string(), "not a scene");
+        WriteFile((work / "x.schema.json").string(), "{ not even json");
+        std::string w = work.generic_string();
+        ToolRun tree = RunTool(registry, { "validate", w + "/b.json", w + "/sub" });
+        CHECK(tree.Code == 0 && tree.Out.find("b.json") < tree.Out.find("sub/a.json") && Contains(tree.Out, "2 files, 0 with problems"), "files are checked in the order given, a directory's in sorted order");
+        ToolRun all = RunTool(registry, { "validate", w });
+        CHECK(all.Code == 0 && Contains(all.Out, "3 files, 0 with problems") && Contains(all.Out, "one.json") && Contains(all.Out, "sub/a.json") && !Contains(all.Out, "notes.txt") && !Contains(all.Out, "x.schema.json"), "a directory is searched in subdirectories, and only .json files other than *.schema.json count");
+        std::filesystem::create_directories(work / "empty");
+        ToolRun none = RunTool(registry, { "validate", w + "/empty" });
+        CHECK(none.Code == 0 && none.Out == "no scene files found\n", "an empty directory is not an error");
+
+        // the command line
+        ToolRun noFiles = RunTool(registry, { "validate" });
+        CHECK(noFiles.Code == 2 && Contains(noFiles.Err, "no files given") && Contains(noFiles.Err, "usage: marle-scene") && noFiles.Out.empty(), "validate without files is a usage error on stderr");
+        ToolRun unknown = RunTool(registry, { "frobnicate" });
+        CHECK(unknown.Code == 2 && Contains(unknown.Err, "unknown command 'frobnicate'"), "an unknown command is a usage error");
+        CHECK(RunTool(registry, {}).Code == 2 && !RunTool(registry, {}).Err.empty(), "no command is a usage error");
+        ToolRun help = RunTool(registry, { "help" });
+        CHECK(help.Code == 0 && Contains(help.Out, "validate") && Contains(help.Out, "format") && Contains(help.Out, "schema") && RunTool(registry, { "--help" }).Out == help.Out, "help lists the commands");
+
+        std::filesystem::remove_all(work);
+    }
+
+    // marle-scene: format
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::string dir = "Tests/SceneTests/fixtures/";
+        const std::filesystem::path work = std::filesystem::temp_directory_path() / "marle_scene_tool_format_test";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work);
+        const std::string w = work.generic_string();
+        const std::string compact = R"({"version":1,"name":"t","entities":[{"name":"a","components":{"Camera":{"zoom":2}}}]})";
+        auto canonicalOf = [&](const std::string& text, const std::string& schema = "") {
+            SceneWriteOptions options;
+            options.Schema = schema;
+            return SaveSceneToText(*LoadSceneFromText(text, "x", registry).Scene, registry, options).Text;
+        };
+
+        // a file that is not canonical is rewritten, once
+        WriteFile(w + "/a.json", compact);
+        ToolRun run = RunTool(registry, { "format", w + "/a.json" });
+        CHECK(run.Code == 0 && run.Out == "DONE  " + w + "/a.json: reformatted\n" && ReadFile(w + "/a.json") == canonicalOf(compact), "format rewrites a file in canonical form");
+        ToolRun again = RunTool(registry, { "format", w + "/a.json" });
+        CHECK(again.Code == 0 && again.Out == "OK    " + w + "/a.json: already canonical\n", "formatting again changes nothing");
+        CHECK(RunTool(registry, { "format", dir + "canonical.json" }).Out == "OK    " + dir + "canonical.json: already canonical\n", "the canonical fixture is already canonical");
+
+        // --check reports but never writes
+        WriteFile(w + "/c.json", compact);
+        ToolRun check = RunTool(registry, { "format", "--check", w + "/c.json" });
+        CHECK(check.Code == 1 && check.Out == "DIFF  " + w + "/c.json: would be reformatted\n" && ReadFile(w + "/c.json") == compact, "--check reports a file that would change and leaves it alone");
+        CHECK(RunTool(registry, { "format", "--check", w + "/a.json" }).Code == 0, "--check passes for a canonical file");
+
+        // $schema
+        WriteFile(w + "/s.json", R"({"$schema":"../scene.schema.json","version":1,"name":"t","entities":[]})");
+        RunTool(registry, { "format", w + "/s.json" });
+        CHECK(ReadFile(w + "/s.json") == canonicalOf(R"({"version":1,"name":"t","entities":[]})", "../scene.schema.json") && Contains(ReadFile(w + "/s.json"), "\"$schema\": \"../scene.schema.json\""), "an existing $schema key is kept");
+        WriteFile(w + "/n.json", compact);
+        RunTool(registry, { "format", "--schema", "my.schema.json", w + "/n.json" });
+        CHECK(ReadFile(w + "/n.json") == canonicalOf(compact, "my.schema.json"), "--schema adds a $schema key");
+
+        // comments
+        std::filesystem::copy_file("Assets/Scenes/example.json", w + "/commented.json");
+        std::string commented = ReadFile(w + "/commented.json");
+        ToolRun keep = RunTool(registry, { "format", w + "/commented.json" });
+        CHECK(keep.Code == 0 && Contains(keep.Out, "KEEP  " + w + "/commented.json: has comments") && ReadFile(w + "/commented.json") == commented, "a file with comments is left alone");
+        CHECK(RunTool(registry, { "format", "--check", w + "/commented.json" }).Code == 0, "--check does not count a file with comments as needing a change");
+        ToolRun drop = RunTool(registry, { "format", "--drop-comments", w + "/commented.json" });
+        std::string dropped = ReadFile(w + "/commented.json");
+        CHECK(drop.Code == 0 && Contains(drop.Out, "DONE") && !Contains(dropped, "//") && Contains(dropped, "\"$schema\": \"scene.schema.json\"") && LoadScene(w + "/commented.json", registry).Scene->GetEntityCount() == 8, "--drop-comments formats it anyway, keeping $schema and every entity");
+
+        // a file with problems is never rewritten
+        std::filesystem::copy_file(dir + "mixed_errors.json", w + "/mixed.json");
+        std::string mixed = ReadFile(w + "/mixed.json");
+        ToolRun skip = RunTool(registry, { "format", "--drop-comments", w + "/mixed.json" });
+        CHECK(skip.Code == 1 && Contains(skip.Out, "SKIP  " + w + "/mixed.json: 14 problems; fix them first") && Contains(skip.Out, "/entities/10/components/Camera/zoom") && ReadFile(w + "/mixed.json") == mixed, "a file with problems is reported and left exactly as it was");
+
+        // directories, and the command line
+        std::filesystem::create_directories(work / "dir");
+        WriteFile(w + "/dir/one.json", compact);
+        WriteFile(w + "/dir/two.json", compact);
+        ToolRun folder = RunTool(registry, { "format", w + "/dir" });
+        CHECK(folder.Code == 0 && Contains(folder.Out, "2 files, 2 changed, 0 skipped") && ReadFile(w + "/dir/two.json") == canonicalOf(compact), "format handles every file in a directory");
+        CHECK(RunTool(registry, { "format" }).Code == 2 && RunTool(registry, { "format", "--bogus", "x" }).Code == 2 && RunTool(registry, { "format", "--schema" }).Code == 2, "format without files, with an unknown option or with an incomplete one is a usage error");
+        ToolRun gone = RunTool(registry, { "format", w + "/nope.json" });
+        CHECK(gone.Code == 1 && Contains(gone.Out, "cannot open the file"), "a missing file is a failure");
+
+        std::filesystem::remove_all(work);
+    }
+
+    // marle-scene: schema
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::filesystem::path work = std::filesystem::temp_directory_path() / "marle_scene_tool_schema_test";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work);
+        const std::string file = (work / "schema.json").generic_string();
+
+        ToolRun print = RunTool(registry, { "schema" });
+        CHECK(print.Code == 0 && print.Out == SceneSchemaToText(registry) && print.Err.empty(), "schema prints the generated schema");
+        ToolRun write = RunTool(registry, { "schema", "--output", file });
+        CHECK(write.Code == 0 && write.Out == "DONE  " + file + ": schema written\n" && ReadFile(file) == print.Out, "schema --output writes it to a file");
+        CHECK(RunTool(registry, { "schema", "--check", file }).Out == "OK    " + file + ": up to date\n" && RunTool(registry, { "schema", "--check", file }).Code == 0, "schema --check passes for an up to date file");
+        CHECK(RunTool(registry, { "schema", "--check", "Assets/Scenes/scene.schema.json" }).Code == 0, "the committed schema is up to date");
+
+        WriteFile(file, print.Out + " ");
+        ToolRun stale = RunTool(registry, { "schema", "--check", file });
+        CHECK(stale.Code == 1 && Contains(stale.Out, "DIFF  " + file + ": out of date") && Contains(stale.Out, "marle-scene schema --output " + file), "schema --check fails for a stale file and says how to fix it");
+        CHECK(RunTool(registry, { "schema", "--check", (work / "missing.json").generic_string() }).Code == 1, "schema --check fails for a missing file");
+        CHECK(RunTool(registry, { "schema", "--output" }).Code == 2 && RunTool(registry, { "schema", "--frob", "x" }).Code == 2 && RunTool(registry, { "schema", "extra" }).Code == 2, "a bad schema command line is a usage error");
+        CHECK(RunTool(registry, { "schema", "--output", (work / "no_such_dir" / "s.json").generic_string() }).Code == 1, "an unwritable schema path is a failure");
+
+        // a game with components of its own gets them in its schema and validation
+        ComponentRegistry game;
+        RegisterBuiltinComponents(game);
+        game.Register<Door>("Door", "Leads somewhere.").Field(&Door::Target, "target", "Where to.").Required();
+        CHECK(Contains(RunTool(game, { "schema" }).Out, "component_Door") && !Contains(print.Out, "component_Door"), "the tool uses whatever registry it is given");
+        WriteFile((work / "door.json").string(), R"({"version": 1, "name": "d", "entities": [{"name": "d", "components": {"Door": {"target": "x"}}}]})");
+        CHECK(RunTool(game, { "validate", (work / "door.json").generic_string() }).Code == 0 && RunTool(registry, { "validate", (work / "door.json").generic_string() }).Code == 1, "a scene with a client component validates only with that component registered");
+
+        std::filesystem::remove_all(work);
+    }
+
+    // marle-scene: the real executable
+    {
+        std::filesystem::path self(argv[0]);
+        std::string tool = (self.parent_path().parent_path() / "SceneTool" / "marle-scene").string();
+        CHECK(std::filesystem::exists(tool), "the marle-scene executable is built next to the tests");
+
+        ToolRun good = RunProcess(tool + " validate Assets/Scenes/example.json");
+        CHECK(good.Code == 0 && good.Out == "OK    Assets/Scenes/example.json: 8 entities, 14 components\n", "marle-scene validate succeeds on a good scene");
+        ToolRun broken = RunProcess(tool + " validate Tests/SceneTests/fixtures/mixed_errors.json");
+        CHECK(broken.Code == 1 && Contains(broken.Out, "FAIL  Tests/SceneTests/fixtures/mixed_errors.json: 14 problems"), "marle-scene validate exits 1 on a bad scene");
+        CHECK(RunProcess(tool + " bogus").Code == 2 && RunProcess(tool).Code == 2, "marle-scene exits 2 on a bad command line");
+        ToolRun schema = RunProcess(tool + " schema");
+        CHECK(schema.Code == 0 && schema.Out == ReadFile("Assets/Scenes/scene.schema.json"), "marle-scene schema prints the committed schema");
+        CHECK(RunProcess(tool + " format --check Assets/Scenes").Code == 0 && RunProcess(tool + " schema --check Assets/Scenes/scene.schema.json").Code == 0, "marle-scene format --check and schema --check pass on the repository's scenes");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

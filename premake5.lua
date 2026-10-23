@@ -252,21 +252,22 @@ project "Sandbox"
     filter "configurations:Dist"
         optimize "On"
 
--- Test executables live in Tests/<name>/src and exit non-zero on failure.
--- `extra` may add { files = {...}, includedirs = {...} } for test-only dependencies.
-local function testProject(name, extra)
+-- A console program linking the engine, with its sources in <root>/src.
+-- `extra` may add { files = {...}, includedirs = {...}, targetname = "..." }.
+local function consoleProject(name, root, extra)
     project (name)
-        location ("Tests/" .. name)
+        location (root)
         kind "ConsoleApp"
         language "C++"
+        if extra and extra.targetname then targetname(extra.targetname) end
 
         targetdir ("bin/" .. outputdir .. "/%{prj.name}")
         objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
 
         files
         {
-            "Tests/" .. name .. "/src/**.h",
-            "Tests/" .. name .. "/src/**.cpp"
+            root .. "/src/**.h",
+            root .. "/src/**.cpp"
         }
 
         includedirs
@@ -320,6 +321,11 @@ local function testProject(name, extra)
         filter {}
 end
 
+-- Test executables live in Tests/<name>/src and exit non-zero on failure.
+local function testProject(name, extra)
+    consoleProject(name, "Tests/" .. name, extra)
+end
+
 testProject "Renderer2DTests"   -- pixel readback; needs a display, run from the repo root
 testProject "InputTests"        -- headless
 testProject "LogTests"          -- headless
@@ -331,3 +337,6 @@ testProject("SceneTests", {
 })
 testProject "ApplicationTests"  -- needs a display
 testProject "ImGuiLayerTests"   -- needs a display; pixel readback of ImGui output
+
+-- marle-scene: check and tidy scene files from the command line (no window or GL context)
+consoleProject("SceneTool", "tools/marle-scene", { targetname = "marle-scene" })

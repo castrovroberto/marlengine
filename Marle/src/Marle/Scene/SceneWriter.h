@@ -25,6 +25,11 @@ namespace Marle {
         bool Ok() const { return Problems.empty(); }
     };
 
+    // Writes text to a file, replacing any existing one, through a temporary file beside it that is
+    // renamed into place, so a failure never leaves a half-written file. On failure returns false
+    // and, if `error` is given, says why; nothing is logged.
+    EXPORT bool WriteTextFile(const std::string& file, const std::string& text, std::string* error = nullptr);
+
     // The scene as a scene file: entities in creation order, components in registration order, fields
     // in declaration order, every field written, one line per component. Loading the text gives the same
     // scene back, and writing that scene gives the same text. Components the registry does not know
