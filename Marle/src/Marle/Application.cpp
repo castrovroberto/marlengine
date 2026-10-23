@@ -102,6 +102,11 @@ namespace Marle {
         // For now, just log them
     }
 
+    InputFrame Application::SampleInput()
+    {
+        return Input::TakeFrame();
+    }
+
     void Application::OnUpdate(double fixed_dt) {
         // Base implementation can be empty or provide some core engine update logic if needed in the future.
     }
@@ -140,6 +145,7 @@ namespace Marle {
                 // (None yet)
 
                 // --- Game Specific Update ---
+                m_InputFrame = SampleInput();
                 OnUpdate(m_FixedDeltaTime); // Call the virtual update method
                 for (auto& layer : m_LayerStack)
                     layer->OnUpdate(m_FixedDeltaTime);

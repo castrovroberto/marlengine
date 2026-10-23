@@ -16,7 +16,7 @@ namespace Marle {
 
             virtual void OnAttach() {}                      // pushed onto a stack; GL context is current
             virtual void OnDetach() {}                      // popped or the stack is being destroyed
-            virtual void OnUpdate(double fixed_dt) {}       // fixed timestep
+            virtual void OnUpdate(double fixed_dt) {}       // fixed timestep; read input through Application::GetInputFrame()
             virtual void OnRender(double interpolation_alpha) {}
             virtual void OnEvent(Event& e) {}               // call e.SetHandled() to stop propagation
             virtual void OnImGuiRender() {}                 // issue ImGui calls; only called while an ImGuiLayer is in the stack

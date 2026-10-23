@@ -9,6 +9,8 @@
 #include "Marle/Scene/SceneTool.h"
 #include "Marle/Scene/SceneReloader.h"
 #include "Marle/Scene/RandomGenerator.h"
+#include "Marle/Core/KeyNames.h"
+#include "Marle/Core/KeyCodes.h"
 #include <nlohmann/json-schema.hpp>
 #include <algorithm>
 #include <cctype>
@@ -34,6 +36,7 @@ struct Position { float x = 0.0f, y = 0.0f; Position() = default; Position(float
 struct Health { int points = 10; };
 struct Gravity { float Strength = 9.8f; };
 struct Follow { std::string Target; glm::vec2 Offset = { 0.0f, 0.0f }; };
+struct Binding { std::string Key = "Q"; };
 struct Pad { std::string Keys = "both"; std::string Label; int Count = 0; };
 struct Door { std::string Target; int Level = 1; bool Locked = false; };   // Target is required
 
@@ -1791,6 +1794,48 @@ int main(int argc, char** argv)
         CHECK(SchemaErrors(schema, ParseWithComments(R"({"version": 1, "name": "x", "components": {"Random": {"seed": 7}}, "entities": []})")).empty() && !SchemaErrors(schema, ParseWithComments(R"({"version": 1, "name": "x", "components": {"Random": {"seed": 0.5}}, "entities": []})")).empty(), "a scene with a seed validates, a fractional seed does not");
         SceneLoadResult example = LoadScene("Assets/Scenes/example.json", registry);
         CHECK(example.Ok() && example.Scene->GetSceneEntity().Get<Random>().Seed == 1 && first(*example.Scene, 4) == seed1, "the example scene carries a seed of its own");
+    }
+
+    // field enums: key names
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        registry.Register<Binding>("Binding", "A key binding.").Field(&Binding::Key, "key", "Which key.").OneOf(KeyNames());
+        const size_t count = KeyNames().size();
+        CHECK(registry.Find("Binding")->Fields[0].OneOf == KeyNames() && count > 100, "a field can be limited to every key name");
+
+        Scene scene;
+        bool all = true;
+        for (const std::string& name : KeyNames()) {
+            Scene one;
+            Entity e = one.CreateEntity("e");
+            all = all && registry.Read(e, "Binding", Json::parse(R"({"key": )" + Json(name).dump() + "}")).empty() && e.Get<Binding>().Key == name && KeyFromName(e.Get<Binding>().Key) != Key::Unknown;
+        }
+        CHECK(all, "every key name is accepted and names a key");
+
+        Entity bad = scene.CreateEntity("bad");
+        auto errors = registry.Read(bad, "Binding", Json::parse(R"({"key": "Spce"})"));
+        CHECK(errors.size() == 1 && HasError(errors, "/key", "expected one of the " + std::to_string(count) + " allowed values (the schema lists them), got 'Spce' (did you mean 'Space'?)"), "a long list is not printed in the error, and the closest name is suggested");
+        CHECK(!HasError(errors, "/key", "'A', 'B'"), "and the message stays short");
+        CHECK(HasError(registry.Read(bad, "Binding", Json::parse(R"({"key": "w"})")), "/key", "did you mean 'W'?") && HasError(registry.Read(bad, "Binding", Json::parse(R"({"key": "rightbracket"})")), "/key", "did you mean 'RightBracket'?"), "a different case is suggested too");
+        CHECK(!registry.Read(bad, "Binding", Json::parse(R"({"key": ""})")).empty() && !registry.Read(bad, "Binding", Json::parse(R"({"key": "RBracket"})")).empty(), "an empty string and the old name of a key are not key names");
+
+        const Json schema = GenerateSceneSchema(registry);
+        const Json& key = schema["definitions"]["component_Binding"]["properties"]["key"];
+        CHECK(key["type"] == "string" && key["enum"].size() == count && key["enum"][0] == "A" && key["default"] == "Q" && key["description"] == "Which key. One of " + std::to_string(count) + " values, listed in enum.", "the schema has every name in an enum, and the description does not repeat them");
+        auto schemaOk = [&](const std::string& name) { return SchemaErrors(schema, Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "e", "components": {"Binding": {"key": )" + Json(name).dump() + "}}}]}")).empty(); };
+        bool agree = true;
+        for (const std::string& name : KeyNames()) agree = agree && schemaOk(name);
+        for (const char* name : { "w", "Spce", "", "RBracket", "Escape ", "F13" }) {
+            Scene probe;
+            agree = agree && !schemaOk(name) && !registry.Read(probe.CreateEntity("p"), "Binding", Json::parse(R"({"key": )" + Json(std::string(name)).dump() + "}")).empty();
+        }
+        CHECK(agree, "the schema and the loader accept exactly the key names");
+
+        // a default that is not a key name is refused when the set is registered
+        ComponentRegistry other;
+        other.Register<Pad>("Pad", "A pad.").Field(&Pad::Keys, "keys", "k").OneOf(KeyNames());   // the default 'both' is not a key
+        CHECK(other.Find("Pad")->Fields[0].OneOf.empty(), "the usual guard applies: a default outside the names refuses the set");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

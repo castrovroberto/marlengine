@@ -3,6 +3,7 @@
 #include "Core.h"
 #include "Window.h"
 #include "Events/Event.h"
+#include "InputFrame.h"
 #include "LayerStack.h"
 
 #include <memory>
@@ -26,6 +27,10 @@ namespace Marle
             Layer* PushOverlay(std::unique_ptr<Layer> layer) { return m_LayerStack.PushOverlay(std::move(layer)); }
             std::unique_ptr<Layer> PopLayer(Layer* layer) { return m_LayerStack.Pop(layer); }
 
+            // The input of the fixed step being run, valid during OnUpdate and the layers' OnUpdate. Read it
+            // instead of polling Input when behavior must be repeatable (ADR-0002).
+            const InputFrame& GetInputFrame() const { return m_InputFrame; }
+
             const LayerStack& GetLayerStack() const { return m_LayerStack; }   // e.g. to construct an ImGuiLayer
 
             unsigned int GetWidth()  const { return m_Window->GetWidth(); }
@@ -35,6 +40,10 @@ namespace Marle
             virtual void OnUpdate(double fixed_dt);
             virtual void OnRender(double interpolation_alpha);
             virtual void OnResize(unsigned int width, unsigned int height) {}
+
+            // The input for the next fixed step. By default it is the live keyboard and mouse
+            // (Input::TakeFrame()); override it to feed recorded input instead.
+            virtual InputFrame SampleInput();
 
         private:
             void InitGraphics();
@@ -46,6 +55,7 @@ namespace Marle
 
             std::unique_ptr<Window> m_Window;
             LayerStack m_LayerStack;
+            InputFrame m_InputFrame;
             bool m_Running = true;
 
             double m_FixedDeltaTime = 1.0 / 60.0;

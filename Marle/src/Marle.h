@@ -42,6 +42,8 @@
 #include "Marle/Core/KeyCodes.h"
 #include "Marle/Core/MouseCodes.h"
 #include "Marle/Input.h"
+#include "Marle/InputFrame.h"
+#include "Marle/Core/KeyNames.h"
 
 // Renderer
 #include "Marle/Renderer/OrthographicCamera.h"

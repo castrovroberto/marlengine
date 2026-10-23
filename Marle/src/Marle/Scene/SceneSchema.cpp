@@ -56,7 +56,7 @@ namespace Marle {
             std::string allowed;
             for (size_t i = 0; i < field.OneOf.size(); i++) allowed += (i ? ", " : "") + field.OneOf[i];
             schema["description"] = field.Description
-                + (field.OneOf.empty() ? "" : " One of: " + allowed + ".")
+                + (field.OneOf.empty() ? "" : field.OneOf.size() <= 12 ? " One of: " + allowed + "." : " One of " + std::to_string(field.OneOf.size()) + " values, listed in enum.")
                 + (field.AssetPath ? " An asset file path, relative to the working directory, written with '/' and without '..'." : "")
                 + (field.EntityReference ? " The name of another entity in the scene; empty means none." : "");
             schema["default"] = field.Default;

@@ -184,8 +184,12 @@ namespace Marle {
                 }
                 const std::string& value = j.get_ref<const std::string&>();
                 if (!info.OneOf.empty() && std::find(info.OneOf.begin(), info.OneOf.end(), value) == info.OneOf.end()) {
-                    std::string allowed, hint = SuggestionFor(value, info.OneOf);
-                    for (size_t i = 0; i < info.OneOf.size(); i++) allowed += (i ? ", '" : "'") + info.OneOf[i] + "'";
+                    std::string hint = SuggestionFor(value, info.OneOf);
+                    std::string allowed;
+                    if (info.OneOf.size() <= 12)
+                        for (size_t i = 0; i < info.OneOf.size(); i++) allowed += (i ? ", '" : "'") + info.OneOf[i] + "'";
+                    else
+                        allowed = "the " + std::to_string(info.OneOf.size()) + " allowed values (the schema lists them)";   // too many to print
                     errors.push_back({ path, "expected one of " + allowed + ", got '" + value + "'" + (hint.empty() ? "" : " (" + hint + ")") });
                     return;
                 }
