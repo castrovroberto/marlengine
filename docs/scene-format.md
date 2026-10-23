@@ -65,6 +65,7 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 | | `cellSize` | vec2 | `[32, 32]` | One sheet cell in pixels. Min 1. |
 | | `tileSize` | vec2 | `[64, 64]` | One tile in world units. Min 0.001. |
 | | `rows` | string[] | `[]` | The tiles, one string per row (see Tilemaps). |
+| | `solid` | string | `""` | The tile characters that block movement, for example `"cdef"` (see Tilemaps). Each is `0`-`9` or `a`-`z`, listed once; empty means none. |
 | `Collider` | `shape` | string | `"box"` | `"box"` or `"circle"`. |
 | | `size` | vec2 | `[32, 32]` | A box's width and height in world units; not used by a circle. Min 0.001. |
 | | `radius` | float | `16` | A circle's radius in world units; not used by a box. Min 0.001. |
@@ -103,7 +104,7 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 
 **Colliders.** A `Collider` is a box or a circle centered on the entity's `Transform.position` plus `offset`, in world units; the `Transform`'s rotation and scale do not change it, and an entity with no `Transform` has no collider. Every field is written, so the one that does not fit the shape (`size` for a circle, `radius` for a box) is ignored. The decision is in `docs/adr/0003-collision-is-simple-deterministic-shapes-in-scene-data.md`; what colliders do (stopping movement, overlap events) arrives with the rest of milestone M7, and until then a collider only holds data.
 
-**Tilemaps.** A `Tilemap` is a grid of tiles cut from a sprite sheet, so a whole map is data and not one entity per tile. The entity's `Transform.position` is the map's bottom-left corner in the world and `Transform.scale` multiplies `tileSize`; its rotation is not used.
+**Tilemaps.** A `Tilemap` is a grid of tiles cut from a sprite sheet, so a whole map is data and not one entity per tile. The entity's `Transform.position` is the map's bottom-left corner in the world and `Transform.scale` multiplies `tileSize`; its rotation is not used. `solid` lists the tile characters that block movement, for example `"solid": "cdef"` makes every tile drawn with a `c`, `d`, `e` or `f` a wall. A solid tile is a box of `tileSize` (times the scale) exactly where the tile is drawn, so what you see is what blocks; `.` is never solid. Like `Collider`, it only holds data until movement uses it later in milestone M7.
 
 - `rows` lists the map **top to bottom, as it looks**, one string per row. Every row has the same number of characters.
 - Each character is one tile: the sprite sheet cell with that number, counting from the sheet's bottom-left cell, left to right and then up, in base 36 (`0`-`9`, then `a`-`z`; lowercase only). `.` means no tile.

@@ -314,6 +314,11 @@
           },
           "description": "The tiles, one string per row, listed top to bottom as the map looks. Each character is a sprite sheet cell counted from the sheet's bottom-left cell, left to right then up, in base 36 (0-9 then a-z), or '.' for no tile. Every row must be the same length.",
           "default": []
+        },
+        "solid": {
+          "type": "string",
+          "description": "The tile characters that block movement, for example \"cdef\"; each is 0-9 or a-z and listed once. Empty means no tile blocks. A solid tile is a box of tileSize where the tile is drawn.",
+          "default": ""
         }
       }
     },

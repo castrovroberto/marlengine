@@ -109,8 +109,7 @@ namespace Marle {
                         const int cell = TilemapCell(tiles[column]);
                         if (cell == -1) continue;   // no tile
 
-                        // Rows are listed top to bottom, the world's Y points up
-                        const glm::vec2 center = origin + glm::vec2(((float)column + 0.5f) * tile.x, ((float)(rowCount - 1 - row) + 0.5f) * tile.y);
+                        const glm::vec2 center = TilemapTileCenter(*map, origin, tile, column, row);
                         if (cell < 0 || cell >= columns * sheetRows) {
                             Renderer2D::DrawQuad(center, tile, (OpenGLTexture2D*)nullptr);   // the error checker
                             continue;

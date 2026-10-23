@@ -1167,6 +1167,33 @@ int main(int argc, char** argv)
         CHECK(registry.Write(defaults, "Tilemap", true) == Json::object(), "an all-default tilemap writes as an empty object with skipDefaults");
         CHECK(registry.Find("Tilemap")->Fields[3].Type == FieldType::StringArray && std::string(FieldTypeName(FieldType::StringArray)) == "string[]" && registry.Find("Tilemap")->Fields[0].AssetPath, "rows is a string[] field and the sheet is an asset path");
 
+        // solid tiles
+        CHECK(registry.Find("Tilemap")->Fields[4].Name == "solid" && registry.Find("Tilemap")->Fields[4].Default == "" && defaults.Get<Tilemap>().Solid.empty(), "a tilemap has a solid field after the rows, and no tile blocks by default");
+        Entity walls = scene.CreateEntity("walls");
+        CHECK(registry.Read(walls, "Tilemap", Json::parse(R"({"rows": ["cc.", "c.d", "..."], "solid": "cd"})")).empty() && walls.Get<Tilemap>().Solid == "cd", "the solid characters are read");
+        CHECK(TilemapSolidTiles(walls.Get<Tilemap>(), nullptr).size() == 4, "every tile whose character is listed is solid, and '.' never is");
+        Entity badSolid = scene.CreateEntity("badSolid");
+        CHECK(HasError(registry.Read(badSolid, "Tilemap", Json::parse(R"({"solid": "cD"})")), "/solid", "'D' at position 1 is not a tile character") && HasError(registry.Read(badSolid, "Tilemap", Json::parse(R"({"solid": "c."})")), "/solid", "'.' at position 1") && HasError(registry.Read(badSolid, "Tilemap", Json::parse(R"({"solid": "cac"})")), "/solid", "'c' is listed more than once") && !badSolid.Has<Tilemap>(), "a solid list with a non-tile character or a repeat is refused");
+        CHECK(HasError(registry.Read(badSolid, "Tilemap", Json::parse(R"({"solid": "c c"})")), "/solid", "position 1"), "a space is not a tile character");
+
+        // where they are: the same place the renderer draws the tile (rows top to bottom, the map's corner at the position)
+        {
+            Tilemap map2;
+            map2.TileSize = { 10.0f, 20.0f };
+            map2.Rows = { "a.", "bc" };
+            map2.Solid = "ac";
+            std::vector<TileBox> boxes = TilemapSolidTiles(map2, nullptr);
+            CHECK(boxes.size() == 2 && boxes[0].Center == glm::vec2(5.0f, 30.0f) && boxes[0].Size == glm::vec2(10.0f, 20.0f) && boxes[1].Center == glm::vec2(15.0f, 10.0f), "the top row is highest, the first column leftmost, and the boxes come in row order");
+            Transform placed;
+            placed.Position = { 100.0f, -50.0f };
+            placed.Scale = { 2.0f, 0.5f };
+            placed.Rotation = 1.0f;
+            boxes = TilemapSolidTiles(map2, &placed);
+            CHECK(boxes.size() == 2 && boxes[0].Center == glm::vec2(110.0f, -50.0f + 15.0f) && boxes[0].Size == glm::vec2(20.0f, 10.0f) && boxes[1].Center == glm::vec2(130.0f, -50.0f + 5.0f), "the transform's position and scale place and size them, its rotation is not used");
+            map2.Solid.clear();
+            CHECK(TilemapSolidTiles(map2, nullptr).empty(), "with nothing listed there are no boxes");
+        }
+
         // the writer lays a component with a list of strings out as a block, one string per line
         Scene ground("Ground");
         Entity g = ground.CreateEntity("ground");
@@ -1190,7 +1217,8 @@ int main(int argc, char** argv)
           "rows": [
             "01",
             "2."
-          ]
+          ],
+          "solid": ""
         }
       }
     },
@@ -1201,7 +1229,8 @@ int main(int argc, char** argv)
           "texture": "",
           "cellSize": [32, 32],
           "tileSize": [64, 64],
-          "rows": []
+          "rows": [],
+          "solid": ""
         }
       }
     }
@@ -1612,7 +1641,8 @@ int main(int argc, char** argv)
       "rows": [
         "ab",
         "cd"
-      ]
+      ],
+      "solid": ""
     }
   },
   "entities": []
@@ -3352,7 +3382,7 @@ int main(int argc, char** argv)
         WriteFile(w + "/d.json", header + "\"changes\": [ { \"step\": 0, \"down\": [\"D\"] }, { \"step\": 60, \"up\": [\"D\"] } ] }\n");
         ToolRun played = RunTool(registry, { "simulate", world, "--recording", w + "/d.json" });
         CHECK(played.Code == 0 && Contains(played.Out, "120 steps, seed 1, input from") && Contains(played.Out, "camera.Transform.position: [1024.0,518.0] -> [1324.0,518.0]"), "a recording sets the length and the input, and the camera followed the player");
-        CHECK(checksumLine(played.Out) == "39cf7e73f04937f7", "its checksum is the one the Sandbox replay ended on");
+        CHECK(checksumLine(played.Out) == "00c145c310568ede", "its checksum is the one the Sandbox replay ended on");
         CHECK(Contains(RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--steps", "200" }).Out, "no input after that") && Contains(RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--steps", "30" }).Out, "stopped early"), "more steps than the recording run on without input, fewer stop early");
 
         // a recording that carries a checksum must reproduce it
@@ -3393,7 +3423,7 @@ int main(int argc, char** argv)
         CHECK(checksumLine(seed5Again.Out) == checksumLine(seed5.Out), "and the scene's own seed given again is the same run");
         CHECK(Contains(RunTool(registry, { "simulate", world, "--steps", "10", "--seed", "-3" }).Out, "seed -3"), "a negative seed is fine");
         ToolRun forced = RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--seed", "9" });
-        CHECK(forced.Code == 0 && checksumLine(forced.Out) != "39cf7e73f04937f7", "a recording can be tried on another seed (its own is not compared)");
+        CHECK(forced.Code == 0 && checksumLine(forced.Out) != "00c145c310568ede", "a recording can be tried on another seed (its own is not compared)");
 
         // usage
         CHECK(RunTool(registry, { "simulate" }).Code == 2 && Contains(RunTool(registry, { "simulate" }).Err, "no scene file"), "no file is a usage error");

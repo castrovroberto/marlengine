@@ -188,7 +188,15 @@ namespace Marle {
             .Field(&Tilemap::CellSize, "cellSize", "One sprite sheet cell [width, height] in pixels.").Min(1)
             .Field(&Tilemap::TileSize, "tileSize", "One tile [width, height] in world units.").Min(0.001)
             .Field(&Tilemap::Rows, "rows", "The tiles, one string per row, listed top to bottom as the map looks. Each character is a sprite sheet cell counted from the sheet's bottom-left cell, left to right then up, in base 36 (0-9 then a-z), or '.' for no tile. Every row must be the same length.")
+            .Field(&Tilemap::Solid, "solid", "The tile characters that block movement, for example \"cdef\"; each is 0-9 or a-z and listed once. Empty means no tile blocks. A solid tile is a box of tileSize where the tile is drawn.")
             .Validate([](const Tilemap& map, std::vector<ValidationError>& errors) {
+                for (size_t i = 0; i < map.Solid.size(); i++) {
+                    const char c = map.Solid[i];
+                    if (TilemapCell(c) < 0)
+                        errors.push_back({ "/solid", std::string("'") + c + "' at position " + std::to_string(i) + " is not a tile character (use 0-9 and a-z)" });
+                    else if (map.Solid.find(c) != i)
+                        errors.push_back({ "/solid", std::string("'") + c + "' is listed more than once" });
+                }
                 for (size_t i = 0; i < map.Rows.size(); i++) {
                     const std::string& row = map.Rows[i];
                     for (size_t x = 0; x < row.size(); x++)
