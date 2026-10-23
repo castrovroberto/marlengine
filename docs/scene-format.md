@@ -60,7 +60,7 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 
 **Units.** World coordinates have Y pointing up. Angles are radians, counter-clockwise. Colors are floats from 0 to 1.
 
-**References.** An asset is referred to by a path relative to the working directory, written with `/`. Anything that refers to another entity uses its `name`. A reference to something that does not exist is reported with the file and path of the reference; a missing image is drawn as the magenta and black error checker, and the rest of the scene still loads.
+**References.** An asset is referred to by a path relative to the working directory, written with `/`, with no `..`. Anything that refers to another entity uses its `name`. A reference to something that does not exist is reported with the file and path of the reference, and the rest of the scene still loads (see Errors).
 
 ## Written form
 
@@ -73,7 +73,25 @@ The engine reads any layout that follows the rules above. When it writes a scene
 
 ## Errors
 
-Loading a scene never fails as a whole because of one mistake. Each entity and each component is checked on its own, every problem is reported as the file plus a JSON Pointer (for example `Assets/Scenes/world.json /entities/3/components/Transform/position/1: expected a number, got a string`), the offending component or entity is skipped, and the rest of the scene loads. A misspelled field or component name comes with a suggestion and the list of valid names.
+Loading never fails as a whole because of one mistake. Each entity and each component is checked on its own, every problem is reported as the file plus a JSON Pointer to where it is, and only the part that is wrong is skipped:
+
+```
+Assets/Scenes/world.json /entities/3/components/Transform/position: expected an array of 2 numbers, got a string; the component is skipped
+```
+
+| Mistake | What happens |
+|---|---|
+| A component with any wrong field (unknown field, wrong type, out of range, missing required field) | The whole component is skipped, every problem in it is reported. The entity and its other components load. |
+| An unknown component name | That component is skipped. |
+| An unknown key on an entity or at the top level | Reported; everything else loads. |
+| An entity that is not an object, has no valid name, or repeats an earlier name | The entity is skipped. |
+| A key repeated inside an entity | The entity is skipped. (A plain JSON parser would silently keep the last one.) |
+| An asset path that is absolute, uses `\`, or contains `..` | The component is skipped, so a scene file cannot point at files outside the working directory. |
+| An asset file that does not exist | Reported, but the component loads, so the entity still shows up (a missing image is drawn as the magenta and black error checker). |
+
+Some mistakes make the file unusable, and then no scene is loaded and the problem says why: the file cannot be opened or parsed (the message names the line and column), the top level is not an object, `version` is missing, not an integer or not supported, or a key is repeated outside an entity. A missing `name` is only a problem (the scene is called `Untitled`), and so is a missing or malformed `entities`.
+
+Problems come back as a list: repeated keys first (they are found while parsing), then the rest in file order. A misspelled field, component or key name comes with a suggestion and the list of valid names.
 
 ## For AI authors
 

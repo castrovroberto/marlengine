@@ -37,6 +37,7 @@ namespace Marle {
         std::string Description;
         FieldType Type = FieldType::Float;
         bool Required = false;                  // must appear in the data; otherwise the default is used
+        bool AssetPath = false;                 // a string naming a file, relative to the working directory
         Json Default;                           // the value of a default-constructed component
         std::optional<double> Min, Max;         // applied to every number in the field
     };
@@ -305,6 +306,17 @@ namespace Marle {
             ComponentBuilder& Field(M T::* member, const std::string& name, const std::string& description);
 
             ComponentBuilder& Required() { if (m_Last) m_Last->Required = true; return *this; }
+
+            // Marks the last field, which must be a string, as the path of an asset file. The scene
+            // loader checks that it stays inside the working directory and that the file exists.
+            ComponentBuilder& AssetPath()
+            {
+                if (m_Last && m_Last->Type != FieldType::String)
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is not a string, so it cannot be an asset path");
+                else if (m_Last)
+                    m_Last->AssetPath = true;
+                return *this;
+            }
             ComponentBuilder& Min(double value) { if (m_Last) m_Last->Min = value; return *this; }
             ComponentBuilder& Max(double value) { if (m_Last) m_Last->Max = value; return *this; }
             ComponentBuilder& Range(double min, double max) { return Min(min).Max(max); }

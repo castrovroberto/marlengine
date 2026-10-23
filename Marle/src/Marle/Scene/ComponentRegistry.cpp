@@ -158,7 +158,7 @@ namespace Marle {
             .Field(&Transform::Scale, "scale", "Size [width, height], in world units.");
 
         registry.Register<SpriteRenderer>("SpriteRenderer", "Draws the entity as a quad at its Transform: a flat color, a texture, or one cell of a sprite sheet.")
-            .Field(&SpriteRenderer::Texture, "texture", "Image path relative to the working directory; empty draws a flat color.")
+            .Field(&SpriteRenderer::Texture, "texture", "Image path relative to the working directory; empty draws a flat color.").AssetPath()
             .Field(&SpriteRenderer::Cell, "cell", "Sprite sheet cell [column, row], row 0 at the bottom.").Min(0)
             .Field(&SpriteRenderer::CellSize, "cellSize", "One sprite sheet cell [width, height] in pixels; [0, 0] uses the whole texture.").Min(0)
             .Field(&SpriteRenderer::Tint, "tint", "Color [r, g, b, a], each 0 to 1, multiplied with the texture.").Range(0, 1);

@@ -3,6 +3,7 @@
 #include "Marle/Scene/Scene.h"
 #include "Marle/Scene/Components.h"
 #include "Marle/Scene/ComponentRegistry.h"
+#include "Marle/Scene/SceneLoader.h"
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
@@ -20,45 +21,11 @@ struct Position { float x = 0.0f, y = 0.0f; Position() = default; Position(float
 struct Health { int points = 10; };
 struct Door { std::string Target; int Level = 1; bool Locked = false; };   // Target is required
 
-// A stand-in for the scene loader (issue #25): applies the rules in docs/scene-format.md using the
-// real component registry, so the example file and the spec's own snippet stay valid.
-static bool IsValidEntityName(const std::string& name)
+static bool HasProblem(const SceneLoadResult& result, const std::string& path, const std::string& text)
 {
-    if (name.empty() || name.size() > 64 || name.find('/') != std::string::npos) return false;
-    if (std::isspace((unsigned char)name.front()) || std::isspace((unsigned char)name.back())) return false;
-    for (unsigned char c : name) if (c < 0x20 || c == 0x7f) return false;
-    return true;
-}
-
-static std::vector<std::string> CheckSceneFile(const Json& root, const ComponentRegistry& registry, Scene& scene)
-{
-    std::vector<std::string> problems;
-    if (!root.is_object()) return { "the top level must be an object" };
-
-    for (auto it = root.begin(); it != root.end(); ++it)
-        if (it.key() != "version" && it.key() != "name" && it.key() != "entities" && it.key() != "$schema")
-            problems.push_back("unknown top-level key '" + it.key() + "'");
-    if (!root.contains("version") || !root["version"].is_number_integer() || root["version"] != 1) problems.push_back("version must be 1");
-    if (!root.contains("name") || !root["name"].is_string() || root["name"].get<std::string>().empty()) problems.push_back("name must be a non-empty string");
-    if (!root.contains("entities") || !root["entities"].is_array()) { problems.push_back("entities must be an array"); return problems; }
-
-    int index = 0;
-    for (const Json& entry : root["entities"]) {
-        std::string at = "/entities/" + std::to_string(index++);
-        if (!entry.is_object()) { problems.push_back(at + ": an entity must be an object"); continue; }
-        for (auto it = entry.begin(); it != entry.end(); ++it)
-            if (it.key() != "name" && it.key() != "components") problems.push_back(at + ": unknown key '" + it.key() + "'");
-        if (!entry.contains("name") || !entry["name"].is_string() || !IsValidEntityName(entry["name"].get<std::string>())) { problems.push_back(at + "/name: not a valid entity name"); continue; }
-
-        Entity entity = scene.CreateEntity(entry["name"].get<std::string>());
-        if (!entity) { problems.push_back(at + "/name: duplicate entity name"); continue; }
-        if (!entry.contains("components")) continue;
-        if (!entry["components"].is_object()) { problems.push_back(at + "/components: must be an object"); continue; }
-        for (auto it = entry["components"].begin(); it != entry["components"].end(); ++it)
-            for (const ValidationError& e : registry.Read(entity, it.key(), it.value()))
-                problems.push_back(at + "/components/" + it.key() + e.Path + ": " + e.Message);
-    }
-    return problems;
+    for (const SceneProblem& p : result.Problems)
+        if (p.Path == path && p.Message.find(text) != std::string::npos) return true;
+    return false;
 }
 
 static bool HasError(const std::vector<ValidationError>& errors, const std::string& path, const std::string& text)
@@ -358,38 +325,20 @@ int main()
         CHECK(threw, "a trailing comma is a parse error");
     }
 
-    // scene files: the worked example and the spec's snippet follow the format
+    // scene loader: valid files
     {
         ComponentRegistry registry;
         RegisterBuiltinComponents(registry);
 
-        std::ifstream file("Assets/Scenes/example.json");
-        std::stringstream text;
-        text << file.rdbuf();
-        Json root = Json::parse(text.str(), nullptr, true, true);
-
-        Scene scene;
-        std::vector<std::string> problems = CheckSceneFile(root, registry, scene);
-        for (const std::string& problem : problems) printf("      %s\n", problem.c_str());
-        CHECK(file.is_open() && problems.empty(), "Assets/Scenes/example.json follows the format");
-        CHECK(scene.GetEntityCount() == root["entities"].size() && scene.GetEntityCount() == 8, "every entity in the example loads");
-        CHECK(scene.FindEntity("player").Has<Transform>() && scene.FindEntity("camera").Get<Camera>().Primary && !scene.FindEntity("spawn_point").Has<Transform>(), "the example's components read as written");
-
-        bool texturesExist = true;
-        for (const Json& entity : root["entities"])
-            if (entity.contains("components") && entity["components"].contains("SpriteRenderer")) {
-                std::string path = entity["components"]["SpriteRenderer"]["texture"].get<std::string>();
-                if (!path.empty() && !std::filesystem::exists(path)) { printf("      missing texture %s\n", path.c_str()); texturesExist = false; }
-            }
-        CHECK(texturesExist, "every texture the example refers to exists");
-
-        // the example is written the way the format says to write it: every field of every component
-        bool everyField = true;
-        for (const Json& entity : root["entities"])
-            if (entity.contains("components"))
-                for (auto it = entity["components"].begin(); it != entity["components"].end(); ++it)
-                    everyField = everyField && it.value().size() == registry.Find(it.key())->Fields.size();
-        CHECK(everyField, "the example writes every field of each component");
+        SceneLoadResult example = LoadScene("Assets/Scenes/example.json", registry);
+        for (const SceneProblem& problem : example.Problems) printf("      %s\n", problem.ToString().c_str());
+        CHECK(example.Ok() && example.Scene->GetName() == "Example garden", "Assets/Scenes/example.json loads with no problems");
+        CHECK(example.Scene && example.Scene->GetEntityCount() == 8, "every entity in the example loads");
+        CHECK(example.Scene->FindEntity("player").Has<Transform>() && example.Scene->FindEntity("camera").Get<Camera>().Primary && !example.Scene->FindEntity("spawn_point").Has<Transform>(), "the example's components read as written");
+        CHECK(example.Scene->FindEntity("grass_east").Get<SpriteRenderer>().Cell == glm::ivec2(1, 0) && example.Scene->FindEntity("spinner").Get<Transform>().Rotation == 0.7854f, "values keep their types");
+        std::string order;
+        for (Entity e : example.Scene->GetEntities()) order += e.GetName() + " ";
+        CHECK(order == "camera player grass_west grass_east pond spinner marker spawn_point ", "entities are created in file order");
 
         // the first jsonc block in docs/scene-format.md is a complete, valid scene file
         std::ifstream doc("docs/scene-format.md");
@@ -399,22 +348,113 @@ int main()
         size_t begin = all.find("```jsonc\n"), end = begin == std::string::npos ? std::string::npos : all.find("\n```", begin);
         CHECK(doc.is_open() && begin != std::string::npos && end != std::string::npos, "the spec has a jsonc example");
         if (begin != std::string::npos && end != std::string::npos) {
-            Json snippet = Json::parse(all.substr(begin + 8, end - begin - 8), nullptr, true, true);
-            Scene snippetScene;
-            std::vector<std::string> snippetProblems = CheckSceneFile(snippet, registry, snippetScene);
-            for (const std::string& problem : snippetProblems) printf("      %s\n", problem.c_str());
-            CHECK(snippetProblems.empty() && snippetScene.FindEntity("player").Get<Transform>().Position == glm::vec2(10.0f, 20.0f), "the spec's own example is a valid scene");
+            SceneLoadResult snippet = LoadSceneFromText(all.substr(begin + 8, end - begin - 8), "docs/scene-format.md", registry);
+            for (const SceneProblem& problem : snippet.Problems) printf("      %s\n", problem.ToString().c_str());
+            CHECK(snippet.Ok() && snippet.Scene->FindEntity("player").Get<Transform>().Position == glm::vec2(10.0f, 20.0f), "the spec's own example is a valid scene");
         }
 
-        // the checker really rejects what the spec forbids
-        Scene bad;
-        CHECK(!CheckSceneFile(Json::parse(R"({"version": 2, "name": "x", "entities": []})"), registry, bad).empty(), "an unsupported version is rejected");
-        CHECK(!CheckSceneFile(Json::parse(R"({"version": 1, "name": "x", "entities": [], "extra": 1})"), registry, bad).empty(), "an unknown top-level key is rejected");
-        CHECK(!CheckSceneFile(Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "a"}, {"name": "a"}]})"), registry, bad).empty(), "a duplicate entity name is rejected");
-        CHECK(!CheckSceneFile(Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "a/b"}]})"), registry, bad).empty(), "a name with a slash is rejected");
-        CHECK(!CheckSceneFile(Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": " a"}]})"), registry, bad).empty(), "a name with leading whitespace is rejected");
-        CHECK(!CheckSceneFile(Json::parse(R"({"version": 1, "name": "x", "entities": [{"nam": "a"}]})"), registry, bad).empty(), "a misspelled entity key is rejected");
-        CHECK(CheckSceneFile(Json::parse(R"({"$schema": "schema.json", "version": 1, "name": "x", "entities": []})"), registry, bad).empty(), "$schema is allowed");
+        SceneLoadResult empty = LoadSceneFromText(R"({"version": 1, "name": "x", "entities": []})", "inline", registry);
+        CHECK(empty.Ok() && empty.Scene->GetName() == "x" && empty.Scene->GetEntityCount() == 0, "a scene with no entities is valid");
+        SceneLoadResult withSchema = LoadSceneFromText(R"({"$schema": "scene.schema.json", "version": 1, "name": "x", "entities": []})", "inline", registry);
+        CHECK(withSchema.Ok(), "$schema is allowed");
+
+        std::string big = R"({"version": 1, "name": "big", "entities": [)";
+        for (int i = 0; i < 2000; i++) big += std::string(i ? "," : "") + R"({"name": "e)" + std::to_string(i) + R"(", "components": {"Transform": {"position": [1, 2]}}})";
+        SceneLoadResult many = LoadSceneFromText(big + "]}", "inline", registry);
+        CHECK(many.Ok() && many.Scene->GetEntityCount() == 2000 && many.Scene->FindEntity("e1999").Has<Transform>(), "a large scene loads");
+
+        CHECK(IsValidEntityName("player") && IsValidEntityName("Tile 3-b.x") && IsValidEntityName(std::string(64, 'a')), "ordinary names are valid");
+        CHECK(!IsValidEntityName("") && !IsValidEntityName(std::string(65, 'a')) && !IsValidEntityName("a/b") && !IsValidEntityName(" a") && !IsValidEntityName("a ") && !IsValidEntityName("a\tb") && !IsValidEntityName("a\nb"), "empty, long, slash, edge-whitespace and control-character names are not");
+
+        const FieldInfo& texture = registry.Find("SpriteRenderer")->Fields[0];
+        CHECK(texture.AssetPath && !registry.Find("SpriteRenderer")->Fields[1].AssetPath && !registry.Find("Transform")->Fields[0].AssetPath, "only the texture field is marked as an asset path");
+    }
+
+    // scene loader: files that cannot be used as a whole
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::string dir = "Tests/SceneTests/fixtures/";
+
+        SceneLoadResult missing = LoadScene(dir + "does_not_exist.json", registry);
+        CHECK(!missing.Scene && !missing.Ok() && missing.Problems.size() == 1 && HasProblem(missing, "", "cannot open the file"), "a missing file gives no scene and says so");
+
+        SceneLoadResult syntax = LoadScene(dir + "bad_syntax.json", registry);
+        for (const SceneProblem& problem : syntax.Problems) printf("      %s\n", problem.ToString().c_str());
+        CHECK(!syntax.Scene && syntax.Problems.size() == 1 && HasProblem(syntax, "", "line 5"), "a syntax error gives no scene and names the line");
+
+        SceneLoadResult array = LoadScene(dir + "top_level_array.json", registry);
+        CHECK(!array.Scene && HasProblem(array, "", "the top level must be an object, got an array"), "a top level that is not an object gives no scene");
+
+        SceneLoadResult future = LoadScene(dir + "future_version.json", registry);
+        CHECK(!future.Scene && HasProblem(future, "/version", "version 2 but this engine reads version 1"), "a newer version is rejected, naming both");
+
+        CHECK(!LoadScene(dir + "missing_version.json", registry).Scene && HasProblem(LoadScene(dir + "missing_version.json", registry), "", "missing required key 'version'"), "a missing version gives no scene");
+        CHECK(!LoadScene(dir + "version_not_integer.json", registry).Scene && HasProblem(LoadScene(dir + "version_not_integer.json", registry), "/version", "expected an integer, got a string"), "a version that is not an integer gives no scene");
+
+        SceneLoadResult repeated = LoadScene(dir + "repeated_top_key.json", registry);
+        CHECK(!repeated.Scene && HasProblem(repeated, "/name", "'name' appears more than once"), "a repeated top-level key gives no scene");
+    }
+
+    // scene loader: problems that leave a usable scene
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::string dir = "Tests/SceneTests/fixtures/";
+
+        SceneLoadResult notArray = LoadScene(dir + "entities_not_array.json", registry);
+        CHECK(notArray.Scene && notArray.Scene->GetName() == "Entities is not a list" && notArray.Scene->GetEntityCount() == 0 && HasProblem(notArray, "/entities", "expected an array, got an object"), "entities that is not an array gives an empty scene and a problem");
+
+        SceneLoadResult top = LoadScene(dir + "top_level_problems.json", registry);
+        CHECK(top.Scene && top.Scene->GetName() == "Untitled" && top.Scene->FindEntity("a"), "a missing name falls back to Untitled and the entities still load");
+        CHECK(HasProblem(top, "", "missing required key 'name'") && HasProblem(top, "/extra", "unknown key 'extra'") && HasProblem(top, "/$schema", "expected a string, got a number") && top.Problems.size() == 3, "unknown top-level keys, a bad $schema and a missing name are each reported");
+
+        SceneLoadResult r = LoadScene(dir + "mixed_errors.json", registry);
+        for (const SceneProblem& problem : r.Problems) printf("      %s\n", problem.ToString().c_str());
+        CHECK(r.Scene && !r.Ok() && r.Scene->GetName() == "Mixed errors", "a file full of mistakes still loads a scene");
+        printf("      %d problems\n", (int)r.Problems.size());
+        CHECK(r.Problems.size() == 14, "every mistake is reported once");
+
+        std::string loaded;
+        for (Entity e : r.Scene->GetEntities()) loaded += e.GetName() + " ";
+        CHECK(loaded == "good_first unknown_component wrong_type unknown_field missing_texture unsafe_path range extra_key components_not_object good_last ", "the good entities load, in file order, and the bad ones are skipped");
+
+        Scene& scene = *r.Scene;
+        CHECK(scene.FindEntity("good_first").Get<Transform>().Position == glm::vec2(1.0f, 2.0f), "a good entity before the mistakes is untouched");
+        CHECK(HasProblem(r, "/entities/1/components/Transfrom", "did you mean 'Transform'") && !scene.FindEntity("unknown_component").Has<Transform>() && scene.FindEntity("unknown_component").Get<Camera>().Zoom == 2.0f, "an unknown component is skipped with a suggestion, its siblings load");
+        CHECK(HasProblem(r, "/entities/2/components/Transform/position", "expected an array of 2 numbers") && HasProblem(r, "/entities/2/components/Transform/rotation", "expected a number") && !scene.FindEntity("wrong_type").Has<Transform>() && scene.FindEntity("wrong_type").Has<Camera>(), "a component with wrong types is skipped whole, with a path for each, and its siblings load");
+        CHECK(HasProblem(r, "/entities/3/components/SpriteRenderer/texure", "did you mean 'texture'") && !scene.FindEntity("unknown_field").Has<SpriteRenderer>(), "an unknown field skips the component, with a suggestion");
+        CHECK(HasProblem(r, "/entities/4/name", "an entity named 'good_first' already exists") && scene.GetEntityCount() == 10, "a duplicate entity name is skipped and the first one stays");
+        CHECK(HasProblem(r, "/entities/5/name", "'bad/name' is not a valid entity name") && !scene.FindEntity("bad/name"), "an invalid entity name is skipped");
+        CHECK(HasProblem(r, "/entities/6", "an entity must be an object, got a string"), "an entity that is not an object is skipped");
+        CHECK(HasProblem(r, "/entities/7/components/SpriteRenderer/texture", "the file 'Assets/Textures/nope.png' does not exist") && scene.FindEntity("missing_texture").Has<SpriteRenderer>(), "a missing asset is reported but the component loads");
+        CHECK(HasProblem(r, "/entities/8/components/SpriteRenderer/texture", "must not contain '..'") && !scene.FindEntity("unsafe_path").Has<SpriteRenderer>() && scene.FindEntity("unsafe_path").Has<Camera>(), "an asset path that leaves the working directory skips the component");
+        CHECK(HasProblem(r, "/entities/9/components/Camera/zoom", "'zoom' appears more than once") && !scene.FindEntity("repeated_key"), "a repeated key skips the entity that contains it");
+        CHECK(HasProblem(r, "/entities/10/components/Camera/zoom", "must be at least 0.01") && !scene.FindEntity("range").Has<Camera>(), "an out-of-range value skips the component");
+        CHECK(HasProblem(r, "/entities/11/colour", "unknown key 'colour'") && scene.FindEntity("extra_key").Get<Camera>().Primary, "an unknown entity key is reported and the entity still loads");
+        CHECK(HasProblem(r, "/entities/12", "missing required key 'name'"), "an entity without a name is skipped");
+        CHECK(HasProblem(r, "/entities/13/components", "expected an object, got an array") && scene.FindEntity("components_not_object"), "components that is not an object is reported and the entity still loads");
+        CHECK(scene.FindEntity("good_last").Has<SpriteRenderer>(), "a good entity after the mistakes loads");
+
+        bool formatted = !r.Problems.empty();
+        for (const SceneProblem& p : r.Problems)
+            formatted = formatted && p.File == dir + "mixed_errors.json" && p.ToString() == p.File + (p.Path.empty() ? "" : " " + p.Path) + ": " + p.Message;
+        CHECK(formatted && r.Problems[1].ToString().find("mixed_errors.json /entities/1/components/Transfrom: unknown component 'Transfrom'") != std::string::npos, "a problem prints as file, path and message");
+
+        // asset path rules
+        auto assetProblem = [&](const std::string& path) {
+            Json scene = Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "a", "components": {"SpriteRenderer": {"texture": ""}}}]})");
+            scene["entities"][0]["components"]["SpriteRenderer"]["texture"] = path;
+            return LoadSceneFromText(scene.dump(), "inline", registry);
+        };
+        CHECK(HasProblem(assetProblem("a\\b.png"), "/entities/0/components/SpriteRenderer/texture", "use '/'"), "a backslash in an asset path is rejected");
+        CHECK(HasProblem(assetProblem("/etc/passwd"), "/entities/0/components/SpriteRenderer/texture", "must be relative"), "an absolute asset path is rejected");
+        CHECK(HasProblem(assetProblem("C:/images/a.png"), "/entities/0/components/SpriteRenderer/texture", "must be relative"), "a drive letter in an asset path is rejected");
+        CHECK(HasProblem(assetProblem("Assets/../../x.png"), "/entities/0/components/SpriteRenderer/texture", "must not contain '..'"), "'..' in the middle of an asset path is rejected");
+        SceneLoadResult dots = assetProblem("Assets/a..b.png");
+        CHECK(dots.Scene->FindEntity("a").Has<SpriteRenderer>() && HasProblem(dots, "/entities/0/components/SpriteRenderer/texture", "does not exist"), "'..' inside a name is just a name");
+        CHECK(assetProblem("").Ok() && assetProblem("Assets/Textures/test_sprite.tga").Ok(), "an empty texture and an existing file are fine");
+        CHECK(HasProblem(assetProblem("Assets/Textures"), "/entities/0/components/SpriteRenderer/texture", "does not exist"), "a directory is not a file");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

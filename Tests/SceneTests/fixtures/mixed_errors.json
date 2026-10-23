@@ -1,0 +1,22 @@
+// One file with a mistake of every kind. Each bad entity or component is skipped and the rest loads.
+{
+  "version": 1,
+  "name": "Mixed errors",
+  "entities": [
+    { "name": "good_first", "components": { "Transform": { "position": [1, 2] } } },
+    { "name": "unknown_component", "components": { "Transfrom": { "position": [1, 2] }, "Camera": { "zoom": 2 } } },
+    { "name": "wrong_type", "components": { "Transform": { "position": "here", "rotation": [1] }, "Camera": {} } },
+    { "name": "unknown_field", "components": { "SpriteRenderer": { "texure": "x.png" } } },
+    { "name": "good_first" },
+    { "name": "bad/name" },
+    "not an object",
+    { "name": "missing_texture", "components": { "SpriteRenderer": { "texture": "Assets/Textures/nope.png" } } },
+    { "name": "unsafe_path", "components": { "SpriteRenderer": { "texture": "../outside.png" }, "Camera": {} } },
+    { "name": "repeated_key", "components": { "Camera": { "zoom": 2, "zoom": 3 } } },
+    { "name": "range", "components": { "Camera": { "zoom": 0 } } },
+    { "name": "extra_key", "colour": "red", "components": { "Camera": { "primary": true } } },
+    { "components": { "Camera": {} } },
+    { "name": "components_not_object", "components": [ "Transform" ] },
+    { "name": "good_last", "components": { "SpriteRenderer": { "texture": "Assets/Textures/test_sprite.tga" } } }
+  ]
+}
