@@ -66,7 +66,7 @@ namespace Marle {
 
         size_t CountComponents(const Scene& scene, const ComponentRegistry& registry)
         {
-            size_t count = 0;
+            size_t count = registry.GetComponentNames(scene.GetSceneEntity()).size();   // the scene's own
             for (const Entity& entity : scene.GetEntities()) count += registry.GetComponentNames(entity).size();
             return count;
         }

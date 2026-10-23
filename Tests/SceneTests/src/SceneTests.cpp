@@ -28,6 +28,7 @@ static int fails = 0;
 
 struct Position { float x = 0.0f, y = 0.0f; Position() = default; Position(float x, float y) : x(x), y(y) {} };
 struct Health { int points = 10; };
+struct Gravity { float Strength = 9.8f; };
 struct Door { std::string Target; int Level = 1; bool Locked = false; };   // Target is required
 
 static std::string ReadFile(const std::string& path)
@@ -1269,6 +1270,176 @@ int main(int argc, char** argv)
         SceneReload arrived = absent.Poll();
         CHECK(arrived.Attempted && arrived.Scene && arrived.Scene->GetName() == "one" && absent.GetStatus().Loads == 1 && !absent.GetStatus().Missing, "and loads it when it appears");
 
+        std::filesystem::remove_all(work);
+    }
+
+    // scene-level components: the scene's own entity
+    {
+        Scene scene("s");
+        Entity own = scene.GetSceneEntity();
+        CHECK(own.IsValid() && own.GetName() == "(scene)" && scene.GetEntityCount() == 0 && scene.GetEntities().empty() && !scene.FindEntity("(scene)"), "a scene has its own entity, which is not one of its entities");
+        own.Add<Health>().points = 3;
+        Entity a = scene.CreateEntity("a");
+        a.Add<Health>().points = 5;
+        CHECK(scene.GetEntityCount() == 1 && scene.GetEntities().size() == 1 && scene.GetEntities()[0].GetName() == "a", "its components do not add to the entity list");
+        int visited = 0, points = 0;
+        scene.ForEach<Health>([&](Entity, Health& h) { visited++; points += h.points; });
+        CHECK(visited == 1 && points == 5, "ForEach does not visit the scene's own entity");
+        CHECK(!scene.DestroyEntity(own) && own.IsValid() && own.Get<Health>().points == 3, "the scene's own entity cannot be destroyed");
+        CHECK(scene.GetSceneEntity() == own && scene.GetSceneEntity() != a, "it is the same entity every time");
+        Scene other("o");
+        CHECK(other.GetSceneEntity() != own && !other.GetSceneEntity().Has<Health>() && !other.DestroyEntity(own), "each scene has its own, and one scene cannot touch another's");
+        Entity survivor = Scene("gone").GetSceneEntity();
+        CHECK(!survivor.IsValid() && !survivor.Has<Health>(), "its handle goes invalid with the scene");
+    }
+
+    // scene-level components: loading
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        registry.Register<Gravity>("Gravity", "Pull.").Field(&Gravity::Strength, "strength", "How hard.").Range(0, 100);
+        registry.Register<Door>("Door", "Leads somewhere.").Field(&Door::Target, "target", "Where to.").Required();
+        auto load = [&](const std::string& components, const std::string& entities = "[]") {
+            return LoadSceneFromText(R"({"version": 1, "name": "s", "components": )" + components + R"(, "entities": )" + entities + "}", "inline", registry);
+        };
+
+        SceneLoadResult ok = load(R"({"Gravity": {"strength": 3}})", R"([{"name": "a", "components": {"Gravity": {"strength": 5}}}])");
+        CHECK(ok.Ok() && ok.Scene->GetSceneEntity().Get<Gravity>().Strength == 3.0f && ok.Scene->FindEntity("a").Get<Gravity>().Strength == 5.0f && ok.Scene->GetEntityCount() == 1, "a scene's own components load, beside an entity with the same component");
+        SceneLoadResult none = LoadSceneFromText(R"({"version": 1, "name": "s", "entities": []})", "inline", registry);
+        CHECK(none.Ok() && registry.GetComponentNames(none.Scene->GetSceneEntity()).empty(), "a scene without components has none of its own");
+        CHECK(load("{}").Ok(), "an empty components object is fine");
+
+        SceneLoadResult notObject = load(R"([])", R"([{"name": "a"}])");
+        CHECK(HasProblem(notObject, "/components", "expected an object, got an array") && notObject.Scene->FindEntity("a"), "components that is not an object is reported and the entities still load");
+
+        SceneLoadResult unknown = load(R"({"Gravty": {}, "Door": {"target": "x"}})", R"([{"name": "a"}])");
+        CHECK(HasProblem(unknown, "/components/Gravty", "did you mean 'Gravity'") && unknown.Scene->GetSceneEntity().Has<Door>() && unknown.Scene->FindEntity("a"), "an unknown scene component is skipped with a suggestion, its siblings load");
+        SceneLoadResult wrong = load(R"({"Gravity": {"strength": "strong"}})");
+        CHECK(HasProblem(wrong, "/components/Gravity/strength", "expected a number, got a string") && !wrong.Scene->GetSceneEntity().Has<Gravity>(), "a wrong type skips the component, with its path");
+        SceneLoadResult range = load(R"({"Gravity": {"strength": 500}})");
+        CHECK(HasProblem(range, "/components/Gravity/strength", "must be at most 100") && !range.Scene->GetSceneEntity().Has<Gravity>(), "a value out of range skips the component");
+        SceneLoadResult required = load(R"({"Door": {}})");
+        CHECK(HasProblem(required, "/components/Door/target", "missing required field 'target'"), "a missing required field is reported");
+        SceneLoadResult unsafe = load(R"({"SpriteRenderer": {"texture": "../x.png"}, "Camera": {}})");
+        CHECK(HasProblem(unsafe, "/components/SpriteRenderer/texture", "must not contain '..'") && !unsafe.Scene->GetSceneEntity().Has<SpriteRenderer>() && unsafe.Scene->GetSceneEntity().Has<Camera>(), "an unsafe asset path skips the component");
+        SceneLoadResult missingFile = load(R"({"SpriteRenderer": {"texture": "Assets/Textures/nope.png"}})");
+        CHECK(HasProblem(missingFile, "/components/SpriteRenderer/texture", "does not exist") && missingFile.Scene->GetSceneEntity().Has<SpriteRenderer>(), "a missing asset file is reported but the component loads");
+
+        // a key repeated inside the scene's components skips them all, and the entities still load
+        SceneLoadResult repeated = LoadSceneFromText(R"({"version": 1, "name": "s", "components": {"Gravity": {"strength": 1}, "Gravity": {"strength": 2}, "Camera": {}}, "entities": [{"name": "a"}]})", "inline", registry);
+        CHECK(repeated.Scene && HasProblem(repeated, "/components/Gravity", "'Gravity' appears more than once") && registry.GetComponentNames(repeated.Scene->GetSceneEntity()).empty() && repeated.Scene->FindEntity("a"), "a repeated key skips the scene's components, and the entities still load");
+        CHECK(!LoadSceneFromText(R"({"version": 1, "name": "s", "components": {}, "components": {}, "entities": []})", "inline", registry).Scene, "a repeated top-level components key is still fatal");
+        CHECK(HasProblem(LoadSceneFromText(R"({"version": 1, "name": "s", "componnets": {}, "entities": []})", "inline", registry), "/componnets", "did you mean 'components'"), "a misspelled components key gets a suggestion");
+
+        // the fixture
+        SceneLoadResult fixture = LoadScene("Tests/SceneTests/fixtures/scene_components_errors.json", registry);
+        for (const SceneProblem& problem : fixture.Problems) printf("      %s\n", problem.ToString().c_str());
+        Entity own = fixture.Scene->GetSceneEntity();
+        CHECK(fixture.Problems.size() == 3 && own.Get<Camera>().Zoom == 2.0f && fixture.Scene->FindEntity("a").Get<Camera>().Primary, "the fixture's good scene component and entity load");
+        CHECK(HasProblem(fixture, "/components/Transfrom", "did you mean 'Transform'") && HasProblem(fixture, "/components/Tilemap/rows/1", "this row has 1 tiles") && HasProblem(fixture, "/components/SpriteRenderer/texture", "must not contain '..'") && registry.GetComponentNames(own).size() == 1, "and the three bad ones are skipped, each reported with its path");
+    }
+
+    // scene-level components: writing
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        registry.Register<Gravity>("Gravity", "Pull.").Field(&Gravity::Strength, "strength", "How hard.").Range(0, 100);
+
+        Scene scene("Rules");
+        scene.GetSceneEntity().Add<Gravity>().Strength = 3.0f;
+        scene.GetSceneEntity().Add<Camera>();                 // added second, written first: registration order
+        scene.CreateEntity("a");
+        const std::string golden = R"({
+  "version": 1,
+  "name": "Rules",
+  "components": {
+    "Camera": { "zoom": 1, "primary": false },
+    "Gravity": { "strength": 3 }
+  },
+  "entities": [
+    {
+      "name": "a"
+    }
+  ]
+}
+)";
+        SceneSaveResult saved = SaveSceneToText(scene, registry);
+        for (const std::string& problem : saved.Problems) printf("      %s\n", problem.c_str());
+        CHECK(saved.Ok() && saved.Text == golden, "a scene's own components are written between the name and the entities");
+        CHECK(SaveSceneToText(Scene("x"), registry).Text == "{\n  \"version\": 1,\n  \"name\": \"x\",\n  \"entities\": []\n}\n", "a scene without its own components has no components key");
+
+        SceneLoadResult back = LoadSceneFromText(golden, "golden", registry);
+        CHECK(back.Ok() && SaveSceneToText(*back.Scene, registry).Text == golden, "the canonical text loads and writes back identically");
+        back.Scene->GetSceneEntity().Get<Gravity>().Strength = 4.0f;
+        std::vector<std::string> before = SplitLines(golden), after = SplitLines(SaveSceneToText(*back.Scene, registry).Text);
+        int changed = 0;
+        for (size_t i = 0; i < before.size() && i < after.size(); i++) changed += before[i] != after[i];
+        CHECK(before.size() == after.size() && changed == 1, "changing one scene component changes exactly one line");
+
+        // a component with a list of strings is a block, indented for the scene level
+        Scene blocks("Blocks");
+        Tilemap& map = blocks.GetSceneEntity().Add<Tilemap>();
+        map.Rows = { "ab", "cd" };
+        const std::string block = R"({
+  "version": 1,
+  "name": "Blocks",
+  "components": {
+    "Tilemap": {
+      "texture": "",
+      "cellSize": [32, 32],
+      "tileSize": [64, 64],
+      "rows": [
+        "ab",
+        "cd"
+      ]
+    }
+  },
+  "entities": []
+}
+)";
+        CHECK(SaveSceneToText(blocks, registry).Text == block && LoadSceneFromText(block, "block", registry).Ok(), "a block component is indented for the scene level and reads back");
+
+        // what would not read back is refused, naming the scene's component
+        Scene bad("Bad");
+        bad.GetSceneEntity().Add<Camera>().Zoom = 0.0f;
+        SceneSaveResult refused = SaveSceneToText(bad, registry);
+        CHECK(!refused.Ok() && refused.Problems[0].find("scene component 'Camera'/zoom: must be at least 0.01") != std::string::npos, "a scene component outside its range is refused, naming it");
+    }
+
+    // scene-level components: the schema and the tool
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const Json schema = GenerateSceneSchema(registry);
+
+        const Json& sceneComponents = schema["properties"]["components"];
+        CHECK(sceneComponents["type"] == "object" && sceneComponents["additionalProperties"] == false && sceneComponents["properties"] == schema["definitions"]["entity"]["properties"]["components"]["properties"], "the schema lets the scene carry the same components an entity can");
+        std::string order;
+        for (auto it = schema["properties"].begin(); it != schema["properties"].end(); ++it) order += it.key() + " ";
+        CHECK(order == "$schema version name components entities ", "and lists the keys in file order");
+
+        auto errorsFor = [&](const std::string& json) { return SchemaErrors(schema, ParseWithComments(json)); };
+        CHECK(errorsFor(R"({"version": 1, "name": "x", "components": {"Camera": {"zoom": 2}}, "entities": []})").empty(), "a scene with its own components validates");
+        CHECK(!errorsFor(R"({"version": 1, "name": "x", "components": {"Nope": {}}, "entities": []})").empty() && !errorsFor(R"({"version": 1, "name": "x", "components": {"Camera": {"zoom": 0}}, "entities": []})").empty() && !errorsFor(R"({"version": 1, "name": "x", "components": [], "entities": []})").empty(), "an unknown scene component, a bad value and a components that is not an object are rejected");
+
+        // the schema and the loader agree about the scene's own components in the fixture
+        const std::string file = "Tests/SceneTests/fixtures/scene_components_errors.json";
+        bool schemaBad = false, loaderBad = false;
+        for (const std::string& e : SchemaErrors(schema, ParseWithComments(ReadFile(file)))) schemaBad = schemaBad || e.rfind("/components", 0) == 0;
+        for (const SceneProblem& p : LoadScene(file, registry).Problems) loaderBad = loaderBad || p.Path.rfind("/components", 0) == 0;
+        CHECK(schemaBad && loaderBad, "the schema and the loader both reject the bad scene components in the fixture");
+
+        // the tool
+        const std::filesystem::path work = std::filesystem::temp_directory_path() / "marle_scene_components_test";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work);
+        const std::string w = work.generic_string();
+        const std::string compact = R"({"version":1,"name":"t","components":{"Camera":{"zoom":2}},"entities":[{"name":"a","components":{"Camera":{}}}]})";
+        WriteFile(w + "/a.json", compact);
+        CHECK(RunTool(registry, { "validate", w + "/a.json" }).Out == "OK    " + w + "/a.json: 1 entity, 2 components\n", "validate counts the scene's own components too");
+        RunTool(registry, { "format", w + "/a.json" });
+        std::string formatted = ReadFile(w + "/a.json");
+        CHECK(Contains(formatted, "  \"components\": {\n    \"Camera\": { \"zoom\": 2, \"primary\": false }\n  },\n") && LoadScene(w + "/a.json", registry).Ok() && RunTool(registry, { "format", "--check", w + "/a.json" }).Code == 0, "format keeps and canonicalizes the scene's own components");
         std::filesystem::remove_all(work);
     }
 

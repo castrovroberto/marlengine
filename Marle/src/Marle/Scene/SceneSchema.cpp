@@ -110,6 +110,11 @@ namespace Marle {
             { "$schema", Json::object({ { "type", "string" }, { "description", "The path or URL of this schema, for editors; the engine ignores it." } }) },
             { "version", Json::object({ { "const", SceneFormatVersion }, { "description", "The scene file format version." } }) },
             { "name", Json::object({ { "type", "string" }, { "minLength", 1 }, { "description", "The scene's name." } }) },
+            { "components", Json::object({
+                { "type", "object" },
+                { "description", "Components of the scene itself (such as its random seed), keyed by component name. Same rules as an entity's components." },
+                { "additionalProperties", false },
+                { "properties", entityComponentProperties } }) },
             { "entities", Json::object({ { "type", "array" }, { "description", "The entities, in creation order." }, { "items", Json::object({ { "$ref", "#/definitions/entity" } }) } }) }
         });
 

@@ -8,6 +8,8 @@ namespace Marle {
     Scene::Scene(std::string name)
         : m_Name(std::move(name)), m_State(std::make_shared<detail::SceneState>())
     {
+        m_State->SceneEntity = m_State->Registry.create();
+        m_State->Registry.emplace<detail::EntityName>(m_State->SceneEntity, detail::EntityName{ "(scene)" });
     }
 
     Scene::~Scene() = default;   // dropping the state expires every Entity's weak reference
@@ -30,6 +32,11 @@ namespace Marle {
         return Entity(m_State, handle);
     }
 
+    Entity Scene::GetSceneEntity() const
+    {
+        return Entity(m_State, m_State->SceneEntity);
+    }
+
     Entity Scene::FindEntity(const std::string& name) const
     {
         auto it = m_State->ByName.find(name);
@@ -40,6 +47,10 @@ namespace Marle {
     {
         if (entity.Lock() != m_State)
             return false;
+        if (entity.m_Handle == m_State->SceneEntity) {
+            MRL_CORE_ERROR("Scene '{}': the scene's own entity cannot be destroyed", m_Name);
+            return false;
+        }
 
         m_State->ByName.erase(entity.GetName());
         m_State->Order.erase(std::find(m_State->Order.begin(), m_State->Order.end(), entity.m_Handle));

@@ -35,24 +35,25 @@ namespace Marle {
             //       "4567"
             //     ]
             //   }
-            std::string Block(const Json& data, const ComponentInfo& info, const std::string& where)
+            std::string Block(const Json& data, const ComponentInfo& info, const std::string& where, size_t indent)
             {
+                const std::string field_indent(indent + 2, ' '), item_indent(indent + 4, ' ');
                 std::string out = "{\n";
                 size_t i = 0;
                 for (const FieldInfo& field : info.Fields) {
-                    out += "          " + Quoted(field.Name, where) + ": ";
+                    out += field_indent + Quoted(field.Name, where) + ": ";
                     const Json& value = data[field.Name];
                     if (field.Type == FieldType::StringArray && !value.empty()) {
                         out += "[\n";
                         for (size_t r = 0; r < value.size(); r++)
-                            out += "            " + Quoted(value[r].get<std::string>(), where + "/" + field.Name + "/" + std::to_string(r)) + (r + 1 < value.size() ? ",\n" : "\n");
-                        out += "          ]";
+                            out += item_indent + Quoted(value[r].get<std::string>(), where + "/" + field.Name + "/" + std::to_string(r)) + (r + 1 < value.size() ? ",\n" : "\n");
+                        out += field_indent + "]";
                     } else {
                         out += Inline(value, where + "/" + field.Name);
                     }
                     out += ++i < info.Fields.size() ? ",\n" : "\n";
                 }
-                return out + "        }";
+                return out + std::string(indent, ' ') + "}";
             }
 
             static bool NeedsBlock(const ComponentInfo& info)
@@ -111,10 +112,44 @@ namespace Marle {
 
         if (scene.GetName().empty()) writer.Report("scene", "the scene has no name");
 
+        // The lines for an entity's (or the scene's) components, each at `indent`: every component the
+        // registry knows, in registration order, checked the way the loader would read them back
+        auto componentLines = [&](Entity owner, const std::string& where, size_t indent) {
+            std::vector<std::string> lines;
+            for (const std::string& component : registry.GetComponentNames(owner)) {
+                const std::string at = where + " component '" + component + "'";
+                Json data = registry.Write(owner, component);
+
+                // What is written must read back: check the same way the loader would
+                Scene scratch;
+                for (const ValidationError& error : registry.Read(scratch.CreateEntity("check"), component, data))
+                    writer.Report(at + error.Path, error.Message);
+                for (const FieldInfo& field : registry.Find(component)->Fields) {
+                    if (!field.AssetPath || !data[field.Name].is_string()) continue;
+                    std::string why = AssetPathProblem(data[field.Name].get<std::string>());
+                    if (!why.empty()) writer.Report(at + "/" + field.Name, why);
+                }
+
+                const ComponentInfo* info = registry.Find(component);
+                lines.push_back(std::string(indent, ' ') + writer.Quoted(component, at) + ": " + (Writer::NeedsBlock(*info) ? writer.Block(data, *info, at, indent) : writer.Inline(data, at)));
+            }
+            return lines;
+        };
+        auto joined = [](const std::vector<std::string>& lines) {
+            std::string out;
+            for (size_t c = 0; c < lines.size(); c++) out += lines[c] + (c + 1 < lines.size() ? ",\n" : "\n");
+            return out;
+        };
+
         std::string text = "{\n";
         if (!options.Schema.empty()) text += "  \"$schema\": " + writer.Quoted(options.Schema, "$schema") + ",\n";
         text += "  \"version\": " + std::to_string(SceneFormatVersion) + ",\n";
         text += "  \"name\": " + writer.Quoted(scene.GetName(), "scene name") + ",\n";
+
+        // The scene's own components, when it has any
+        std::vector<std::string> sceneLines = componentLines(scene.GetSceneEntity(), "scene", 4);
+        if (!sceneLines.empty()) text += "  \"components\": {\n" + joined(sceneLines) + "  },\n";
+
         text += "  \"entities\": ";
 
         std::vector<Entity> entities = scene.GetEntities();
@@ -133,31 +168,9 @@ namespace Marle {
 
             text += "    {\n      \"name\": " + writer.Quoted(name, where);
 
-            std::vector<std::string> lines;
-            for (const std::string& component : registry.GetComponentNames(entity)) {
-                const std::string at = where + " component '" + component + "'";
-                Json data = registry.Write(entity, component);
-
-                // What is written must read back: check the same way the loader would
-                Scene scratch;
-                for (const ValidationError& error : registry.Read(scratch.CreateEntity("check"), component, data))
-                    writer.Report(at + error.Path, error.Message);
-                for (const FieldInfo& field : registry.Find(component)->Fields) {
-                    if (!field.AssetPath || !data[field.Name].is_string()) continue;
-                    std::string why = AssetPathProblem(data[field.Name].get<std::string>());
-                    if (!why.empty()) writer.Report(at + "/" + field.Name, why);
-                }
-
-                const ComponentInfo* info = registry.Find(component);
-                lines.push_back("        " + writer.Quoted(component, at) + ": " + (Writer::NeedsBlock(*info) ? writer.Block(data, *info, at) : writer.Inline(data, at)));
-            }
-
-            if (!lines.empty()) {
-                text += ",\n      \"components\": {\n";
-                for (size_t c = 0; c < lines.size(); c++)
-                    text += lines[c] + (c + 1 < lines.size() ? ",\n" : "\n");
-                text += "      }";
-            }
+            std::vector<std::string> lines = componentLines(entity, where, 8);
+            if (!lines.empty())
+                text += ",\n      \"components\": {\n" + joined(lines) + "      }";
             text += i + 1 < entities.size() ? "\n    },\n" : "\n    }\n";
         }
         text += "  ]\n}\n";

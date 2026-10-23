@@ -23,6 +23,25 @@
       "minLength": 1,
       "description": "The scene's name."
     },
+    "components": {
+      "type": "object",
+      "description": "Components of the scene itself (such as its random seed), keyed by component name. Same rules as an entity's components.",
+      "additionalProperties": false,
+      "properties": {
+        "Transform": {
+          "$ref": "#/definitions/component_Transform"
+        },
+        "SpriteRenderer": {
+          "$ref": "#/definitions/component_SpriteRenderer"
+        },
+        "Camera": {
+          "$ref": "#/definitions/component_Camera"
+        },
+        "Tilemap": {
+          "$ref": "#/definitions/component_Tilemap"
+        }
+      }
+    },
     "entities": {
       "type": "array",
       "description": "The entities, in creation order.",

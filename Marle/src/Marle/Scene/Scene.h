@@ -27,6 +27,12 @@ namespace Marle {
             // an invalid Entity; the scene is unchanged.
             Entity CreateEntity(const std::string& name);
 
+            // The scene's own entity, which carries components that belong to the scene as a whole (ADR-0002),
+            // such as a random seed. It is not one of the scene's entities: it has no name to look up
+            // (GetName() gives "(scene)"), is not in GetEntities() or GetEntityCount(), is skipped by
+            // ForEach and cannot be destroyed.
+            Entity GetSceneEntity() const;
+
             // The entity with this name, or an invalid Entity.
             Entity FindEntity(const std::string& name) const;
 
@@ -40,7 +46,7 @@ namespace Marle {
             std::vector<Entity> GetEntities() const;
 
             // Calls fn(Entity, Components&...) for each entity that has all the listed components,
-            // in no particular order; use GetEntities() when order matters.
+            // in no particular order; use GetEntities() when order matters. The scene's own entity is not visited.
             template<typename... Components, typename Fn>
             void ForEach(Fn&& fn);
 
@@ -54,7 +60,8 @@ namespace Marle {
     {
         auto view = m_State->Registry.template view<Components...>();
         for (auto handle : view)
-            fn(Entity(m_State, handle), view.template get<Components>(handle)...);
+            if (handle != m_State->SceneEntity)
+                fn(Entity(m_State, handle), view.template get<Components>(handle)...);
     }
 
 }

@@ -28,6 +28,7 @@ A scene file is a plain-text JSON file that defines a **scene**: its entities an
 |---|---|---|
 | `version` | integer | Required. The format version, currently `1`. A file with a newer version than the engine knows is rejected. |
 | `name` | string | Required. The scene's name. |
+| `components` | object | Optional (same as `{}`). Components of the scene itself, such as its random seed: keys are component names, values the component's fields, exactly as for an entity. |
 | `entities` | array | Required, may be empty. The entities, in creation order. |
 | `$schema` | string | Optional. A path or URL of the generated JSON Schema (`scene.schema.json`, next to the scenes), so an editor can check the file as you type; the engine ignores its value. |
 
@@ -37,6 +38,8 @@ A scene file is a plain-text JSON file that defines a **scene**: its entities an
 |---|---|---|
 | `name` | string | Required. Unique within the scene. 1 to 64 characters, no control characters, no leading or trailing whitespace, and no `/` (reserved). |
 | `components` | object | Optional (same as `{}`). Keys are component names, values are the component's fields. |
+
+The scene's own components belong to the scene as a whole and not to any entity: they are not listed among `entities`, no entity can refer to them by name, and any registered component can be used there. They come before the entities in the file, and behaviors that run on the scene run before the entities' (see ADR-0002).
 
 An entity is identified by its name, nothing else. There are no generated ids, counters or uids anywhere in the format; entities refer to each other by name.
 
@@ -101,7 +104,7 @@ The engine draws a scene (`SceneRenderer`) like this, so the order and values in
 
 The engine reads any layout that follows the rules above. When it writes a scene file (`SaveScene`), the output is canonical, so loading a canonical file and writing it again gives the same bytes, and a change to one component changes exactly one line:
 
-- Entities in creation order. Components in registration order. Fields in declaration order, and **every field is written**, including ones at their default. An entity with no components has no `components` key.
+- The scene's own components (when it has any) between `name` and `entities`, written like an entity's. Entities in creation order. Components in registration order. Fields in declaration order, and **every field is written**, including ones at their default. An entity with no components has no `components` key.
 - Two-space indentation, one entity per block, **one line per component** with its fields inside `{ ... }` and vectors as `[a, b]`, LF line endings, no byte order mark, one newline at the end of the file. The exception is a component with a list of strings (a `Tilemap`'s `rows`): it is written as a block, one field per line and one string per line, so a change to one row is a change to one line.
 - Numbers are the shortest text that reads back to the same value: `0.1`, not `0.10000000149011612`, and a whole number has no decimal point (`1024`, not `1024.0`). Text is UTF-8, with only quotes, backslashes and control characters escaped.
 - The `$schema` key is written only when the caller asks for it, since loading does not keep it.
@@ -125,10 +128,12 @@ Assets/Scenes/world.json /entities/3/components/Transform/position: expected an 
 | An unknown key on an entity or at the top level | Reported; everything else loads. |
 | An entity that is not an object, has no valid name, or repeats an earlier name | The entity is skipped. |
 | A key repeated inside an entity | The entity is skipped. (A plain JSON parser would silently keep the last one.) |
+| A key repeated inside the scene's own `components` | Those components are skipped; the entities load. |
+| Scene `components` that is not an object, or a bad scene component | Reported with the same rules and paths as an entity's (for example `/components/Camera/zoom`); the entities load. |
 | An asset path that is absolute, uses `\`, or contains `..` | The component is skipped, so a scene file cannot point at files outside the working directory. |
 | An asset file that does not exist | Reported, but the component loads, so the entity still shows up (a missing image is drawn as the magenta and black error checker). |
 
-Some mistakes make the file unusable, and then no scene is loaded and the problem says why: the file cannot be opened or parsed (the message names the line and column), the top level is not an object, `version` is missing, not an integer or not supported, or a key is repeated outside an entity. A missing `name` is only a problem (the scene is called `Untitled`), and so is a missing or malformed `entities`.
+Some mistakes make the file unusable, and then no scene is loaded and the problem says why: the file cannot be opened or parsed (the message names the line and column), the top level is not an object, `version` is missing, not an integer or not supported, or a key is repeated outside an entity and the scene's `components`. A missing `name` is only a problem (the scene is called `Untitled`), and so is a missing or malformed `entities`.
 
 Problems come back as a list: repeated keys first (they are found while parsing), then the rest in file order. A misspelled field, component or key name comes with a suggestion and the list of valid names.
 
