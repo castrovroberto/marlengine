@@ -300,6 +300,37 @@ protected:
             CHECK(Near(Read(200, 100), 0, 255, 0), "flat quads after a failed texture still draw");
         }
 
+        // 9b. image formats: PNG, JPG and grayscale+alpha decode through stb_image and display upright
+        {
+            const std::string dir = "Tests/Renderer2DTests/fixtures/";
+            OpenGLTexture2D png(dir + "quadrants.png"), jpg(dir + "quadrants.jpg");
+            OpenGLTexture2D gray(dir + "gray_alpha.png"), truncated(dir + "truncated.png");
+            CHECK(png.IsLoaded() && png.GetWidth() == 64 && png.GetHeight() == 64, "PNG loads with its size");
+            CHECK(jpg.IsLoaded() && jpg.GetWidth() == 64 && jpg.GetHeight() == 64, "JPG loads with its size");
+            CHECK(gray.IsLoaded() && gray.GetWidth() == 8 && gray.GetHeight() == 8, "grayscale+alpha PNG loads with its size");
+            CHECK(!truncated.IsLoaded() && truncated.GetWidth() == 0, "truncated PNG: texture is not loaded, size 0");
+
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawQuad({100, 300}, {64, 64}, &png);
+            Renderer2D::DrawQuad({200, 300}, {64, 64}, &jpg);
+            Renderer2D::DrawQuad({300, 300}, {16, 16}, &gray);
+            Renderer2D::DrawQuad({400, 300}, {40, 40}, &truncated);
+            Renderer2D::EndBatch();
+
+            // The images are 1:1 on screen; cell centers are 16 px from the quad center.
+            // As displayed: top-left blue, top-right yellow, bottom-left red, bottom-right green.
+            auto Quadrants = [&](int cx, int cy, int tol, const char* what) {
+                CHECK(Near(Read(cx - 16, cy - 16), 255, 0, 0, tol) && Near(Read(cx + 16, cy - 16), 0, 255, 0, tol) &&
+                      Near(Read(cx - 16, cy + 16), 0, 0, 255, tol) && Near(Read(cx + 16, cy + 16), 255, 255, 0, tol),
+                      "%s draws upright with the right colors", what);
+            };
+            Quadrants(100, 300, 2, "PNG");
+            Quadrants(200, 300, 16, "JPG");   // lossy: allow a little drift
+            CHECK(Near(Read(300, 300), 200, 200, 200), "grayscale+alpha PNG expands to RGB gray (got %d,%d,%d)", Read(300, 300).r, Read(300, 300).g, Read(300, 300).b);
+            CHECK(Near(Read(390, 290), 255, 0, 255) && Near(Read(410, 310), 255, 0, 255), "truncated PNG draws the error checker");
+        }
+
         // 10. GL errors
         GLenum err = glGetError();
         CHECK(err == GL_NO_ERROR, "no GL error (0x%x)", err);
