@@ -80,6 +80,18 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 | `WheelZoom` | `factor` | float | `1.1` | Behavior, on an entity with a `Camera`. The zoom is multiplied by this for each wheel notch up. 0.01 to 10. |
 | | `minZoom` | float | `0.25` | 0.01 to 100. |
 | | `maxZoom` | float | `4` | 0.01 to 100; not smaller than `minZoom`. |
+| `Follow` | `target` | string | `""` | Behavior. The entity to follow (an entity reference); the entity is put at its position plus `offset` every step. |
+| | `offset` | vec2 | `[0, 0]` | Where from the target, in world units. |
+| `Spin` | `speed` | float | `1` | Behavior. Radians per second, counter-clockwise when positive; starts from the entity's own `Transform.rotation`. -1000 to 1000. |
+| `Orbit` | `target` | string | `""` | Behavior. The entity to go around (an entity reference). |
+| | `radius` | float | `100` | Distance from the target, in world units. 0 to 1000000. |
+| | `speed` | float | `1` | Radians per second around the target; negative goes the other way. -1000 to 1000. |
+| | `angle` | float | `0` | Where on the circle it is now, in radians (0 is to the right of the target). It advances every step and is saved with the scene; set it to start elsewhere. |
+| | `rotationSpeed` | float | `0` | Radians per second the entity itself turns as it goes round. -1000 to 1000. |
+| `Wander` | `speed` | float | `50` | Behavior. World units per second. 0 to 100000. |
+| | `changeEvery` | float | `1` | Seconds between new directions. 0.01 to 3600. |
+| | `heading` | float | `0` | The direction it is walking now, in radians; it changes by itself. |
+| | `timer` | float | `0` | Seconds until the next new direction, counting down; `0` picks one on the first step. 0 to 3600. |
 | `ClampPosition` | `min` | vec2 | `[0, 0]` | Behavior. The lower left corner of the rectangle the position is kept in. |
 | | `max` | vec2 | `[100, 100]` | The upper right corner; not smaller than `min` on either axis. |
 
@@ -160,6 +172,51 @@ A **behavior** is a component that does something every fixed step (60 times a s
 ```
 
 A camera that should also follow the player has to come after the player in the file; its rotation is then the one from the end of the previous step when the player reads it, which is one sixtieth of a second behind and not noticeable.
+
+**The motion behaviors.** `Follow`, `Spin`, `Orbit` and `Wander` also act on their own entity's `Transform`. `Follow` and `Orbit` name another entity, which must exist (a missing one is reported when the scene loads, and the behavior does nothing until it does) and must come **earlier** in the file, or they work from where it was one step ago; neither does anything to itself. `Orbit`'s `angle` and `Wander`'s `heading` and `timer` are the behavior's current state, kept in the scene like any other value. `Wander` takes its new directions from the scene's seeded random numbers (the `Random` component), so with the same seed it walks the same path every time, and an entity with no `Transform` draws no random numbers. On an entity with `ClampPosition`, the clamp always runs after the others. A complete example: a ground, a post, something spinning on it, a ring of lights going round the post, a follower, and a wanderer kept inside a fence.
+
+```jsonc
+{
+  "version": 1,
+  "name": "Motion",
+  "components": { "Random": { "seed": 2024 } },
+  "entities": [
+    {
+      "name": "post",
+      "components": {
+        "Transform": { "position": [500, 500], "rotation": 0, "scale": [32, 32] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [0.8, 0.8, 0.8, 1] },
+        "Spin": { "speed": 0.5 }
+      }
+    },
+    {
+      "name": "light",
+      "components": {
+        "Transform": { "position": [0, 0], "rotation": 0, "scale": [12, 12] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 0.9, 0.2, 1] },
+        "Orbit": { "target": "post", "radius": 80, "speed": 2, "angle": 0, "rotationSpeed": 6 }
+      }
+    },
+    {
+      "name": "shadow",
+      "components": {
+        "Transform": { "position": [0, 0], "rotation": 0, "scale": [32, 32] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [0, 0, 0, 0.5] },
+        "Follow": { "target": "post", "offset": [6, -6] }
+      }
+    },
+    {
+      "name": "rabbit",
+      "components": {
+        "Transform": { "position": [300, 300], "rotation": 0, "scale": [20, 20] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 1, 1, 1] },
+        "Wander": { "speed": 60, "changeEvery": 0.75, "heading": 0, "timer": 0 },
+        "ClampPosition": { "min": [100, 100], "max": [400, 400] }
+      }
+    }
+  ]
+}
+```
 
 **Key names.** Fields that name a key take one of these, spelled exactly (letters are upper case):
 

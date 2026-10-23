@@ -52,6 +52,18 @@
         "WheelZoom": {
           "$ref": "#/definitions/component_WheelZoom"
         },
+        "Follow": {
+          "$ref": "#/definitions/component_Follow"
+        },
+        "Spin": {
+          "$ref": "#/definitions/component_Spin"
+        },
+        "Orbit": {
+          "$ref": "#/definitions/component_Orbit"
+        },
+        "Wander": {
+          "$ref": "#/definitions/component_Wander"
+        },
         "ClampPosition": {
           "$ref": "#/definitions/component_ClampPosition"
         }
@@ -109,6 +121,18 @@
             },
             "WheelZoom": {
               "$ref": "#/definitions/component_WheelZoom"
+            },
+            "Follow": {
+              "$ref": "#/definitions/component_Follow"
+            },
+            "Spin": {
+              "$ref": "#/definitions/component_Spin"
+            },
+            "Orbit": {
+              "$ref": "#/definitions/component_Orbit"
+            },
+            "Wander": {
+              "$ref": "#/definitions/component_Wander"
             },
             "ClampPosition": {
               "$ref": "#/definitions/component_ClampPosition"
@@ -732,6 +756,116 @@
           "maximum": 100.0,
           "description": "The largest zoom; not smaller than minZoom.",
           "default": 4.0
+        }
+      }
+    },
+    "component_Follow": {
+      "type": "object",
+      "description": "Behavior: puts the entity at another entity's position plus an offset, every step. It does nothing while the target does not exist, has no Transform, or is this entity. Put it after the target in the file, or it follows where the target was a step ago. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "The entity to follow. The name of another entity in the scene; empty means none.",
+          "default": ""
+        },
+        "offset": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Where from the target [x, y], in world units.",
+          "default": [
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    "component_Spin": {
+      "type": "object",
+      "description": "Behavior: turns the entity's Transform at a steady rate, starting from the rotation it has. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "speed": {
+          "type": "number",
+          "minimum": -1000.0,
+          "maximum": 1000.0,
+          "description": "Radians per second; positive turns counter-clockwise, negative clockwise.",
+          "default": 1.0
+        }
+      }
+    },
+    "component_Orbit": {
+      "type": "object",
+      "description": "Behavior: moves the entity around another entity in a circle, and can turn it as it goes. It does nothing while the target does not exist, has no Transform, or is this entity. Put it after the target in the file, or it orbits where the target was a step ago. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "The entity to go around. The name of another entity in the scene; empty means none.",
+          "default": ""
+        },
+        "radius": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1000000.0,
+          "description": "Distance from the target, in world units.",
+          "default": 100.0
+        },
+        "speed": {
+          "type": "number",
+          "minimum": -1000.0,
+          "maximum": 1000.0,
+          "description": "Radians per second around the target; negative goes the other way.",
+          "default": 1.0
+        },
+        "angle": {
+          "type": "number",
+          "description": "Where on the circle it is now, in radians; 0 is to the right of the target. It advances every step and is saved with the scene; set it to start somewhere else.",
+          "default": 0.0
+        },
+        "rotationSpeed": {
+          "type": "number",
+          "minimum": -1000.0,
+          "maximum": 1000.0,
+          "description": "Radians per second the entity itself turns as it goes round; 0 keeps its rotation.",
+          "default": 0.0
+        }
+      }
+    },
+    "component_Wander": {
+      "type": "object",
+      "description": "Behavior: walks in a random direction and picks a new one now and then. The directions come from the scene's random numbers (its Random seed), so the same seed gives the same walk every run. A behavior: it runs every fixed step, in file order.",
+      "additionalProperties": false,
+      "properties": {
+        "speed": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 100000.0,
+          "description": "World units per second.",
+          "default": 50.0
+        },
+        "changeEvery": {
+          "type": "number",
+          "minimum": 0.01,
+          "maximum": 3600.0,
+          "description": "Seconds between new directions.",
+          "default": 1.0
+        },
+        "heading": {
+          "type": "number",
+          "description": "The direction it is walking now, in radians; it changes by itself.",
+          "default": 0.0
+        },
+        "timer": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 3600.0,
+          "description": "Seconds until the next new direction, counting down; 0 picks one on the first step.",
+          "default": 0.0
         }
       }
     },

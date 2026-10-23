@@ -1,5 +1,5 @@
 // References between entities. A reference is the name of another entity, checked once every entity has loaded.
-// Uses a Follow component with a "target" field that the tests register; the built-in components have none yet.
+// Uses the built-in Follow behavior, whose "target" field is an entity reference.
 {
   "version": 1,
   "name": "References",

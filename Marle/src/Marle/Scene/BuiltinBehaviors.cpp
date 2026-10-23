@@ -99,6 +99,61 @@ namespace Marle {
                     camera->Zoom = glm::clamp(camera->Zoom * powf(zoom.Factor, ctx.Input.Scroll), zoom.MinZoom, zoom.MaxZoom);
             });
 
+        registry.Register<Follow>("Follow", "Behavior: puts the entity at another entity's position plus an offset, every step. It does nothing while the target does not exist, has no Transform, or is this entity. Put it after the target in the file, or it follows where the target was a step ago.")
+            .Field(&Follow::Target, "target", "The entity to follow.").EntityReference()
+            .Field(&Follow::Offset, "offset", "Where from the target [x, y], in world units.")
+            .Behavior([](Follow& follow, BehaviorContext& ctx) {
+                Transform* transform = ctx.Self.TryGet<Transform>();
+                if (!transform) return;
+                Entity target = ctx.Scene.FindEntity(follow.Target);
+                if (target == ctx.Self) return;
+                if (const Transform* at = target.TryGet<Transform>())
+                    transform->Position = at->Position + follow.Offset;
+            });
+
+        registry.Register<Spin>("Spin", "Behavior: turns the entity's Transform at a steady rate, starting from the rotation it has.")
+            .Field(&Spin::Speed, "speed", "Radians per second; positive turns counter-clockwise, negative clockwise.").Range(-1000, 1000)
+            .Behavior([](Spin& spin, BehaviorContext& ctx) {
+                if (Transform* transform = ctx.Self.TryGet<Transform>())
+                    transform->Rotation += spin.Speed * (float)ctx.Dt;
+            });
+
+        registry.Register<Orbit>("Orbit", "Behavior: moves the entity around another entity in a circle, and can turn it as it goes. It does nothing while the target does not exist, has no Transform, or is this entity. Put it after the target in the file, or it orbits where the target was a step ago.")
+            .Field(&Orbit::Target, "target", "The entity to go around.").EntityReference()
+            .Field(&Orbit::Radius, "radius", "Distance from the target, in world units.").Range(0, 1000000)
+            .Field(&Orbit::Speed, "speed", "Radians per second around the target; negative goes the other way.").Range(-1000, 1000)
+            .Field(&Orbit::Angle, "angle", "Where on the circle it is now, in radians; 0 is to the right of the target. It advances every step and is saved with the scene; set it to start somewhere else.")
+            .Field(&Orbit::RotationSpeed, "rotationSpeed", "Radians per second the entity itself turns as it goes round; 0 keeps its rotation.").Range(-1000, 1000)
+            .Behavior([](Orbit& orbit, BehaviorContext& ctx) {
+                Transform* transform = ctx.Self.TryGet<Transform>();
+                if (!transform) return;
+                Entity target = ctx.Scene.FindEntity(orbit.Target);
+                if (target == ctx.Self) return;
+                const Transform* at = target.TryGet<Transform>();
+                if (!at) return;
+
+                orbit.Angle += orbit.Speed * (float)ctx.Dt;
+                transform->Position = at->Position + orbit.Radius * glm::vec2(cosf(orbit.Angle), sinf(orbit.Angle));
+                transform->Rotation += orbit.RotationSpeed * (float)ctx.Dt;
+            });
+
+        registry.Register<Wander>("Wander", "Behavior: walks in a random direction and picks a new one now and then. The directions come from the scene's random numbers (its Random seed), so the same seed gives the same walk every run.")
+            .Field(&Wander::Speed, "speed", "World units per second.").Range(0, 100000)
+            .Field(&Wander::ChangeEvery, "changeEvery", "Seconds between new directions.").Range(0.01, 3600)
+            .Field(&Wander::Heading, "heading", "The direction it is walking now, in radians; it changes by itself.")
+            .Field(&Wander::Timer, "timer", "Seconds until the next new direction, counting down; 0 picks one on the first step.").Range(0, 3600)
+            .Behavior([](Wander& wander, BehaviorContext& ctx) {
+                Transform* transform = ctx.Self.TryGet<Transform>();
+                if (!transform) return;   // without a Transform it draws no random numbers either
+
+                wander.Timer -= (float)ctx.Dt;
+                if (wander.Timer <= 0.0f) {
+                    wander.Heading = ctx.Random.FloatBetween(0.0f, 6.2831855f);
+                    wander.Timer = wander.ChangeEvery;
+                }
+                transform->Position += glm::vec2(cosf(wander.Heading), sinf(wander.Heading)) * wander.Speed * (float)ctx.Dt;
+            });
+
         registry.Register<ClampPosition>("ClampPosition", "Behavior: keeps the entity's position inside the rectangle from min to max. Put it after whatever moves the entity (such as KeyboardMove) on the same entity.")
             .Field(&ClampPosition::Min, "min", "The lower left corner [x, y], in world units.")
             .Field(&ClampPosition::Max, "max", "The upper right corner [x, y], in world units; not smaller than min on either axis.")

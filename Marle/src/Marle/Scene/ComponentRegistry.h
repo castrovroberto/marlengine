@@ -501,7 +501,8 @@ namespace Marle {
     };
 
     // Registers Transform, SpriteRenderer, Camera, Tilemap and Random, then the built-in behaviors:
-    // KeyboardMove, KeyboardRotate, WheelZoom and ClampPosition.
+    // KeyboardMove, KeyboardRotate, WheelZoom, Follow, Spin, Orbit, Wander and, last so that it always
+    // runs last on an entity, ClampPosition.
     EXPORT void RegisterBuiltinComponents(ComponentRegistry& registry);
 
     template<typename T>

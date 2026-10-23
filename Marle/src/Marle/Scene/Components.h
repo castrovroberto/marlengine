@@ -88,6 +88,39 @@ namespace Marle {
         float MaxZoom = 4.0f;
     };
 
+    // Behaviors that move an entity by themselves.
+
+    // Puts the entity at another entity's position plus an offset, every step. It does nothing while the
+    // target does not exist, has no Transform, or is the entity itself.
+    struct Follow {
+        std::string Target;                         // an entity
+        glm::vec2 Offset = { 0.0f, 0.0f };          // world units
+    };
+
+    // Turns the entity's Transform at a steady rate, starting from the rotation it has.
+    struct Spin {
+        float Speed = 1.0f;                         // radians per second, counter-clockwise when positive
+    };
+
+    // Moves the entity around another entity in a circle, and can turn it as it goes. Angle is where on
+    // the circle it is now (scene data, so a saved scene holds it); set it to start somewhere else.
+    struct Orbit {
+        std::string Target;                         // an entity; it does nothing while that does not exist or is itself
+        float Radius = 100.0f;                      // world units
+        float Speed = 1.0f;                         // radians per second around the target
+        float Angle = 0.0f;                         // radians, 0 is to the right of the target
+        float RotationSpeed = 0.0f;                 // radians per second the entity itself turns
+    };
+
+    // Walks in a random direction, picking a new one now and then from the scene's random numbers.
+    // Heading and Timer are its current state (scene data).
+    struct Wander {
+        float Speed = 50.0f;                        // world units per second
+        float ChangeEvery = 1.0f;                   // seconds between new directions
+        float Heading = 0.0f;                       // radians, the direction it is walking
+        float Timer = 0.0f;                         // seconds until the next new direction; 0 picks one on the first step
+    };
+
     // Keeps the entity's position inside a rectangle.
     struct ClampPosition {
         glm::vec2 Min = { 0.0f, 0.0f };

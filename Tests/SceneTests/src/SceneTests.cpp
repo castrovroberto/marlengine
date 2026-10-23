@@ -36,7 +36,6 @@ static int fails = 0;
 struct Position { float x = 0.0f, y = 0.0f; Position() = default; Position(float x, float y) : x(x), y(y) {} };
 struct Health { int points = 10; };
 struct Gravity { float Strength = 9.8f; };
-struct Follow { std::string Target; glm::vec2 Offset = { 0.0f, 0.0f }; };
 // Components with behaviors, for the simulation tests
 static std::vector<std::string> g_BehaviorLog;
 struct LogA { std::string Label; };
@@ -316,7 +315,7 @@ int main(int argc, char** argv)
         ComponentRegistry registry;
         RegisterBuiltinComponents(registry);
         std::vector<std::string> names = registry.GetNames();
-        CHECK(names == std::vector<std::string>({ "Transform", "SpriteRenderer", "Camera", "Tilemap", "Random", "KeyboardMove", "KeyboardRotate", "WheelZoom", "ClampPosition" }), "the built-in components register in order, the behaviors last");
+        CHECK(names == std::vector<std::string>({ "Transform", "SpriteRenderer", "Camera", "Tilemap", "Random", "KeyboardMove", "KeyboardRotate", "WheelZoom", "Follow", "Spin", "Orbit", "Wander", "ClampPosition" }), "the built-in components register in order, the behaviors last, ClampPosition after all of them");
 
         const ComponentInfo* transform = registry.Find("Transform");
         CHECK(transform && !transform->Description.empty() && transform->Fields.size() == 3, "a component has a description and its fields");
@@ -814,7 +813,7 @@ int main(int argc, char** argv)
 
         std::string order;
         for (auto it = schema["definitions"].begin(); it != schema["definitions"].end(); ++it) order += it.key() + " ";
-        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Random component_KeyboardMove component_KeyboardRotate component_WheelZoom component_ClampPosition ", "components are described in registration order");
+        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Random component_KeyboardMove component_KeyboardRotate component_WheelZoom component_Follow component_Spin component_Orbit component_Wander component_ClampPosition ", "components are described in registration order");
         CHECK(schema["definitions"]["entity"]["properties"]["components"]["properties"]["Camera"]["$ref"] == "#/definitions/component_Camera", "an entity's components point at their definitions");
 
         bool everyField = true, described = !schema["description"].get<std::string>().empty();
@@ -1615,9 +1614,6 @@ int main(int argc, char** argv)
     {
         ComponentRegistry registry;
         RegisterBuiltinComponents(registry);
-        registry.Register<Follow>("Follow", "Goes after another entity.")
-            .Field(&Follow::Target, "target", "The entity to follow.").EntityReference()
-            .Field(&Follow::Offset, "offset", "Where from it.");
         CHECK(registry.Find("Follow")->Fields[0].EntityReference && !registry.Find("Follow")->Fields[1].EntityReference && !registry.Find("Transform")->Fields[0].EntityReference, "only the marked field is an entity reference");
 
         // the fixture: every case in one file
@@ -2419,6 +2415,201 @@ int main(int argc, char** argv)
         RandomGenerator script2(5);
         for (int i = 0; i < 600; i++) Simulation::Step(registry, *second.Scene, scriptedFrame(script2), 1.0 / 60.0);
         CHECK(Simulation::Checksum(registry, *second.Scene) == Simulation::Checksum(registry, *now.Scene), "the same script played again ends in the same state (same checksum)");
+    }
+
+    // motion behaviors: Follow, Spin, Orbit, Wander
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto load = [&](const std::string& entities, const std::string& scene = "") { return LoadSceneFromText(R"({"version": 1, "name": "t", )" + scene + R"("entities": [)" + entities + "]}", "inline", registry); };
+        auto stepWith = [&](Scene& scene, const InputFrame& input, int n = 1) { for (int i = 0; i < n; i++) Simulation::Step(registry, scene, input, 1.0 / 60.0); };
+        const float dt = (float)(1.0 / 60.0);
+        auto problems = [&](const std::string& component, const std::string& fields) { return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [{"name": "p", "components": {")" + component + R"(": {)" + fields + "}}}, {\"name\": \"q\"}]}", "inline", registry); };
+        auto positionOf = [](const SceneLoadResult& r, const std::string& name) { return r.Scene->FindEntity(name).Get<Transform>().Position; };
+
+        // ---- Follow
+        const ComponentInfo* followInfo = registry.Find("Follow");
+        CHECK(followInfo->IsBehavior && followInfo->Fields.size() == 2 && followInfo->Fields[0].Name == "target" && followInfo->Fields[0].EntityReference && followInfo->Fields[1].Default == Json::array({ 0.0, 0.0 }), "Follow is a behavior with a target entity and an offset");
+        const std::string walker = R"({"name": "player", "components": {"Transform": {"position": [10, 20]}, "KeyboardMove": {"speed": 60}}})";
+        SceneLoadResult following = load(walker + R"(, {"name": "shadow", "components": {"Transform": {}, "Follow": {"target": "player", "offset": [3, -4]}}})");
+        stepWith(*following.Scene, InputFrame().Hold(Key::D), 5);
+        glm::vec2 expectedShadow = positionOf(following, "player") + glm::vec2(3.0f, -4.0f);
+        CHECK(positionOf(following, "shadow") == expectedShadow && positionOf(following, "player").x > 10.0f, "an entity after its target is at the target's position plus the offset every step");
+        SceneLoadResult behind = load(R"({"name": "shadow", "components": {"Transform": {}, "Follow": {"target": "player", "offset": [3, -4]}}}, )" + walker);
+        stepWith(*behind.Scene, InputFrame().Hold(Key::D), 1);
+        glm::vec2 firstStep = positionOf(behind, "player");
+        CHECK(positionOf(behind, "shadow") == glm::vec2(10.0f, 20.0f) + glm::vec2(3.0f, -4.0f), "one that comes before its target is a step behind, at where the target was");
+        stepWith(*behind.Scene, InputFrame().Hold(Key::D), 1);
+        CHECK(positionOf(behind, "shadow") == firstStep + glm::vec2(3.0f, -4.0f), "and then at where it was a step ago");
+        SceneLoadResult chain = load(walker + R"(, {"name": "a", "components": {"Transform": {}, "Follow": {"target": "player", "offset": [1, 0]}}}, {"name": "b", "components": {"Transform": {}, "Follow": {"target": "a", "offset": [0, 2]}}})");
+        stepWith(*chain.Scene, InputFrame().Hold(Key::W), 3);
+        CHECK(positionOf(chain, "b") == positionOf(chain, "a") + glm::vec2(0.0f, 2.0f) && positionOf(chain, "a") == positionOf(chain, "player") + glm::vec2(1.0f, 0.0f), "a chain of followers, each after the one it follows, is all in step");
+
+        SceneLoadResult camera = load(walker + R"(, {"name": "camera", "components": {"Transform": {}, "Camera": {"primary": true}, "Follow": {"target": "player"}}})");
+        stepWith(*camera.Scene, InputFrame().Hold(Key::D).Hold(Key::W), 4);
+        Entity cam = camera.Scene->FindEntity("camera"), player = camera.Scene->FindEntity("player");
+        CHECK(cam.Get<Transform>().Position == player.Get<Transform>().Position && cam.Get<PreviousTransform>().Position == player.Get<PreviousTransform>().Position, "a camera that follows the player, after it, is where the player is and was, so it is drawn between steps the same way");
+
+        const std::string startAt = R"("Transform": {"position": [7, 8]})";
+        SceneLoadResult stays = load(R"({"name": "none", "components": {)" + startAt + R"(, "Follow": {"target": "ghost", "offset": [5, 5]}}}, {"name": "empty", "components": {)" + startAt + R"(, "Follow": {}}}, {"name": "self", "components": {)" + startAt + R"(, "Follow": {"target": "self", "offset": [5, 5]}}}, {"name": "bare"}, {"name": "no_position", "components": {)" + startAt + R"(, "Follow": {"target": "bare"}}}, {"name": "no_transform", "components": {"Follow": {"target": "none"}}})");
+        stepWith(*stays.Scene, InputFrame(), 3);
+        CHECK(positionOf(stays, "none") == glm::vec2(7.0f, 8.0f) && positionOf(stays, "empty") == glm::vec2(7.0f, 8.0f) && positionOf(stays, "self") == glm::vec2(7.0f, 8.0f) && positionOf(stays, "no_position") == glm::vec2(7.0f, 8.0f) && !stays.Scene->FindEntity("no_transform").Has<Transform>(), "with no target, a missing one, itself, or one without a Transform, an entity stays where it is");
+        CHECK(HasProblem(problems("Follow", R"("target": "nobody")"), "/entities/0/components/Follow/target", "no entity named 'nobody' exists") && HasProblem(problems("Follow", R"("offset": [1])"), "/entities/0/components/Follow/offset", "expected an array of 2 numbers") && problems("Follow", R"("target": "q", "offset": [1, 2])").Ok(), "a missing target and a bad offset are reported");
+        CHECK(Contains(SaveSceneToText(*problems("Follow", R"("target": "q", "offset": [3, -4])").Scene, registry).Text, R"("Follow": { "target": "q", "offset": [3, -4] })"), "it is written with its target and offset");
+
+        // ---- Spin
+        const ComponentInfo* spinInfo = registry.Find("Spin");
+        CHECK(spinInfo->IsBehavior && spinInfo->Fields.size() == 1 && spinInfo->Fields[0].Default == 1.0 && spinInfo->Fields[0].Min == -1000.0 && spinInfo->Fields[0].Max == 1000.0, "Spin has a speed in radians per second");
+        SceneLoadResult spinning = load(R"({"name": "a", "components": {"Transform": {"rotation": 0.5}, "Spin": {"speed": 2}}}, {"name": "b", "components": {"Transform": {}, "Spin": {"speed": -3}}}, {"name": "c", "components": {"Transform": {"rotation": 1}, "Spin": {"speed": 0}}}, {"name": "d", "components": {"Spin": {}}})");
+        float a = 0.5f, b = 0.0f;
+        for (int i = 0; i < 90; i++) { a += 2.0f * dt; b += -3.0f * dt; }
+        stepWith(*spinning.Scene, InputFrame(), 90);
+        CHECK(spinning.Scene->FindEntity("a").Get<Transform>().Rotation == a && spinning.Scene->FindEntity("b").Get<Transform>().Rotation == b && spinning.Scene->FindEntity("c").Get<Transform>().Rotation == 1.0f, "an entity turns by speed times the step, from the rotation it has, either way, and not at all at speed 0");
+        CHECK(!spinning.Scene->FindEntity("d").Has<Transform>(), "one without a Transform has nothing to turn");
+        CHECK(HasProblem(problems("Spin", R"("speed": 1001)"), "/entities/0/components/Spin/speed", "must be at most 1000") && HasProblem(problems("Spin", R"("speed": -1001)"), "/entities/0/components/Spin/speed", "must be at least -1000"), "absurd speeds are refused");
+
+        // ---- Orbit
+        const ComponentInfo* orbitInfo = registry.Find("Orbit");
+        std::string orbitFields;
+        for (const FieldInfo& f : orbitInfo->Fields) orbitFields += f.Name + " ";
+        CHECK(orbitInfo->IsBehavior && orbitFields == "target radius speed angle rotationSpeed " && orbitInfo->Fields[0].EntityReference && orbitInfo->Fields[1].Default == 100.0 && orbitInfo->Fields[2].Default == 1.0 && orbitInfo->Fields[3].Default == 0.0 && orbitInfo->Fields[4].Default == 0.0 && orbitInfo->Fields[1].Min == 0.0, "Orbit has a target, a radius, a speed, an angle and a turn");
+
+        // the satellite of the old Sandbox: radius 44, 2 radians a second, turning three times as fast
+        SceneLoadResult satellite = load(walker + R"(, {"name": "satellite", "components": {"Transform": {}, "Orbit": {"target": "player", "radius": 44, "speed": 2, "rotationSpeed": 6}}})");
+        float spin = 0.0f, rotation = 0.0f;
+        bool sameOrbit = true, sameAngle = true, nearOldRotation = true;
+        for (int i = 0; i < 120; i++) {
+            stepWith(*satellite.Scene, InputFrame().Hold(Key::D).Hold(Key::W));
+            spin += 2.0f * dt;              // exactly what the Sandbox did
+            rotation += 6.0f * dt;
+            glm::vec2 old = positionOf(satellite, "player") + 44.0f * glm::vec2(cosf(spin), sinf(spin));
+            sameOrbit = sameOrbit && positionOf(satellite, "satellite") == old;
+            sameAngle = sameAngle && satellite.Scene->FindEntity("satellite").Get<Orbit>().Angle == spin;
+            nearOldRotation = nearOldRotation && satellite.Scene->FindEntity("satellite").Get<Transform>().Rotation == rotation && std::fabs(rotation - spin * 3.0f) < 2e-5f;
+        }
+        CHECK(sameOrbit && sameAngle, "an orbit is the old satellite's position and angle, exactly, around a target that is moving");
+        CHECK(nearOldRotation, "and it turns as it goes round (the old satellite's rotation, to rounding)");
+
+        SceneLoadResult ring = load(R"({"name": "post", "components": {"Transform": {"position": [100, 100]}}}, {"name": "light", "components": {"Transform": {"rotation": 1}, "Orbit": {"target": "post", "radius": 30, "speed": 1.5, "angle": 1.5707963}}})");
+        stepWith(*ring.Scene, InputFrame());
+        float startAngle = 1.5707963f + 1.5f * dt;
+        CHECK(positionOf(ring, "light") == glm::vec2(100.0f, 100.0f) + 30.0f * glm::vec2(cosf(startAngle), sinf(startAngle)) && ring.Scene->FindEntity("light").Get<Transform>().Rotation == 1.0f, "the angle field says where to start, and a rotationSpeed of 0 keeps the rotation");
+        bool onCircle = true;
+        for (int i = 0; i < 200; i++) { stepWith(*ring.Scene, InputFrame()); onCircle = onCircle && std::fabs(glm::length(positionOf(ring, "light") - positionOf(ring, "post")) - 30.0f) < 1e-3f; }
+        CHECK(onCircle, "it stays at the radius from the target");
+        SceneLoadResult backwards = load(R"({"name": "post", "components": {"Transform": {}}}, {"name": "light", "components": {"Transform": {}, "Orbit": {"target": "post", "radius": 10, "speed": -2}}})");
+        stepWith(*backwards.Scene, InputFrame(), 30);
+        CHECK(backwards.Scene->FindEntity("light").Get<Orbit>().Angle < -0.9f && positionOf(backwards, "light").y < 0.0f, "a negative speed goes the other way");
+        SceneLoadResult centered = load(R"({"name": "post", "components": {"Transform": {"position": [5, 6]}}}, {"name": "light", "components": {"Transform": {"position": [50, 50]}, "Orbit": {"target": "post", "radius": 0}}})");
+        stepWith(*centered.Scene, InputFrame());
+        CHECK(positionOf(centered, "light") == glm::vec2(5.0f, 6.0f), "a radius of 0 is at the target");
+
+        SceneLoadResult before = load(R"({"name": "light", "components": {"Transform": {}, "Orbit": {"target": "post", "radius": 10, "speed": 0}}}, {"name": "post", "components": {"Transform": {"position": [100, 0]}, "KeyboardMove": {"speed": 60}}})");
+        stepWith(*before.Scene, InputFrame().Hold(Key::D));
+        CHECK(positionOf(before, "post").x > 100.5f && positionOf(before, "light") == glm::vec2(110.0f, 0.0f), "one before its target goes round where the target was at the start of the step");
+        glm::vec2 postAfterFirst = positionOf(before, "post");
+        stepWith(*before.Scene, InputFrame().Hold(Key::D));
+        CHECK(positionOf(before, "light") == postAfterFirst + glm::vec2(10.0f, 0.0f), "and the next step, where it was after the first: always a step behind");
+        SceneLoadResult idle = load(R"({"name": "a", "components": {"Transform": {"position": [1, 1]}, "Orbit": {"target": "ghost"}}}, {"name": "b", "components": {"Transform": {"position": [1, 1]}, "Orbit": {"target": "b"}}}, {"name": "c", "components": {"Transform": {"position": [1, 1]}, "Orbit": {}}}, {"name": "bare"}, {"name": "d", "components": {"Transform": {"position": [1, 1]}, "Orbit": {"target": "bare"}}})");
+        stepWith(*idle.Scene, InputFrame(), 10);
+        bool notMoved = true;
+        for (const char* name : { "a", "b", "c", "d" }) notMoved = notMoved && positionOf(idle, name) == glm::vec2(1.0f) && idle.Scene->FindEntity(name).Get<Orbit>().Angle == 0.0f;
+        CHECK(notMoved, "with no target, a missing one, itself or one without a Transform it does not move, and its angle does not advance");
+        CHECK(HasProblem(problems("Orbit", R"("target": "nobody")"), "/entities/0/components/Orbit/target", "no entity named 'nobody' exists") && HasProblem(problems("Orbit", R"("radius": -1)"), "/entities/0/components/Orbit/radius", "must be at least 0") && HasProblem(problems("Orbit", R"("speed": 2000)"), "/entities/0/components/Orbit/speed", "must be at most 1000") && HasProblem(problems("Orbit", R"("rotationSpeed": -2000)"), "/entities/0/components/Orbit/rotationSpeed", "must be at least -1000"), "a missing target and absurd numbers are reported");
+
+        // the angle is state, so it is saved, and a saved scene carries on where it was
+        const std::string orbiting = R"({"name": "post", "components": {"Transform": {"position": [50, 50]}}}, {"name": "light", "components": {"Transform": {}, "Orbit": {"target": "post", "radius": 20, "speed": 3, "rotationSpeed": 1}}})";
+        SceneLoadResult orbitStraight = load(orbiting);
+        stepWith(*orbitStraight.Scene, InputFrame(), 100);
+        SceneLoadResult orbitFirst = load(orbiting);
+        stepWith(*orbitFirst.Scene, InputFrame(), 50);
+        SceneSaveResult orbitSaved = SaveSceneToText(*orbitFirst.Scene, registry);
+        SceneLoadResult orbitResumed = LoadSceneFromText(orbitSaved.Text, "saved", registry);
+        stepWith(*orbitResumed.Scene, InputFrame(), 50);
+        CHECK(orbitSaved.Ok() && orbitFirst.Scene->FindEntity("light").Get<Orbit>().Angle > 2.0f && Simulation::Checksum(registry, *orbitResumed.Scene) == Simulation::Checksum(registry, *orbitStraight.Scene), "an orbit saved halfway and loaded carries on exactly as one that did not stop");
+
+        // ---- Wander
+        const ComponentInfo* wanderInfo = registry.Find("Wander");
+        std::string wanderFields;
+        for (const FieldInfo& f : wanderInfo->Fields) wanderFields += f.Name + " ";
+        CHECK(wanderInfo->IsBehavior && wanderFields == "speed changeEvery heading timer " && wanderInfo->Fields[0].Default == 50.0 && wanderInfo->Fields[1].Default == 1.0 && wanderInfo->Fields[2].Default == 0.0 && wanderInfo->Fields[3].Default == 0.0 && wanderInfo->Fields[1].Min == 0.01 && Contains(wanderInfo->Description, "random numbers"), "Wander has a speed, a time between turns and its state");
+
+        // the directions come from the scene's seeded numbers; the expected values were worked out apart from the engine
+        // (the reference PCG32 with the same float arithmetic in an independent script)
+        const std::string wanderer = R"({"name": "w", "components": {"Transform": {}, "Wander": {"speed": 60, "changeEvery": 0.5}}})";
+        SceneLoadResult walking = load(wanderer, R"("components": {"Random": {"seed": 42}}, )");
+        Entity w = walking.Scene->FindEntity("w");
+        std::vector<float> headings;
+        glm::vec2 expectedPosition(0.0f);
+        float heading = 0.0f;
+        bool positionsMatch = true, inRange = true;
+        for (int i = 0; i < 130; i++) {
+            float before = w.Get<Wander>().Heading;
+            stepWith(*walking.Scene, InputFrame());
+            heading = w.Get<Wander>().Heading;
+            if (i == 0 || heading != before) headings.push_back(heading);
+            inRange = inRange && heading >= 0.0f && heading < 6.2831855f;
+            expectedPosition += glm::vec2(cosf(heading), sinf(heading)) * 60.0f * dt;
+            positionsMatch = positionsMatch && w.Get<Transform>().Position == expectedPosition;
+        }
+        CHECK(headings.size() >= 4 && headings[0] == 3.96035576f && headings[1] == 3.02577281f && headings[2] == 4.56792641f && headings[3] == 3.23544788f, "with seed 42 the first four directions it picks are the independently worked out ones");
+        CHECK(inRange && positionsMatch, "headings are from 0 up to a full turn, and it walks that way at its speed every step");
+        RandomGenerator reference(42);
+        for (size_t i = 0; i < headings.size(); i++) reference.NextU32();
+        CHECK(walking.Scene->GetRandom().GetState() == reference.GetState(), "each new direction costs exactly one random number");
+
+        SceneLoadResult other = load(wanderer, R"("components": {"Random": {"seed": 7}}, )");
+        stepWith(*other.Scene, InputFrame());
+        CHECK(other.Scene->FindEntity("w").Get<Wander>().Heading == 4.03328848f, "another seed starts with another direction");
+
+        SceneLoadResult timing = load(wanderer, R"("components": {"Random": {"seed": 42}}, )");
+        Entity t = timing.Scene->FindEntity("w");
+        stepWith(*timing.Scene, InputFrame());
+        CHECK(t.Get<Wander>().Heading == 3.96035576f && t.Get<Wander>().Timer == 0.5f, "a timer of 0 picks a direction on the first step and starts the timer");
+        stepWith(*timing.Scene, InputFrame());
+        CHECK(t.Get<Wander>().Heading == 3.96035576f && t.Get<Wander>().Timer == 0.5f - dt, "and it counts down while the direction is kept");
+
+        SceneLoadResult later = load(R"({"name": "w", "components": {"Transform": {}, "Wander": {"speed": 60, "changeEvery": 0.5, "heading": 0, "timer": 0.1}}})", R"("components": {"Random": {"seed": 42}}, )");
+        stepWith(*later.Scene, InputFrame(), 3);
+        CHECK(later.Scene->FindEntity("w").Get<Wander>().Heading == 0.0f && later.Scene->FindEntity("w").Get<Transform>().Position.x > 2.9f && later.Scene->FindEntity("w").Get<Transform>().Position.y == 0.0f, "with a timer set it walks the heading it has until the timer runs out");
+        stepWith(*later.Scene, InputFrame(), 4);
+        CHECK(later.Scene->FindEntity("w").Get<Wander>().Heading == 3.96035576f, "and then picks");
+
+        SceneLoadResult twoWanderers = load(wanderer + R"(, {"name": "w2", "components": {"Transform": {}, "Wander": {"speed": 60, "changeEvery": 0.5}}})", R"("components": {"Random": {"seed": 42}}, )");
+        stepWith(*twoWanderers.Scene, InputFrame());
+        CHECK(twoWanderers.Scene->FindEntity("w").Get<Wander>().Heading == 3.96035576f && twoWanderers.Scene->FindEntity("w2").Get<Wander>().Heading == 3.02577281f, "two wanderers draw in file order, the first from the first number");
+
+        SceneLoadResult still = load(R"({"name": "w", "components": {"Transform": {"position": [3, 4]}, "Wander": {"speed": 0, "changeEvery": 0.5}}})", R"("components": {"Random": {"seed": 42}}, )");
+        stepWith(*still.Scene, InputFrame(), 100);
+        CHECK(positionOf(still, "w") == glm::vec2(3.0f, 4.0f) && still.Scene->FindEntity("w").Get<Wander>().Heading != 0.0f, "at speed 0 it still picks directions but goes nowhere");
+        SceneLoadResult noTransform = load(R"({"name": "w", "components": {"Wander": {}}})", R"("components": {"Random": {"seed": 42}}, )");
+        stepWith(*noTransform.Scene, InputFrame(), 50);
+        CHECK(noTransform.Scene->GetRandom().GetState() == RandomGenerator(42).GetState() && !noTransform.Scene->FindEntity("w").Has<Transform>(), "without a Transform it does nothing and uses no random numbers");
+
+        // the same seed is the same walk, however it is run
+        SceneLoadResult one = load(wanderer, R"("components": {"Random": {"seed": 2024}}, )"), two = load(wanderer, R"("components": {"Random": {"seed": 2024}}, )"), three = load(wanderer, R"("components": {"Random": {"seed": 2025}}, )");
+        stepWith(*one.Scene, InputFrame(), 600); stepWith(*two.Scene, InputFrame(), 600); stepWith(*three.Scene, InputFrame(), 600);
+        CHECK(Simulation::Checksum(registry, *one.Scene) == Simulation::Checksum(registry, *two.Scene) && positionOf(one, "w") == positionOf(two, "w") && positionOf(one, "w") != positionOf(three, "w"), "the same seed gives the same walk and another seed a different one");
+        SceneLoadResult half = load(wanderer, R"("components": {"Random": {"seed": 2024}}, )");
+        stepWith(*half.Scene, InputFrame(), 300);
+        SceneLoadResult halfResumed = LoadSceneFromText(SaveSceneToText(*half.Scene, registry).Text, "saved", registry);
+        halfResumed.Scene->GetRandom().SetState(half.Scene->GetRandom().GetState());
+        stepWith(*halfResumed.Scene, InputFrame(), 300);
+        CHECK(Simulation::Checksum(registry, *halfResumed.Scene) == Simulation::Checksum(registry, *one.Scene), "a walk saved halfway carries on exactly when the generator's position is carried over too");
+
+        // a fence keeps it in, because the clamp always runs last
+        SceneLoadResult fenced = load(R"({"name": "w", "components": {"Transform": {"position": [120, 120]}, "ClampPosition": {"min": [100, 100], "max": [140, 140]}, "Wander": {"speed": 200, "changeEvery": 0.3}}})", R"("components": {"Random": {"seed": 5}}, )");
+        bool inside = true, touchedEdge = false;
+        for (int i = 0; i < 1200; i++) {
+            stepWith(*fenced.Scene, InputFrame());
+            glm::vec2 at = positionOf(fenced, "w");
+            inside = inside && at.x >= 100.0f && at.x <= 140.0f && at.y >= 100.0f && at.y <= 140.0f;
+            touchedEdge = touchedEdge || at.x == 100.0f || at.x == 140.0f || at.y == 100.0f || at.y == 140.0f;
+        }
+        CHECK(inside && touchedEdge, "a wanderer with a ClampPosition never leaves the fence, though it is written before the wander (and it does reach the fence)");
+
+        CHECK(HasProblem(problems("Wander", R"("changeEvery": 0)"), "/entities/0/components/Wander/changeEvery", "must be at least 0.01") && HasProblem(problems("Wander", R"("speed": -5)"), "/entities/0/components/Wander/speed", "must be at least 0") && HasProblem(problems("Wander", R"("timer": -1)"), "/entities/0/components/Wander/timer", "must be at least 0") && HasProblem(problems("Wander", R"("timer": 4000)"), "/entities/0/components/Wander/timer", "must be at most 3600"), "a zero interval, a negative speed and a bad timer are refused");
+        CHECK(Contains(SaveSceneToText(*problems("Wander", R"("speed": 60, "changeEvery": 0.75, "heading": 1.5, "timer": 0.25)").Scene, registry).Text, R"("Wander": { "speed": 60, "changeEvery": 0.75, "heading": 1.5, "timer": 0.25 })"), "it is written with its state");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);
