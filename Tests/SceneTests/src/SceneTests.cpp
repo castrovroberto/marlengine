@@ -3169,6 +3169,101 @@ int main(int argc, char** argv)
         CHECK(GetCommandLine().empty() && !HasCommandLineFlag("--replay"), "with nothing after the program's name there are no arguments");
     }
 
+    // marle-scene: simulate
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::filesystem::path work = std::filesystem::temp_directory_path() / "marle_scene_tool_simulate_test";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work);
+        const std::string w = work.generic_string();
+        const std::string world = "Assets/Scenes/world.json";
+        auto checksumLine = [](const std::string& out) {
+            size_t at = out.find("checksum ");
+            return at == std::string::npos ? std::string() : out.substr(at + 9, 16);
+        };
+
+        // no input: runs the steps asked for, shows what changed and the checksum
+        ToolRun idle = RunTool(registry, { "simulate", world, "--steps", "120" });
+        CHECK(idle.Code == 0 && Contains(idle.Out, "120 steps, seed 1, no input") && Contains(idle.Out, "spinner_0.Transform.rotation: 0.0 -> ") && Contains(idle.Out, "satellite.Orbit.angle"), "simulate runs a scene and says what changed");
+        CHECK(!Contains(idle.Out, "player.Transform") && !Contains(idle.Out, "camera.Transform"), "what did not change is not listed");
+        CHECK(checksumLine(idle.Out).size() == 16 && checksumLine(RunTool(registry, { "simulate", world, "--steps", "120" }).Out) == checksumLine(idle.Out), "the checksum is the same on every run");
+        CHECK(checksumLine(RunTool(registry, { "simulate", world, "--steps", "121" }).Out) != checksumLine(idle.Out), "and another number of steps gives another");
+
+        // the same as stepping the scene directly
+        SceneLoadResult direct = LoadScene(world, registry);
+        for (int i = 0; i < 120; i++) Simulation::Step(registry, *direct.Scene, InputFrame(), 1.0 / 60.0);
+        CHECK(checksumLine(idle.Out) == Simulation::ChecksumText(Simulation::Checksum(registry, *direct.Scene)), "it is the checksum of stepping the scene by hand");
+        CHECK(Contains(RunTool(registry, { "simulate", world }).Out, "600 steps"), "600 steps without --steps or a recording");
+        CHECK(Contains(RunTool(registry, { "simulate", world, "--steps", "0" }).Out, "nothing changed"), "no steps change nothing");
+
+        // --expect
+        ToolRun expectOk = RunTool(registry, { "simulate", world, "--steps", "120", "--expect", checksumLine(idle.Out) });
+        CHECK(expectOk.Code == 0 && Contains(expectOk.Out, "matches --expect"), "--expect with the right checksum passes");
+        ToolRun expectBad = RunTool(registry, { "simulate", world, "--steps", "120", "--expect", "0000000000000000" });
+        CHECK(expectBad.Code == 1 && Contains(expectBad.Out, "DIFF  expected 0000000000000000"), "and with another one fails with exit 1");
+
+        // a recording: held D for a second, 120 steps (the checksum was also what the Sandbox ended on replaying it)
+        const std::string text = ReadFile(world);
+        char hash[17];
+        snprintf(hash, sizeof(hash), "%016llx", (unsigned long long)Fnv1a64(text.data(), text.size()));
+        const std::string header = std::string("{ \"version\": 1, \"scene\": \"The Sunken Orangerie\", \"sceneHash\": \"") + hash + "\", \"seed\": 1, \"stepsPerSecond\": 60, \"steps\": 120, ";
+        WriteFile(w + "/d.json", header + "\"changes\": [ { \"step\": 0, \"down\": [\"D\"] }, { \"step\": 60, \"up\": [\"D\"] } ] }\n");
+        ToolRun played = RunTool(registry, { "simulate", world, "--recording", w + "/d.json" });
+        CHECK(played.Code == 0 && Contains(played.Out, "120 steps, seed 1, input from") && Contains(played.Out, "camera.Transform.position: [1024.0,518.0] -> [1324.0,518.0]"), "a recording sets the length and the input, and the camera followed the player");
+        CHECK(checksumLine(played.Out) == "39cf7e73f04937f7", "its checksum is the one the Sandbox replay ended on");
+        CHECK(Contains(RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--steps", "200" }).Out, "no input after that") && Contains(RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--steps", "30" }).Out, "stopped early"), "more steps than the recording run on without input, fewer stop early");
+
+        // a recording that carries a checksum must reproduce it
+        SceneLoadResult again = LoadScene(world, registry);
+        InputRecording made = ReadRecording(ReadFile(w + "/d.json")).Recording;
+        const uint64_t ended = ReplayRecording(registry, *again.Scene, made);
+        made.HasChecksum = true;
+        made.Checksum = ended;
+        WriteFile(w + "/sum.json", WriteRecording(made).Text);
+        ToolRun sum = RunTool(registry, { "simulate", world, "--recording", w + "/sum.json" });
+        CHECK(sum.Code == 0 && Contains(sum.Out, "matches the checksum in the recording"), "a recording with a checksum is checked against it");
+        made.Checksum = ended + 1;
+        WriteFile(w + "/wrongsum.json", WriteRecording(made).Text);
+        ToolRun wrongSum = RunTool(registry, { "simulate", world, "--recording", w + "/wrongsum.json" });
+        CHECK(wrongSum.Code == 1 && Contains(wrongSum.Out, "not the one it was made from"), "one that disagrees fails with exit 1");
+        CHECK(RunTool(registry, { "simulate", world, "--recording", w + "/wrongsum.json", "--steps", "30" }).Code == 0, "but only when the whole recording is played");
+
+        // refusals
+        WriteFile(w + "/other.json", header.substr(0, header.find("sceneHash")) + "sceneHash\": \"0123456789abcdef\", \"seed\": 1, \"stepsPerSecond\": 60, \"steps\": 0, \"changes\": [] }\n");
+        ToolRun other = RunTool(registry, { "simulate", world, "--recording", w + "/other.json" });
+        CHECK(other.Code == 1 && Contains(other.Out, "different version of the scene"), "a recording of another version of the scene is refused");
+        WriteFile(w + "/seed2.json", header.substr(0, header.find("\"seed\"")) + "\"seed\": 2, \"stepsPerSecond\": 60, \"steps\": 120, \"changes\": [] }\n");
+        CHECK(RunTool(registry, { "simulate", world, "--recording", w + "/seed2.json" }).Code == 1, "so is one made with another seed");
+        WriteFile(w + "/junk.json", "{}");
+        ToolRun junk = RunTool(registry, { "simulate", world, "--recording", w + "/junk.json" });
+        CHECK(junk.Code == 1 && Contains(junk.Out, "missing required key 'version'"), "a recording with problems is refused with them listed");
+        CHECK(RunTool(registry, { "simulate", world, "--recording", w + "/none.json" }).Code == 1, "so is one that is not there");
+        WriteFile(w + "/bad.json", R"({"version":1,"name":"t","entities":[{"name":"a","components":{"Nope":{}}}]})");
+        ToolRun badScene = RunTool(registry, { "simulate", w + "/bad.json" });
+        CHECK(badScene.Code == 1 && Contains(badScene.Out, "fix them before simulating") && !Contains(badScene.Out, "checksum"), "a scene with problems is not simulated");
+
+        // --seed: another seed, the random walkers go elsewhere
+        WriteFile(w + "/walk.json", R"({"version":1,"name":"walk","components":{"Random":{"seed":5}},"entities":[{"name":"a","components":{"Transform":{"position":[0,0]},"Wander":{"speed":50,"changeEvery":0.3}}}]})");
+        ToolRun seed5 = RunTool(registry, { "simulate", w + "/walk.json", "--steps", "300" });
+        ToolRun seed6 = RunTool(registry, { "simulate", w + "/walk.json", "--steps", "300", "--seed", "6" });
+        ToolRun seed5Again = RunTool(registry, { "simulate", w + "/walk.json", "--steps", "300", "--seed", "5" });
+        CHECK(seed5.Code == 0 && Contains(seed5.Out, "seed 5") && Contains(seed6.Out, "seed 6") && checksumLine(seed5.Out) != checksumLine(seed6.Out), "--seed gives another run of the same scene");
+        CHECK(checksumLine(seed5Again.Out) == checksumLine(seed5.Out), "and the scene's own seed given again is the same run");
+        CHECK(Contains(RunTool(registry, { "simulate", world, "--steps", "10", "--seed", "-3" }).Out, "seed -3"), "a negative seed is fine");
+        ToolRun forced = RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--seed", "9" });
+        CHECK(forced.Code == 0 && checksumLine(forced.Out) != "39cf7e73f04937f7", "a recording can be tried on another seed (its own is not compared)");
+
+        // usage
+        CHECK(RunTool(registry, { "simulate" }).Code == 2 && Contains(RunTool(registry, { "simulate" }).Err, "no scene file"), "no file is a usage error");
+        CHECK(RunTool(registry, { "simulate", world, "--steps", "many" }).Code == 2 && RunTool(registry, { "simulate", world, "--steps", "-1" }).Code == 2 && RunTool(registry, { "simulate", world, "--steps", "2000000" }).Code == 2, "--steps wants a whole number in range");
+        CHECK(RunTool(registry, { "simulate", world, "--seed", "99999999999" }).Code == 2 && RunTool(registry, { "simulate", world, "--expect", "abc" }).Code == 2, "--seed must fit and --expect must be a checksum");
+        CHECK(RunTool(registry, { "simulate", world, "--steps" }).Code == 2 && RunTool(registry, { "simulate", world, "--bogus" }).Code == 2 && RunTool(registry, { "simulate", world, world }).Code == 2, "an option without its value, an unknown option and two files are usage errors");
+        CHECK(Contains(RunTool(registry, { "help" }).Out, "simulate"), "help lists simulate");
+
+        std::filesystem::remove_all(work);
+    }
+
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);
     return fails ? 1 : 0;
 }

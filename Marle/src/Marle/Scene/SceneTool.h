@@ -23,6 +23,14 @@ namespace Marle {
     //   schema [--output <file> | --check <file>]
     //                                      print the JSON Schema for scene files, write it to a file,
     //                                      or check that a file is up to date
+    //   simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>]
+    //                                      load a scene (refused if it has any problem) and run it headless for
+    //                                      N fixed steps, by default the recording's length, else 600. Input comes
+    //                                      from the recording, else there is none. Prints what changed (field by
+    //                                      field, first 40) and the final checksum. --seed replaces the scene's
+    //                                      seed (and then the recording's seed is not compared). --expect makes it
+    //                                      a check: exit 1 if the checksum differs, as it does when a whole
+    //                                      recording that carries a checksum does not reproduce it
     //   help
     //
     // Results and problems go to `out`; mistakes in the command line go to `err`.
