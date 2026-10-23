@@ -65,6 +65,11 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 | | `cellSize` | vec2 | `[32, 32]` | One sheet cell in pixels. Min 1. |
 | | `tileSize` | vec2 | `[64, 64]` | One tile in world units. Min 0.001. |
 | | `rows` | string[] | `[]` | The tiles, one string per row (see Tilemaps). |
+| `Collider` | `shape` | string | `"box"` | `"box"` or `"circle"`. |
+| | `size` | vec2 | `[32, 32]` | A box's width and height in world units; not used by a circle. Min 0.001. |
+| | `radius` | float | `16` | A circle's radius in world units; not used by a box. Min 0.001. |
+| | `offset` | vec2 | `[0, 0]` | From the entity's `Transform.position` to the shape's center. |
+| | `kind` | string | `"solid"` | `"solid"` stops movement; `"trigger"` blocks nothing and only reports overlaps. |
 | `Random` | `seed` | int | `1` | On the scene itself (its top-level `components`). Any integer; the same seed gives the same sequence of random numbers on every run. |
 | `KeyboardMove` | `speed` | float | `100` | Behavior. World units per second. 0 to 100000. |
 | | `runMultiplier` | float | `2` | How many times faster while the run key is held. 0 to 100. |
@@ -95,6 +100,8 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 | `RestartOnKey` | `key` | string | `"R"` | Behavior, for the scene itself (its top-level `components`). When this key is pressed it asks the host to restart the scene; the Sandbox loads it from its file again. A key name. |
 | `ClampPosition` | `min` | vec2 | `[0, 0]` | Behavior. The lower left corner of the rectangle the position is kept in. |
 | | `max` | vec2 | `[100, 100]` | The upper right corner; not smaller than `min` on either axis. |
+
+**Colliders.** A `Collider` is a box or a circle centered on the entity's `Transform.position` plus `offset`, in world units; the `Transform`'s rotation and scale do not change it, and an entity with no `Transform` has no collider. Every field is written, so the one that does not fit the shape (`size` for a circle, `radius` for a box) is ignored. The decision is in `docs/adr/0003-collision-is-simple-deterministic-shapes-in-scene-data.md`; what colliders do (stopping movement, overlap events) arrives with the rest of milestone M7, and until then a collider only holds data.
 
 **Tilemaps.** A `Tilemap` is a grid of tiles cut from a sprite sheet, so a whole map is data and not one entity per tile. The entity's `Transform.position` is the map's bottom-left corner in the world and `Transform.scale` multiplies `tileSize`; its rotation is not used.
 

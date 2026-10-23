@@ -338,7 +338,7 @@ int main(int argc, char** argv)
         ComponentRegistry registry;
         RegisterBuiltinComponents(registry);
         std::vector<std::string> names = registry.GetNames();
-        CHECK(names == std::vector<std::string>({ "Transform", "SpriteRenderer", "Camera", "Tilemap", "Random", "KeyboardMove", "KeyboardRotate", "WheelZoom", "Follow", "Spin", "Orbit", "Wander", "RestartOnKey", "ClampPosition" }), "the built-in components register in order, the behaviors last, ClampPosition after all of them");
+        CHECK(names == std::vector<std::string>({ "Transform", "SpriteRenderer", "Camera", "Tilemap", "Collider", "Random", "KeyboardMove", "KeyboardRotate", "WheelZoom", "Follow", "Spin", "Orbit", "Wander", "RestartOnKey", "ClampPosition" }), "the built-in components register in order, the behaviors last, ClampPosition after all of them");
 
         const ComponentInfo* transform = registry.Find("Transform");
         CHECK(transform && !transform->Description.empty() && transform->Fields.size() == 3, "a component has a description and its fields");
@@ -836,7 +836,7 @@ int main(int argc, char** argv)
 
         std::string order;
         for (auto it = schema["definitions"].begin(); it != schema["definitions"].end(); ++it) order += it.key() + " ";
-        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Random component_KeyboardMove component_KeyboardRotate component_WheelZoom component_Follow component_Spin component_Orbit component_Wander component_RestartOnKey component_ClampPosition ", "components are described in registration order");
+        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Collider component_Random component_KeyboardMove component_KeyboardRotate component_WheelZoom component_Follow component_Spin component_Orbit component_Wander component_RestartOnKey component_ClampPosition ", "components are described in registration order");
         CHECK(schema["definitions"]["entity"]["properties"]["components"]["properties"]["Camera"]["$ref"] == "#/definitions/component_Camera", "an entity's components point at their definitions");
 
         bool everyField = true, described = !schema["description"].get<std::string>().empty();
@@ -2367,6 +2367,35 @@ int main(int argc, char** argv)
         const std::string golden = R"("KeyboardMove": { "speed": 100, "runMultiplier": 2, "runKey": "LeftShift", "keys": "both", "relativeTo": "", "tintWhenRunning": false, "idleTint": [1, 1, 1, 1], "runTint": [1, 0.65, 0.3, 1] })";
         SceneLoadResult written = problems("");
         CHECK(written.Ok() && Contains(SaveSceneToText(*written.Scene, registry).Text, golden), "it is written with every field, in this order");
+    }
+
+    // Collider
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto load = [&](const std::string& fields) { return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [{"name": "c", "components": {"Collider": {)" + fields + "}}}]}", "inline", registry); };
+
+        const ComponentInfo* info = registry.Find("Collider");
+        std::string names;
+        for (const FieldInfo& field : info->Fields) names += field.Name + " ";
+        CHECK(info && !info->IsBehavior && names == "shape size radius offset kind ", "Collider is data with a shape, its size, a radius, an offset and a kind");
+        CHECK(info->Fields[0].Default == "box" && info->Fields[1].Default == Json::array({ 32.0, 32.0 }) && info->Fields[2].Default == 16.0 && info->Fields[3].Default == Json::array({ 0.0, 0.0 }) && info->Fields[4].Default == "solid", "a collider is a solid 32 by 32 box by default");
+
+        SceneLoadResult empty = load("");
+        CHECK(empty.Ok() && empty.Scene->FindEntity("c").Get<Collider>().Shape == "box" && empty.Scene->FindEntity("c").Get<Collider>().Kind == "solid", "every field has a default, so {} is a solid box");
+        SceneLoadResult circle = load(R"("shape": "circle", "radius": 12.5, "offset": [4, -6], "kind": "trigger")");
+        const Collider& c = circle.Scene->FindEntity("c").Get<Collider>();
+        CHECK(circle.Ok() && c.Shape == "circle" && c.Radius == 12.5f && c.Offset == glm::vec2(4.0f, -6.0f) && c.Kind == "trigger", "a trigger circle reads back as written");
+
+        CHECK(HasProblem(load(R"("shape": "cirlce")"), "/entities/0/components/Collider/shape", "circle") && HasProblem(load(R"("kind": "solod")"), "/entities/0/components/Collider/kind", "solid"), "an unknown shape or kind is refused with a suggestion");
+        CHECK(!load(R"("radius": 0)").Ok() && !load(R"("radius": -1)").Ok() && !load(R"("size": [0, 10])").Ok() && !load(R"("size": [10, -2])").Ok() && load(R"("size": [0.5, 0.5], "radius": 0.5)").Ok(), "a size or radius that is not positive is refused");
+        CHECK(!load(R"("size": [10])").Ok() && !load(R"("colour": "red")").Ok(), "a size with one number and an unknown field are refused");
+
+        SceneSchemaToText(registry);
+        SceneLoadResult sceneWith = load(R"("shape": "circle", "radius": 3, "kind": "trigger")");
+        std::string text = SaveSceneToText(*sceneWith.Scene, registry).Text;
+        SceneLoadResult again = LoadSceneFromText(text, "inline", registry);
+        CHECK(again.Ok() && SaveSceneToText(*again.Scene, registry).Text == text && Contains(text, R"("Collider": { "shape": "circle", "size": [32, 32], "radius": 3, "offset": [0, 0], "kind": "trigger" })"), "it is written with every field and reads back the same");
     }
 
     // movement behaviors: KeyboardRotate, WheelZoom, ClampPosition

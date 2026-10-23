@@ -40,6 +40,9 @@
         "Tilemap": {
           "$ref": "#/definitions/component_Tilemap"
         },
+        "Collider": {
+          "$ref": "#/definitions/component_Collider"
+        },
         "Random": {
           "$ref": "#/definitions/component_Random"
         },
@@ -112,6 +115,9 @@
             },
             "Tilemap": {
               "$ref": "#/definitions/component_Tilemap"
+            },
+            "Collider": {
+              "$ref": "#/definitions/component_Collider"
             },
             "Random": {
               "$ref": "#/definitions/component_Random"
@@ -308,6 +314,64 @@
           },
           "description": "The tiles, one string per row, listed top to bottom as the map looks. Each character is a sprite sheet cell counted from the sheet's bottom-left cell, left to right then up, in base 36 (0-9 then a-z), or '.' for no tile. Every row must be the same length.",
           "default": []
+        }
+      }
+    },
+    "component_Collider": {
+      "type": "object",
+      "description": "A shape that things touch, an axis-aligned box or a circle centered on the entity's Transform position plus offset. A solid collider stops entities that move into it; a trigger blocks nothing and only reports what overlaps it. The Transform's rotation and scale do not change it.",
+      "additionalProperties": false,
+      "properties": {
+        "shape": {
+          "type": "string",
+          "enum": [
+            "box",
+            "circle"
+          ],
+          "description": "box or circle. One of: box, circle.",
+          "default": "box"
+        },
+        "size": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0.001
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "A box's [width, height], in world units; not used by a circle.",
+          "default": [
+            32.0,
+            32.0
+          ]
+        },
+        "radius": {
+          "type": "number",
+          "minimum": 0.001,
+          "description": "A circle's radius, in world units; not used by a box.",
+          "default": 16.0
+        },
+        "offset": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "From the entity's position to the shape's center [x, y], in world units.",
+          "default": [
+            0.0,
+            0.0
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "solid",
+            "trigger"
+          ],
+          "description": "solid stops movement; trigger blocks nothing and only reports overlaps. One of: solid, trigger.",
+          "default": "solid"
         }
       }
     },

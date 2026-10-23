@@ -201,6 +201,13 @@ namespace Marle {
                 }
             });
 
+        registry.Register<Collider>("Collider", "A shape that things touch, an axis-aligned box or a circle centered on the entity's Transform position plus offset. A solid collider stops entities that move into it; a trigger blocks nothing and only reports what overlaps it. The Transform's rotation and scale do not change it.")
+            .Field(&Collider::Shape, "shape", "box or circle.").OneOf({ "box", "circle" })
+            .Field(&Collider::Size, "size", "A box's [width, height], in world units; not used by a circle.").Min(0.001)
+            .Field(&Collider::Radius, "radius", "A circle's radius, in world units; not used by a box.").Min(0.001)
+            .Field(&Collider::Offset, "offset", "From the entity's position to the shape's center [x, y], in world units.")
+            .Field(&Collider::Kind, "kind", "solid stops movement; trigger blocks nothing and only reports overlaps.").OneOf({ "solid", "trigger" });
+
         registry.Register<Random>("Random", "On the scene itself: where the scene's random numbers start, so the same seed gives the same sequence on every run. Nothing is ever seeded from the clock.")
             .Field(&Random::Seed, "seed", "Any integer. The same seed always gives the same sequence of random numbers.");
 

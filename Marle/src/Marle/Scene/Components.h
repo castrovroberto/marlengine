@@ -53,6 +53,17 @@ namespace Marle {
         return -2;
     }
 
+    // A shape that things touch: an axis-aligned box or a circle, centered on the entity's Transform.Position
+    // plus Offset. Solid colliders stop movement, triggers only report what overlaps them (ADR-0003).
+    // Rotation and scale of the Transform do not affect it; sizes are in world units.
+    struct Collider {
+        std::string Shape = "box";                    // "box" or "circle"
+        glm::vec2 Size = { 32.0f, 32.0f };            // a box's width and height; unused by a circle
+        float Radius = 16.0f;                         // a circle's radius; unused by a box
+        glm::vec2 Offset = { 0.0f, 0.0f };            // from Transform.Position to the shape's center
+        std::string Kind = "solid";                   // "solid" or "trigger"
+    };
+
     // On the scene itself: the number the scene's random numbers start from. The same seed gives the
     // same sequence on every run; nothing is ever seeded from the clock.
     struct Random {
