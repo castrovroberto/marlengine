@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "name": "The Sunken Orangerie",
+  "entities": [
+    {
+      "name": "camera",
+      "components": {
+        "Transform": { "position": [1024, 518], "rotation": 0, "scale": [1, 1] },
+        "Camera": { "zoom": 1, "primary": true }
+      }
+    },
+    {
+      "name": "world",
+      "components": {
+        "Transform": { "position": [0, 0], "rotation": 0, "scale": [1, 1] },
+        "Tilemap": {
+          "texture": "Assets/Textures/test_sheet.tga",
+          "cellSize": [32, 32],
+          "tileSize": [64, 64],
+          "rows": [
+            "fdfccecccfdecffcfecceedccededdcf",
+            "d315675011061145200102204731011e",
+            "e000632024240015003110241351220c",
+            "f046114136221332201456130215136c",
+            "c621031240141331022357230273202f",
+            "e110370102603204021102715056603e",
+            "d114020423703622260730533544000e",
+            "d323162320016072626002155160760d",
+            "d6204002522309abb9a612211327433c",
+            "c14003612364a8a88b8a10144121114f",
+            "e231155724009a9a89a927270052021e",
+            "e406036162358989abab00112170441e",
+            "c210200232218998889a12110121167d",
+            "f002330172268aa9888811022776636c",
+            "d61201302201889b9abb13331311013e",
+            "c520301513262bb8b88200131113412f",
+            "e003355726202300343403013200210e",
+            "d221332055007500467334302037000e",
+            "f216310520021311633457200103366e",
+            "c230455352440406021121672016622d",
+            "c336043241117122333062315505101f",
+            "e100260220511211373600637253103f",
+            "d637300213075201346025135621627e",
+            "cfefccfdddcceefcfecfdceeceddecef"
+          ]
+        }
+      }
+    },
+    {
+      "name": "spinner_0",
+      "components": {
+        "Transform": { "position": [1194, 768], "rotation": 0, "scale": [56, 56] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+      }
+    },
+    {
+      "name": "spinner_1",
+      "components": {
+        "Transform": { "position": [1024, 938], "rotation": 0, "scale": [56, 56] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+      }
+    },
+    {
+      "name": "spinner_2",
+      "components": {
+        "Transform": { "position": [854, 768], "rotation": 0, "scale": [56, 56] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+      }
+    },
+    {
+      "name": "spinner_3",
+      "components": {
+        "Transform": { "position": [1024, 598], "rotation": 0, "scale": [56, 56] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sheet.tga", "cell": [3, 3], "cellSize": [32, 32], "tint": [1, 1, 1, 1] }
+      }
+    },
+    {
+      "name": "player",
+      "components": {
+        "Transform": { "position": [1024, 518], "rotation": 0, "scale": [48, 48] },
+        "SpriteRenderer": { "texture": "Assets/Textures/test_sprite.tga", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 1, 1, 1] }
+      }
+    },
+    {
+      "name": "satellite",
+      "components": {
+        "Transform": { "position": [1068, 518], "rotation": 0, "scale": [16, 16] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 0.9, 0.2, 1] }
+      }
+    }
+  ]
+}

@@ -85,6 +85,18 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 
 **References.** An asset is referred to by a path relative to the working directory, written with `/`, with no `..`. Anything that refers to another entity uses its `name`. A reference to something that does not exist is reported with the file and path of the reference, and the rest of the scene still loads (see Errors).
 
+## How a scene is drawn
+
+The engine draws a scene (`SceneRenderer`) like this, so the order and values in the file matter:
+
+- **Draw order is file order.** Entities are drawn one after another in the order they appear, so a later entity is on top of an earlier one. Put the ground first and the things standing on it after.
+- **The camera** is the first entity with a `Camera` whose `primary` is `true` (it also needs a `Transform`). The view is centered on its `Transform.position`, turned by its `rotation`, and `zoom` magnifies it. At zoom 1 the view shows as many world units as the window has pixels. With no primary camera the view is centered on the origin, and a warning is logged.
+- **A sprite** (`SpriteRenderer`) is drawn at its `Transform` (position, rotation, and `scale` as its size in world units). An empty `texture` draws a flat `tint` colored quad; a texture with `cellSize` `[0, 0]` draws the whole image; with a `cellSize` it draws the sprite sheet cell at `cell`. A sprite with no `Transform` is not drawn.
+- **A tilemap** (`Tilemap`) draws one quad per tile.
+- A texture that cannot be loaded is drawn as the magenta and black error checker, and everything else still draws.
+
+`Assets/Scenes/world.json` is the Sandbox's world and a complete example of all of this: a camera, a 32 by 24 tilemap, sprites cut from a sheet, and a flat colored one.
+
 ## Written form
 
 The engine reads any layout that follows the rules above. When it writes a scene file (`SaveScene`), the output is canonical, so loading a canonical file and writing it again gives the same bytes, and a change to one component changes exactly one line:
@@ -144,7 +156,7 @@ The tool knows the built-in components. A game with components of its own builds
 ## For AI authors
 
 1. Start from `Assets/Scenes/example.json` and change names and values; keep the same shape.
-2. Give every entity a unique `name`; refer to entities by that name.
+2. Give every entity a unique `name`; refer to entities by that name. Entities are drawn in file order, later ones on top.
 3. Write every field of a component you use, so the file shows what it is.
 4. Use only the components and fields in the table above or in `scene.schema.json`; guessing a name is an error with a suggestion.
 5. Run `marle-scene validate <file>` before running the game and fix every reported path (see Command line).

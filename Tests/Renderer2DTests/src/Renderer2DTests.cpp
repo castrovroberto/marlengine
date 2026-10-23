@@ -3,6 +3,9 @@
 #include "Marle/Application.h"
 #include "Marle/Renderer/Renderer2D.h"
 #include "Marle/Platform/OpenGL/OpenGLFramebuffer.h"
+#include "Marle/Scene/SceneLoader.h"
+#include "Marle/Scene/SceneRenderer.h"
+#include "Marle/Scene/Components.h"
 #include <glad/gl.h>
 #include <memory>
 #include <vector>
@@ -521,6 +524,151 @@ protected:
             for (int y = 100; y < 132 && !magenta; y++) for (int x = 100; x < 116; x++) if (Near(Read(x, y), 255, 0, 255)) { magenta = true; break; }
             CHECK(Renderer2D::GetStats().QuadCount == 2 && err.count > 100 && magenta, "a failed font draws the error checker for each glyph");
             CHECK(Near(Read(300, 100), 0, 255, 0), "quads after a failed font still draw");
+        }
+
+        // 9e. scene rendering
+        {
+            ComponentRegistry registry;
+            RegisterBuiltinComponents(registry);
+            SceneRenderer sceneRenderer;
+
+            auto Region = [&](int x, int y, int w, int h) {
+                std::vector<unsigned char> pixels(w * h * 4);
+                glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+                return pixels;
+            };
+            auto Frame = [&]() { return Region(0, 0, (int)W, (int)H); };
+
+            // Entities as JSON, drawn on a fresh frame through SceneRenderer
+            auto Camera = [](float x, float y, float zoom, bool primary, float rotation = 0.0f) {
+                return R"({"name": "cam)" + std::to_string(x) + "_" + std::to_string(primary) + R"(", "components": {"Transform": {"position": [)" + std::to_string(x) + ", " + std::to_string(y) + "], \"rotation\": " + std::to_string(rotation) + R"(}, "Camera": {"zoom": )" + std::to_string(zoom) + ", \"primary\": " + (primary ? "true" : "false") + "}}}";
+            };
+            auto Quad = [](const std::string& name, float x, float y, float size, const std::string& tint, float rotation = 0.0f) {
+                return "{\"name\": \"" + name + R"(", "components": {"Transform": {"position": [)" + std::to_string(x) + ", " + std::to_string(y) + "], \"rotation\": " + std::to_string(rotation) + ", \"scale\": [" + std::to_string(size) + ", " + std::to_string(size) + R"(]}, "SpriteRenderer": {"tint": )" + tint + "}}}";
+            };
+            auto Render = [&](const std::vector<std::string>& entities) {
+                std::string body;
+                for (size_t i = 0; i < entities.size(); i++) body += (i ? "," : "") + entities[i];
+                SceneLoadResult loaded = LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [)" + body + "]}", "inline", registry);
+                glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+                sceneRenderer.Render(*loaded.Scene, W, H);
+                return loaded.Problems.size();
+            };
+            const std::string red = "[1, 0, 0, 1]", green = "[0, 1, 0, 1]";
+
+            // camera and sprites (the view is 1024 x 768 world units at zoom 1, the origin at the window's center)
+            Render({ Camera(0, 0, 1, true), Quad("q", 100, 50, 40, red) });
+            CHECK(Near(Read(612, 434), 255, 0, 0) && Near(Read(642, 434), bg.r, bg.g, bg.b) && Near(Read(612, 464), bg.r, bg.g, bg.b), "a sprite is drawn at its Transform, sized by its scale");
+            Render({ Camera(100, 50, 1, true), Quad("q", 100, 50, 40, red) });
+            CHECK(Near(Read(512, 384), 255, 0, 0), "the camera's position centers the view");
+            Render({ Camera(0, 0, 2, true), Quad("q", 100, 50, 40, red) });
+            CHECK(Near(Read(712, 484), 255, 0, 0) && Near(Read(747, 484), 255, 0, 0) && Near(Read(762, 484), bg.r, bg.g, bg.b), "zoom 2 doubles positions and sizes");
+
+            Render({ Camera(30, -20, 1.5f, true, 0.5f), Quad("q", 100, 50, 40, red, 0.3f) });
+            std::vector<unsigned char> viaScene = Frame();
+            glClear(GL_COLOR_BUFFER_BIT);
+            OrthographicCamera direct(-512.0f / 1.5f, 512.0f / 1.5f, -384.0f / 1.5f, 384.0f / 1.5f);
+            direct.SetPosition({ 30.0f, -20.0f });
+            direct.SetRotation(0.5f);
+            Renderer2D::BeginBatch(direct);
+            Renderer2D::DrawRotatedQuad({ 100.0f, 50.0f }, { 40.0f, 40.0f }, 0.3f, glm::vec4(1, 0, 0, 1));
+            Renderer2D::EndBatch();
+            std::vector<unsigned char> viaRenderer = Frame();
+            size_t inked = 0;   // pixels that are not the clear color: the 40 x 40 quad at zoom 1.5 is about 3600
+            for (size_t i = 0; i < viaScene.size(); i += 4)
+                inked += abs(viaScene[i] - bg.r) > 2 || abs(viaScene[i + 1] - bg.g) > 2 || abs(viaScene[i + 2] - bg.b) > 2;
+            CHECK(inked > 3000 && inked < 4200, "the rotated, zoomed quad is on screen");
+            CHECK(viaScene == viaRenderer, "camera position, rotation and zoom give the same picture as Renderer2D with an OrthographicCamera");
+
+            Render({ Camera(0, 0, 1, true), Quad("under", 0, 0, 60, green), Quad("over", 0, 0, 40, red) });
+            CHECK(Near(Read(512, 384), 255, 0, 0) && Near(Read(512 + 25, 384), 0, 255, 0), "entities are drawn in creation order, later ones on top");
+            Render({ Camera(0, 0, 1, true), Quad("over", 0, 0, 40, red), Quad("under", 0, 0, 60, green) });
+            CHECK(Near(Read(512, 384), 0, 255, 0), "and in the opposite order the other is on top");
+
+            Render({ Camera(500, 0, 1, false), Camera(0, 0, 1, true), Camera(300, 0, 1, true), Quad("q", 0, 0, 40, red) });
+            CHECK(Near(Read(512, 384), 255, 0, 0), "the first primary camera is used");
+            CHECK(SceneRenderer::FindPrimaryCamera(*LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [{"name": "a", "components": {"Camera": {"primary": true}}}]})", "inline", registry).Scene) == Entity(), "a primary camera without a Transform is not used");
+            Render({ Quad("q", 0, 0, 40, red) });
+            CHECK(Near(Read(512, 384), 255, 0, 0), "without a primary camera the view is centered on the origin");
+            Render({});
+            CHECK(Near(Read(512, 384), bg.r, bg.g, bg.b) && Renderer2D::GetStats().QuadCount == 0, "an empty scene draws nothing");
+
+            Render({ Camera(0, 0, 1, true), R"({"name": "ghost", "components": {"SpriteRenderer": {"tint": [1, 0, 0, 1]}}})", R"({"name": "plain", "components": {"Transform": {}}})" });
+            CHECK(Near(Read(512, 384), bg.r, bg.g, bg.b) && Renderer2D::GetStats().QuadCount == 0, "a sprite without a Transform, and an entity with no sprite, are not drawn");
+
+            // textures
+            OpenGLTexture2D sprite("Assets/Textures/test_sprite.tga"), sheet("Assets/Textures/test_sheet.tga");
+            const std::string sheetPath = "Assets/Textures/test_sheet.tga";
+            Render({ Camera(0, 0, 1, true), R"({"name": "t", "components": {"Transform": {"scale": [128, 128]}, "SpriteRenderer": {"texture": "Assets/Textures/test_sprite.tga"}}})" });
+            std::vector<unsigned char> textured = Region(448, 320, 128, 128);
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawQuad({ 512, 384 }, { 128, 128 }, &sprite);
+            Renderer2D::EndBatch();
+            CHECK(textured == Region(448, 320, 128, 128) && !Near(Read(512, 384), bg.r, bg.g, bg.b), "a textured sprite draws the whole texture");
+
+            Render({ Camera(0, 0, 1, true), R"({"name": "t", "components": {"Transform": {"scale": [64, 64]}, "SpriteRenderer": {"texture": "Assets/Textures/test_sheet.tga", "cell": [1, 2], "cellSize": [32, 32], "tint": [0, 1, 0, 1]}}})" });
+            std::vector<unsigned char> cell = Region(480, 352, 64, 64);
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawQuad({ 512, 384 }, { 64, 64 }, SubTexture2D::CreateFromCoords(&sheet, { 1, 2 }, { 32, 32 }), glm::vec4(0, 1, 0, 1));
+            Renderer2D::EndBatch();
+            CHECK(cell == Region(480, 352, 64, 64), "a sprite sheet cell and a tint draw as the same cell and tint through Renderer2D");
+
+            Render({ Camera(0, 0, 1, true), R"({"name": "t", "components": {"Transform": {"scale": [64, 64]}, "SpriteRenderer": {"texture": "Assets/Textures/missing_for_scene_test.png"}}})", Quad("after", 200, 0, 20, green) });
+            bool checker = false;
+            for (int y = 352; y < 416 && !checker; y++) for (int x = 480; x < 544; x++) if (Near(Read(x, y), 255, 0, 255)) { checker = true; break; }
+            CHECK(checker && Near(Read(712, 384), 0, 255, 0), "a missing texture draws the error checker and the rest of the scene is unaffected");
+            Render({ Camera(0, 0, 1, true), R"({"name": "t", "components": {"Transform": {"scale": [64, 64]}, "SpriteRenderer": {"texture": "Assets/Textures/missing_for_scene_test.png", "cell": [1, 1], "cellSize": [32, 32]}}})" });
+            checker = false;
+            for (int y = 352; y < 416 && !checker; y++) for (int x = 480; x < 544; x++) if (Near(Read(x, y), 255, 0, 255)) { checker = true; break; }
+            CHECK(checker, "a missing texture with a sheet cell draws the checker too");
+
+            // tilemaps: rows are listed top to bottom, '.' is no tile, the origin is the bottom-left corner
+            auto TilemapEntity = [](const std::string& rows, const std::string& transform = "", const std::string& texture = "Assets/Textures/test_sheet.tga") {
+                return R"({"name": "ground", "components": {)" + (transform.empty() ? "" : R"("Transform": )" + transform + ", ") + R"("Tilemap": {"texture": ")" + texture + R"(", "cellSize": [32, 32], "tileSize": [64, 64], "rows": )" + rows + "}}}";
+            };
+            Render({ Camera(0, 0, 1, true), TilemapEntity(R"(["1.", "03"])") });
+            CHECK(Renderer2D::GetStats().QuadCount == 3, "a tile that is '.' draws no quad");
+            std::vector<unsigned char> tiles = Region(512, 384, 128, 128);
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawQuad({ 544, 480 }, { 64, 64 }, SubTexture2D::CreateFromCoords(&sheet, { 1, 0 }, { 32, 32 }));   // top left: '1'
+            Renderer2D::DrawQuad({ 544, 416 }, { 64, 64 }, SubTexture2D::CreateFromCoords(&sheet, { 0, 0 }, { 32, 32 }));   // bottom left: '0'
+            Renderer2D::DrawQuad({ 608, 416 }, { 64, 64 }, SubTexture2D::CreateFromCoords(&sheet, { 3, 0 }, { 32, 32 }));   // bottom right: '3'
+            Renderer2D::EndBatch();
+            CHECK(tiles == Region(512, 384, 128, 128) && Near(Read(608, 480), bg.r, bg.g, bg.b), "tiles land where the rows say, the first row on top, and '.' leaves the background");
+
+            Render({ Camera(0, 0, 1, true), TilemapEntity(R"(["1.", "03"])", R"({"position": [100, -50], "scale": [2, 1]})") });
+            std::vector<unsigned char> moved = Region(612, 334, 256, 128);
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawQuad({ 612 + 64, 334 + 96 }, { 128, 64 }, SubTexture2D::CreateFromCoords(&sheet, { 1, 0 }, { 32, 32 }));
+            Renderer2D::DrawQuad({ 612 + 64, 334 + 32 }, { 128, 64 }, SubTexture2D::CreateFromCoords(&sheet, { 0, 0 }, { 32, 32 }));
+            Renderer2D::DrawQuad({ 612 + 192, 334 + 32 }, { 128, 64 }, SubTexture2D::CreateFromCoords(&sheet, { 3, 0 }, { 32, 32 }));
+            Renderer2D::EndBatch();
+            CHECK(moved == Region(612, 334, 256, 128), "the Transform moves the map's bottom-left corner and its scale multiplies the tile size");
+
+            Render({ Camera(0, 0, 1, true), TilemapEntity(R"(["z"])") });
+            checker = false;
+            for (int y = 384; y < 448 && !checker; y++) for (int x = 512; x < 576; x++) if (Near(Read(x, y), 255, 0, 255)) { checker = true; break; }
+            CHECK(checker, "a tile beyond the sheet draws the error checker");
+            Render({ Camera(0, 0, 1, true), TilemapEntity(R"(["ab", "cd"])", "", "Assets/Textures/missing_for_scene_test.png") });
+            checker = false;
+            for (int y = 384; y < 512 && !checker; y++) for (int x = 512; x < 640; x++) if (Near(Read(x, y), 255, 0, 255)) { checker = true; break; }
+            CHECK(checker && Renderer2D::GetStats().QuadCount == 4, "every tile of a map whose sheet is missing draws the error checker");
+            Render({ Camera(0, 0, 1, true), TilemapEntity(R"(["a"])", "", "") });
+            checker = false;
+            for (int y = 384; y < 448 && !checker; y++) for (int x = 512; x < 576; x++) if (Near(Read(x, y), 255, 0, 255)) { checker = true; break; }
+            CHECK(checker, "a map with no sheet draws the error checker");
+
+            // sprites and tiles share the draw order, and a big map is cheap
+            std::string bigRows = "[";
+            for (int r = 0; r < 24; r++) bigRows += std::string(r ? "," : "") + "\"" + std::string(32, "0123"[r % 4]) + "\"";
+            bigRows += "]";
+            Render({ Camera(1024, 768, 1, true), TilemapEntity(bigRows, R"({"position": [0, 0]})"), Quad("on_top", 1024, 768, 30, red) });
+            auto bigStats = Renderer2D::GetStats();
+            CHECK(bigStats.QuadCount == 769 && bigStats.DrawCalls == 1 && Near(Read(512, 384), 255, 0, 0), "a 32 x 24 map is 768 quads in one draw call, with a sprite on top");
         }
 
         // 10. GL errors

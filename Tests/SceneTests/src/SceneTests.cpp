@@ -879,7 +879,7 @@ int main(int argc, char** argv)
 
         // directories
         ToolRun scenes = RunTool(registry, { "validate", "Assets/Scenes" });
-        CHECK(scenes.Code == 0 && scenes.Out == ok.Out, "a directory means its scene files, and the schema file is not one of them");
+        CHECK(scenes.Code == 0 && scenes.Out == ok.Out + "OK    Assets/Scenes/world.json: 8 entities, 16 components\n2 files, 0 with problems\n", "a directory means its scene files, and the schema file is not one of them");
         WriteFile((work / "b.json").string(), R"({"version": 1, "name": "b", "entities": []})");
         WriteFile((work / "sub" / "a.json").string(), R"({"version": 1, "name": "a", "entities": []})");
         WriteFile((work / "notes.txt").string(), "not a scene");
@@ -1131,6 +1131,52 @@ int main(int argc, char** argv)
         CHECK(SchemaErrors(schema, Json::parse(golden)).empty(), "the schema accepts a good tilemap");
         CHECK(!SchemaErrors(schema, Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "m", "components": {"Tilemap": {"rows": "ab"}}}]})")).empty() && !SchemaErrors(schema, Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "m", "components": {"Tilemap": {"rows": ["ab", 5]}}}]})")).empty() && !SchemaErrors(schema, Json::parse(R"({"version": 1, "name": "x", "entities": [{"name": "m", "components": {"Tilemap": {"cellSize": [0, 1]}}}]})")).empty(), "the schema rejects rows that are not strings, and a zero size");
         CHECK(schema["definitions"]["component_Tilemap"]["properties"]["rows"]["items"] == Json::parse(R"({"type": "string"})") && schema["definitions"]["component_Tilemap"]["properties"]["rows"]["type"] == "array", "rows is an array of strings in the schema");
+    }
+
+    // the Sandbox world
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::string file = "Assets/Scenes/world.json";
+
+        SceneLoadResult world = LoadScene(file, registry);
+        for (const SceneProblem& problem : world.Problems) printf("      %s\n", problem.ToString().c_str());
+        CHECK(world.Ok() && world.Scene->GetName() == "The Sunken Orangerie", "the Sandbox world loads with no problems");
+
+        std::string names;
+        for (Entity e : world.Scene->GetEntities()) names += e.GetName() + " ";
+        CHECK(names == "camera world spinner_0 spinner_1 spinner_2 spinner_3 player satellite ", "its entities are the ones WorldLayer drives, in draw order");
+
+        Entity camera = world.Scene->FindEntity("camera"), player = world.Scene->FindEntity("player"), map = world.Scene->FindEntity("world");
+        CHECK(camera.Get<Camera>().Primary && camera.Get<Camera>().Zoom == 1.0f && camera.Get<Transform>().Position == player.Get<Transform>().Position && player.Get<Transform>().Position == glm::vec2(1024.0f, 518.0f), "the camera is primary and starts on the player");
+        CHECK(player.Get<SpriteRenderer>().Texture == "Assets/Textures/test_sprite.tga" && player.Get<Transform>().Scale == glm::vec2(48.0f, 48.0f) && world.Scene->FindEntity("satellite").Get<SpriteRenderer>().Texture.empty(), "the player is a textured sprite and the satellite a flat color");
+        CHECK(world.Scene->FindEntity("spinner_1").Get<Transform>().Position == glm::vec2(1024.0f, 938.0f) && world.Scene->FindEntity("spinner_3").Get<SpriteRenderer>().Cell == glm::ivec2(3, 3), "the spinners sit around the pond on sheet cell [3, 3]");
+
+        const Tilemap& tiles = map.Get<Tilemap>();
+        CHECK(tiles.Rows.size() == 24 && tiles.Rows[0].size() == 32 && tiles.TileSize == glm::vec2(64.0f, 64.0f) && tiles.CellSize == glm::vec2(32.0f, 32.0f) && map.Get<Transform>().Position == glm::vec2(0.0f), "the map is 32 x 24 tiles of 64 world units, from the origin");
+
+        // it is the map the Sandbox used to generate in code (a hash of the tile position, a pond in the
+        // middle, a border), row 0 of the file being the top row
+        unsigned mismatches = 0;
+        for (int y = 0; y < 24; y++)
+            for (int x = 0; x < 32; x++) {
+                unsigned h = (unsigned)(x * 73856093) ^ (unsigned)(y * 19349663);
+                h ^= h >> 13; h *= 0x5bd1e995; h ^= h >> 15;
+                float dx = x - 32 * 0.5f + 0.5f, dy = y - 24 * 0.5f + 0.5f;
+                int row, column = h % 4;
+                if (dx * dx + dy * dy < 20.0f) row = 2;
+                else if (x == 0 || y == 0 || x == 31 || y == 23) row = 3;
+                else row = (h >> 8) % 4 == 0 ? 1 : 0;
+                char expected = "0123456789abcdef"[row * 4 + column];
+                mismatches += tiles.Rows[23 - y][x] != expected;
+            }
+        CHECK(mismatches == 0, "every tile is the one the hash used to give");
+
+        CHECK(SaveSceneToText(*world.Scene, registry).Text == ReadFile(file), "the file is in canonical form");
+        ComponentRegistry again;
+        RegisterBuiltinComponents(again);
+        CHECK(SchemaErrors(GenerateSceneSchema(again), ParseWithComments(ReadFile(file))).empty(), "and it validates against the schema");
+        CHECK(RunTool(registry, { "format", "--check", file }).Code == 0 && RunTool(registry, { "validate", file }).Code == 0, "marle-scene validates it and finds it already formatted");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);
