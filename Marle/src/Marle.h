@@ -35,6 +35,7 @@
 // Renderer
 #include "Marle/Renderer/OrthographicCamera.h"
 #include "Marle/Renderer/SubTexture2D.h"
+#include "Marle/Renderer/BitmapFont.h"
 #include "Marle/Renderer/Renderer2D.h"
 #include "Marle/Platform/OpenGL/OpenGLTexture.h"
 #include "Marle/Platform/OpenGL/OpenGLFramebuffer.h"

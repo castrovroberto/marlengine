@@ -2,11 +2,13 @@
 
 #include "../Core.h"
 #include "../Platform/OpenGL/OpenGLTexture.h"
+#include "BitmapFont.h"
 #include "OrthographicCamera.h"
 #include "SubTexture2D.h"
 #include <glm/glm.hpp>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace Marle {
     
@@ -43,6 +45,11 @@ namespace Marle {
         static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, OpenGLTexture2D* texture);
         static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, OpenGLTexture2D* texture, const glm::vec4& tint);
         static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const glm::vec4& color);
+
+        // Draws text left to right as one quad per glyph (spaces draw nothing). `position` is the
+        // bottom-left corner of the first glyph cell and `glyphHeight` the height of a line in world
+        // units; '\n' starts a new line below, and a character the font lacks draws as '?'.
+        static void DrawString(const BitmapFont& font, const std::string& text, const glm::vec2& position, float glyphHeight, const glm::vec4& color = glm::vec4(1.0f));
 
         // Accumulated since the last ResetStats()
         static Statistics GetStats();
