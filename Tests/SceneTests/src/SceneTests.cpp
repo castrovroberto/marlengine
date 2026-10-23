@@ -29,6 +29,7 @@ static int fails = 0;
 struct Position { float x = 0.0f, y = 0.0f; Position() = default; Position(float x, float y) : x(x), y(y) {} };
 struct Health { int points = 10; };
 struct Gravity { float Strength = 9.8f; };
+struct Follow { std::string Target; glm::vec2 Offset = { 0.0f, 0.0f }; };
 struct Pad { std::string Keys = "both"; std::string Label; int Count = 0; };
 struct Door { std::string Target; int Level = 1; bool Locked = false; };   // Target is required
 
@@ -1530,6 +1531,111 @@ int main(int argc, char** argv)
         ComponentBuilder<Pad> detached = registry.Register<Pad>("Pad", "again");   // refused: name in use
         detached.Field(&Pad::Keys, "keys", "k").OneOf({ "both" });
         CHECK(registry.Find("Pad")->Fields[0].OneOf.size() == 3, "a set on a refused registration changes nothing");
+    }
+
+    // entity references: a field that names another entity
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        registry.Register<Follow>("Follow", "Goes after another entity.")
+            .Field(&Follow::Target, "target", "The entity to follow.").EntityReference()
+            .Field(&Follow::Offset, "offset", "Where from it.");
+        CHECK(registry.Find("Follow")->Fields[0].EntityReference && !registry.Find("Follow")->Fields[1].EntityReference && !registry.Find("Transform")->Fields[0].EntityReference, "only the marked field is an entity reference");
+
+        // the fixture: every case in one file
+        SceneLoadResult load = LoadScene("Tests/SceneTests/fixtures/entity_references.json", registry);
+        for (const SceneProblem& problem : load.Problems) printf("      %s\n", problem.ToString().c_str());
+        Scene& scene = *load.Scene;
+        CHECK(load.Problems.size() == 7 && scene.GetEntityCount() == 10, "the fixture has seven problems and ten entities");
+        const std::string at = "/entities/";
+        CHECK(!HasProblem(load, "/components/Follow/target", "no entity") && !HasProblem(load, at + "0/components/Follow/target", "no entity") && !HasProblem(load, at + "1/components/Follow/target", "no entity"), "a reference to an entity later in the file, and back, is fine, from an entity and from the scene itself");
+        CHECK(!HasProblem(load, at + "2/components/Follow/target", "no entity") && !HasProblem(load, at + "3/components/Follow/target", "no entity"), "an empty reference means none, and an entity can refer to itself");
+        CHECK(HasProblem(load, at + "4/components/Follow/target", "no entity named 'playr' exists in the scene (did you mean 'player'?)") && scene.FindEntity("typo").Get<Follow>().Target == "playr", "a name that matches no entity is reported with a suggestion, and the component still loads");
+        CHECK(HasProblem(load, at + "5/components/Follow/target", "no entity named 'nobody' exists") && !HasProblem(load, at + "5/components/Follow/target", "did you mean") && scene.FindEntity("ghost").Has<Follow>(), "a name that is nothing like any entity has no suggestion");
+        CHECK(HasProblem(load, at + "7/components/Follow/target", "no entity named 'bad/name' exists"), "an entity that was skipped does not exist for references either");
+        CHECK(HasProblem(load, at + "8/components/Follow/target", "did you mean 'player'?") , "names are case sensitive, and the right case is suggested");
+        CHECK(HasProblem(load, at + "9/components/Follow/target", "expected a string, got a number") && !scene.FindEntity("type_error").Has<Follow>() && !HasProblem(load, at + "9/components/Follow/target", "no entity"), "a component that failed to load has no reference to check");
+        CHECK(HasProblem(load, at + "10/components/Follow/target", "no entity named '(scene)' exists"), "the scene's own entity is not an entity to refer to");
+        CHECK(load.Problems.back().Path == at + "10/components/Follow/target" && load.Problems[0].Path == at + "6/name" && load.Problems[1].Path == at + "9/components/Follow/target", "reference problems come after the others");
+
+        // a reference in the scene's own components
+        SceneLoadResult sceneRef = LoadSceneFromText(R"({"version": 1, "name": "x", "components": {"Follow": {"target": "nobody"}}, "entities": [{"name": "a"}]})", "inline", registry);
+        CHECK(HasProblem(sceneRef, "/components/Follow/target", "no entity named 'nobody'") && sceneRef.Scene->GetSceneEntity().Has<Follow>(), "a dangling reference in the scene's own components is reported too");
+        CHECK(LoadSceneFromText(R"({"version": 1, "name": "x", "entities": [{"name": "a", "components": {"Follow": {"target": "b"}}}, {"name": "b"}]})", "inline", registry).Ok(), "a forward reference loads clean");
+
+        // the tool
+        ToolRun run = RunTool(registry, { "validate", "Tests/SceneTests/fixtures/entity_references.json" });
+        CHECK(run.Code == 1 && Contains(run.Out, "/entities/4/components/Follow/target: no entity named 'playr' exists in the scene (did you mean 'player'?)") && Contains(run.Out, "FAIL  Tests/SceneTests/fixtures/entity_references.json: 7 problems"), "marle-scene validate reports them");
+
+        // strict reload refuses a file with a dangling reference
+        const std::filesystem::path work = std::filesystem::temp_directory_path() / "marle_scene_reference_test";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work);
+        const std::string file = (work / "scene.json").generic_string();
+        WriteFile(file, R"({"version": 1, "name": "ok", "entities": [{"name": "a"}, {"name": "b", "components": {"Follow": {"target": "a"}}}]})");
+        SceneReloader reloader(file, registry);
+        CHECK(reloader.Load().Ok(), "a scene with valid references loads");
+        WriteFile(file, R"({"version": 1, "name": "bad", "entities": [{"name": "a"}, {"name": "b", "components": {"Follow": {"target": "c"}}}]})");
+        std::filesystem::last_write_time(file, std::filesystem::file_time_type::clock::now() + std::chrono::minutes(5));
+        SceneReload refused = reloader.Poll();
+        CHECK(refused.Attempted && !refused.Scene && reloader.GetStatus().KeptPrevious && HasProblem(SceneLoadResult{ nullptr, reloader.GetStatus().Problems }, "/entities/1/components/Follow/target", "no entity named 'c'"), "strict reload refuses a dangling reference and keeps the scene that is running");
+        std::filesystem::remove_all(work);
+
+        // the writer
+        Scene good("Good");
+        good.GetSceneEntity().Add<Follow>().Target = "b";
+        good.CreateEntity("a").Add<Follow>().Target = "b";   // b does not exist yet when a is made
+        good.CreateEntity("b").Add<Follow>();                // an empty reference is fine
+        const std::string golden = R"({
+  "version": 1,
+  "name": "Good",
+  "components": {
+    "Follow": { "target": "b", "offset": [0, 0] }
+  },
+  "entities": [
+    {
+      "name": "a",
+      "components": {
+        "Follow": { "target": "b", "offset": [0, 0] }
+      }
+    },
+    {
+      "name": "b",
+      "components": {
+        "Follow": { "target": "", "offset": [0, 0] }
+      }
+    }
+  ]
+}
+)";
+        SceneSaveResult saved = SaveSceneToText(good, registry);
+        for (const std::string& problem : saved.Problems) printf("      %s\n", problem.c_str());
+        CHECK(saved.Ok() && saved.Text == golden, "references, forward ones and empty ones, are written as they are");
+        SceneLoadResult back = LoadSceneFromText(golden, "golden", registry);
+        CHECK(back.Ok() && SaveSceneToText(*back.Scene, registry).Text == golden, "and they read back clean");
+
+        Scene dangling("Dangling");
+        dangling.CreateEntity("a").Add<Follow>().Target = "ghost";
+        SceneSaveResult refusal = SaveSceneToText(dangling, registry);
+        CHECK(!refusal.Ok() && refusal.Problems[0].find("entity 'a' component 'Follow'/target: no entity named 'ghost' exists in the scene") != std::string::npos, "the writer refuses a reference to an entity that does not exist, so what is written loads clean");
+        Scene sceneLevel("SceneLevel");
+        sceneLevel.GetSceneEntity().Add<Follow>().Target = "ghost";
+        CHECK(!SaveSceneToText(sceneLevel, registry).Ok(), "and the same for the scene's own components");
+
+        // the schema describes it but cannot see whether the entity exists
+        const Json schema = GenerateSceneSchema(registry);
+        CHECK(schema["definitions"]["component_Follow"]["properties"]["target"]["description"] == "The entity to follow. The name of another entity in the scene; empty means none." && schema["definitions"]["component_Follow"]["properties"]["target"]["type"] == "string", "the schema says the field is the name of another entity");
+        CHECK(SchemaErrors(schema, ParseWithComments(ReadFile("Tests/SceneTests/fixtures/entity_references.json"))).size() == 2, "the schema sees only what it can (here the two bad entities), not which names exist");
+
+        // setting it up wrongly is logged and ignored
+        ComponentRegistry other;
+        other.Register<Follow>("Follow", "f")
+            .Field(&Follow::Offset, "offset", "o").EntityReference()                 // not a string
+            .Field(&Follow::Target, "target", "t").OneOf({ "" }).EntityReference();   // already a set of values
+        CHECK(!other.Find("Follow")->Fields[0].EntityReference && !other.Find("Follow")->Fields[1].EntityReference, "an entity reference on a non-string, or on a field limited to a set, is refused");
+        ComponentRegistry combos;
+        combos.Register<Follow>("Follow", "f").Field(&Follow::Target, "target", "t").EntityReference().AssetPath().OneOf({ "" });
+        CHECK(combos.Find("Follow")->Fields[0].EntityReference && !combos.Find("Follow")->Fields[0].AssetPath && combos.Find("Follow")->Fields[0].OneOf.empty(), "an entity reference cannot also be an asset path or a set of values");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

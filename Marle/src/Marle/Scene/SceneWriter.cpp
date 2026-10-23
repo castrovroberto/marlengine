@@ -125,9 +125,14 @@ namespace Marle {
                 for (const ValidationError& error : registry.Read(scratch.CreateEntity("check"), component, data))
                     writer.Report(at + error.Path, error.Message);
                 for (const FieldInfo& field : registry.Find(component)->Fields) {
-                    if (!field.AssetPath || !data[field.Name].is_string()) continue;
-                    std::string why = AssetPathProblem(data[field.Name].get<std::string>());
-                    if (!why.empty()) writer.Report(at + "/" + field.Name, why);
+                    if (!data[field.Name].is_string()) continue;
+                    const std::string& value = data[field.Name].get_ref<const std::string&>();
+                    if (field.AssetPath) {
+                        std::string why = AssetPathProblem(value);
+                        if (!why.empty()) writer.Report(at + "/" + field.Name, why);
+                    }
+                    if (field.EntityReference && !value.empty() && !scene.FindEntity(value))
+                        writer.Report(at + "/" + field.Name, "no entity named '" + value + "' exists in the scene");
                 }
 
                 const ComponentInfo* info = registry.Find(component);

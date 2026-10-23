@@ -40,6 +40,7 @@ namespace Marle {
         FieldType Type = FieldType::Float;
         bool Required = false;                  // must appear in the data; otherwise the default is used
         bool AssetPath = false;                 // a string naming a file, relative to the working directory
+        bool EntityReference = false;           // a string naming another entity in the scene; empty means none
         Json Default;                           // the value of a default-constructed component
         std::optional<double> Min, Max;         // applied to every number in the field
         std::vector<std::string> OneOf;         // for a string: the only values allowed, empty means any string
@@ -360,11 +361,29 @@ namespace Marle {
                     detail::ReportRegistryError("field '" + m_Last->Name + "': OneOf needs at least one value");
                 } else if (std::set<std::string>(values.begin(), values.end()).size() != values.size()) {
                     detail::ReportRegistryError("field '" + m_Last->Name + "': OneOf has a value that is listed twice");
+                } else if (m_Last->EntityReference) {
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is an entity reference, so it cannot be limited to a set of values");
                 } else if (std::find(values.begin(), values.end(), m_Last->Default.get<std::string>()) == values.end()) {
                     detail::ReportRegistryError("field '" + m_Last->Name + "': its default '" + m_Last->Default.get<std::string>() + "' is not one of the allowed values");
                 } else {
                     m_Last->OneOf = std::move(values);
                 }
+                return *this;
+            }
+
+            // Marks the last field, which must be a string, as the name of another entity in the scene
+            // (empty means none). After every entity is loaded, the scene loader reports a name that
+            // matches no entity, with the path of the reference; the component still loads. A field
+            // cannot also be an asset path or limited to a set of values.
+            ComponentBuilder& EntityReference()
+            {
+                if (!m_Last) return *this;
+                if (m_Last->Type != FieldType::String)
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is not a string, so it cannot be an entity reference");
+                else if (m_Last->AssetPath || !m_Last->OneOf.empty())
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is already an asset path or limited to a set of values, so it cannot be an entity reference");
+                else
+                    m_Last->EntityReference = true;
                 return *this;
             }
 
@@ -374,6 +393,8 @@ namespace Marle {
             {
                 if (m_Last && m_Last->Type != FieldType::String)
                     detail::ReportRegistryError("field '" + m_Last->Name + "' is not a string, so it cannot be an asset path");
+                else if (m_Last && m_Last->EntityReference)
+                    detail::ReportRegistryError("field '" + m_Last->Name + "' is an entity reference, so it cannot also be an asset path");
                 else if (m_Last)
                     m_Last->AssetPath = true;
                 return *this;

@@ -142,6 +142,11 @@ namespace Marle {
         result.Scene = std::make_unique<Scene>(name);
         Scene& scene = *result.Scene;
 
+        // Entity references found while loading, resolved once every entity exists (so a reference to an
+        // entity later in the file is fine)
+        struct Reference { std::string Path, Name; };
+        std::vector<Reference> references;
+
         // The components of an entity, or of the scene itself: `path` is where the components object is
         auto loadComponents = [&](Entity entity, const Json& components, const std::string& path) {
             for (auto it = components.begin(); it != components.end(); ++it) {
@@ -163,6 +168,12 @@ namespace Marle {
                 for (size_t i = 0; i < errors.size(); i++)
                     problem(componentAt + errors[i].Path, errors[i].Message + (i == 0 ? "; the component is skipped" : ""));
                 if (!errors.empty()) continue;
+
+                for (const FieldInfo& field : info->Fields) {
+                    auto value = it.value().find(field.Name);
+                    if (field.EntityReference && value != it.value().end() && !value->get<std::string>().empty())
+                        references.push_back({ componentAt + "/" + field.Name, value->get<std::string>() });
+                }
 
                 // A missing asset is reported, but the component loads so the entity still shows up
                 // (a missing image is drawn as the error checker)
@@ -217,6 +228,18 @@ namespace Marle {
             if (!components.is_object()) { problem(at + "/components", std::string("expected an object, got ") + detail::JsonTypeName(components)); continue; }
 
             loadComponents(entity, components, at + "/components");
+        }
+
+        // References to entities: the component stays loaded, and behavior that uses it does nothing
+        // until the name is right
+        if (!references.empty()) {
+            std::vector<std::string> names;
+            for (const Entity& entity : scene.GetEntities()) names.push_back(entity.GetName());
+            for (const Reference& reference : references) {
+                if (scene.FindEntity(reference.Name)) continue;
+                std::string hint = detail::SuggestionFor(reference.Name, names);
+                problem(reference.Path, "no entity named '" + reference.Name + "' exists in the scene" + (hint.empty() ? "" : " (" + hint + ")") + "; the component still loads, but nothing uses the reference until it is fixed");
+            }
         }
 
         return result;

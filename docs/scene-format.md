@@ -87,7 +87,7 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 
 **Units.** World coordinates have Y pointing up. Angles are radians, counter-clockwise. Colors are floats from 0 to 1.
 
-**References.** An asset is referred to by a path relative to the working directory, written with `/`, with no `..`. Anything that refers to another entity uses its `name`. A reference to something that does not exist is reported with the file and path of the reference, and the rest of the scene still loads (see Errors).
+**References.** An asset is referred to by a path relative to the working directory, written with `/`, with no `..`. Anything that refers to another entity uses its `name`; such a field says so in the schema, and an empty string means no reference. Names are checked once every entity has loaded, so an entity may refer to one that comes later in the file, or to itself. A reference to something that does not exist is reported with the file and path of the reference, and the rest of the scene still loads (see Errors).
 
 ## How a scene is drawn
 
@@ -112,7 +112,7 @@ The engine reads any layout that follows the rules above. When it writes a scene
 - Comments are not kept. Writing a scene drops them, and the engine never rewrites a file on its own, so comments in a hand-written file are only lost if you ask the engine to save over it.
 - Components the registry does not know are not written.
 
-What is written always reads back. If the scene holds something a file cannot (an entity name the rules forbid, a number that is not finite, a value outside its field's range, an unsafe asset path, text that is not valid UTF-8), nothing is written, every reason is reported, and any existing file is left as it was. Files are written to a temporary file beside the target and renamed into place, so a failed save never leaves a half-written scene.
+What is written always reads back. If the scene holds something a file cannot (an entity name the rules forbid, a number that is not finite, a value outside its field's range, an unsafe asset path, a reference to an entity that does not exist, text that is not valid UTF-8), nothing is written, every reason is reported, and any existing file is left as it was. Files are written to a temporary file beside the target and renamed into place, so a failed save never leaves a half-written scene.
 
 ## Errors
 
@@ -133,6 +133,7 @@ Assets/Scenes/world.json /entities/3/components/Transform/position: expected an 
 | Scene `components` that is not an object, or a bad scene component | Reported with the same rules and paths as an entity's (for example `/components/Camera/zoom`); the entities load. |
 | An asset path that is absolute, uses `\`, or contains `..` | The component is skipped, so a scene file cannot point at files outside the working directory. |
 | An asset file that does not exist | Reported, but the component loads, so the entity still shows up (a missing image is drawn as the magenta and black error checker). |
+| A reference to an entity that does not exist (an entity that was skipped does not exist either, and neither does the scene's own entity) | Reported with a suggestion when a name is close, after the other problems; the component still loads, but nothing uses the reference until it is fixed. |
 
 Some mistakes make the file unusable, and then no scene is loaded and the problem says why: the file cannot be opened or parsed (the message names the line and column), the top level is not an object, `version` is missing, not an integer or not supported, or a key is repeated outside an entity and the scene's `components`. A missing `name` is only a problem (the scene is called `Untitled`), and so is a missing or malformed `entities`.
 
@@ -142,7 +143,7 @@ Problems come back as a list: repeated keys first (they are found while parsing)
 
 `Assets/Scenes/scene.schema.json` is a JSON Schema (draft-07) generated from the component registry, so it lists exactly the components and fields the engine knows, each with its type, default, range and description. Editors use it for completion and checking, and an AI can read it to learn what is allowed. It is committed, and a test fails if it is out of date after a component changes; regenerate it (and the canonical test fixture) with `MARLE_UPDATE_GOLDEN=1 ./bin/Debug-linux-x86_64/SceneTests/SceneTests`, from the repository root.
 
-The schema accepts and rejects the same files as the loader, with exceptions that a schema cannot express: two entities with the same name, an asset file that does not exist, a key repeated within an object, and rules that span fields (tile rows of equal length, tile characters that exist). The loader is the authority. A test checks the agreement against every fixture file and against the name and asset path rules.
+The schema accepts and rejects the same files as the loader, with exceptions that a schema cannot express: two entities with the same name, an asset file that does not exist, a key repeated within an object, and rules that span fields (tile rows of equal length, tile characters that exist), and whether an entity a reference names exists. The loader is the authority. A test checks the agreement against every fixture file and against the name and asset path rules.
 
 ## Reloading while the game runs
 
