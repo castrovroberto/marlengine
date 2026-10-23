@@ -154,6 +154,12 @@ namespace Marle {
                 transform->Position += glm::vec2(cosf(wander.Heading), sinf(wander.Heading)) * wander.Speed * (float)ctx.Dt;
             });
 
+        registry.Register<RestartOnKey>("RestartOnKey", "Behavior, for the scene itself (its top-level components): asks the host to restart the scene when the key is pressed. The Sandbox loads the scene from its file again, so everything goes back to how the file has it.")
+            .Field(&RestartOnKey::Key, "key", "The key that restarts the scene.").OneOf(KeyNames())
+            .Behavior([](RestartOnKey& restart, BehaviorContext& ctx) {
+                if (ctx.Input.WasPressed(KeyOf(restart.Key))) ctx.Scene.RequestRestart();
+            });
+
         registry.Register<ClampPosition>("ClampPosition", "Behavior: keeps the entity's position inside the rectangle from min to max. Put it after whatever moves the entity (such as KeyboardMove) on the same entity.")
             .Field(&ClampPosition::Min, "min", "The lower left corner [x, y], in world units.")
             .Field(&ClampPosition::Max, "max", "The upper right corner [x, y], in world units; not smaller than min on either axis.")

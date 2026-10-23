@@ -44,6 +44,13 @@ namespace Marle {
             // Restarts the generator from the seed in the scene's own Random component (seed 1 if none)
             void ResetRandom();
 
+            // A behavior cannot reload a scene, so one that wants a restart asks (RestartOnKey does), and the
+            // host decides what restarting means (the Sandbox loads the scene from its file again). It is
+            // runtime state: not in a scene file and not in a checksum.
+            void RequestRestart() { m_RestartRequested = true; }
+            bool IsRestartRequested() const { return m_RestartRequested; }
+            void ClearRestartRequest() { m_RestartRequested = false; }
+
             // The entity with this name, or an invalid Entity.
             Entity FindEntity(const std::string& name) const;
 
@@ -65,6 +72,7 @@ namespace Marle {
             std::string m_Name;
             std::shared_ptr<detail::SceneState> m_State;
             RandomGenerator m_Random;
+            bool m_RestartRequested = false;
     };
 
     template<typename... Components, typename Fn>

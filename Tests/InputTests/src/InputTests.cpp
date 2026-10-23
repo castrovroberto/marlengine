@@ -224,6 +224,50 @@ int main()
         CHECK(KeyNames().front() == "A" && KeyNames()[25] == "Z" && KeyNames()[26] == "0" && KeyNames()[35] == "9" && KeyNames()[36] == "Space", "the list starts with the letters, then the digits");
     }
 
+    // ---- events that a layer handled
+    {
+        Input::TakeFrame();
+        KeyPressedEvent handledPress(Key::W, 0);
+        handledPress.SetHandled();
+        Input::OnEvent(handledPress);
+        InputFrame none = Input::TakeFrame();
+        CHECK(!Input::IsKeyPressed(Key::W) && none.Down.none() && none.Pressed.none(), "a key press a layer handled is not input");
+
+        Send(KeyPressedEvent(Key::W, 0));
+        KeyReleasedEvent handledRelease(Key::W);
+        handledRelease.SetHandled();
+        Input::OnEvent(handledRelease);
+        CHECK(!Input::IsKeyPressed(Key::W), "but a release always gets through, so a key never sticks");
+        Input::TakeFrame();
+
+        MouseScrolledEvent handledScroll(0.0f, 4.0f);
+        handledScroll.SetHandled();
+        Input::OnEvent(handledScroll);
+        Send(MouseScrolledEvent(0.0f, 1.0f));
+        CHECK(Input::TakeFrame().Scroll == 1.0f, "wheel movement a layer handled is not counted, the rest is");
+
+        MouseButtonPressedEvent handledClick(Mouse::Left);
+        handledClick.SetHandled();
+        Input::OnEvent(handledClick);
+        CHECK(!Input::IsMouseButtonPressed(Mouse::Left), "a mouse button press a layer handled is not input");
+        Send(MouseButtonPressedEvent(Mouse::Left));
+        MouseButtonReleasedEvent handledButtonRelease(Mouse::Left);
+        handledButtonRelease.SetHandled();
+        Input::OnEvent(handledButtonRelease);
+        CHECK(!Input::IsMouseButtonPressed(Mouse::Left), "and its release always gets through");
+
+        MouseMovedEvent handledMove(5.0f, 6.0f);
+        handledMove.SetHandled();
+        Input::OnEvent(handledMove);
+        CHECK(Input::GetMousePosition() == glm::vec2(5.0f, 6.0f), "the mouse position follows moves whoever handled them");
+
+        Send(KeyPressedEvent(Key::D, 0));
+        WindowLostFocusEvent lost;
+        lost.SetHandled();
+        Input::OnEvent(lost);
+        CHECK(!Input::IsKeyPressed(Key::D) && Input::TakeFrame().Down.none(), "losing focus releases everything even when handled");
+    }
+
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);
     return fails ? 1 : 0;
 }

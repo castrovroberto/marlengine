@@ -153,6 +153,13 @@ namespace Marle {
 
     void RegisterBuiltinBehaviors(ComponentRegistry& registry);   // BuiltinBehaviors.cpp
 
+    bool ComponentRegistry::Remove(Entity entity, const std::string& component) const
+    {
+        for (const auto& registered : m_Components)
+            if (registered->Info.Name == component) return registered->RemoveFrom(entity);
+        return false;
+    }
+
     void ComponentRegistry::RunBehaviors(Entity entity, BehaviorContext& context) const
     {
         for (const auto& component : m_Components)

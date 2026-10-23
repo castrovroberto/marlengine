@@ -273,6 +273,7 @@ namespace Marle {
             virtual void Read(Entity& entity, const Json& data, std::vector<ValidationError>& errors) const = 0;
             virtual Json Write(const Entity& entity, bool skipDefaults) const = 0;
             virtual void RunBehavior(Entity, BehaviorContext&) const {}
+            virtual bool RemoveFrom(Entity entity) const = 0;
         };
 
         template<typename T>
@@ -337,6 +338,8 @@ namespace Marle {
                 }
                 entity.Add<T>(std::move(value));
             }
+
+            bool RemoveFrom(Entity entity) const override { return entity.Remove<T>(); }
 
             void RunBehavior(Entity entity, BehaviorContext& context) const override
             {
@@ -494,6 +497,9 @@ namespace Marle {
             // Runs the entity's behavior components, in registration order
             void RunBehaviors(Entity entity, BehaviorContext& context) const;
 
+            // Takes the named component off the entity; true if it had it
+            bool Remove(Entity entity, const std::string& component) const;
+
         private:
             bool Add(const std::shared_ptr<detail::ComponentImpl>& impl);
 
@@ -501,8 +507,8 @@ namespace Marle {
     };
 
     // Registers Transform, SpriteRenderer, Camera, Tilemap and Random, then the built-in behaviors:
-    // KeyboardMove, KeyboardRotate, WheelZoom, Follow, Spin, Orbit, Wander and, last so that it always
-    // runs last on an entity, ClampPosition.
+    // KeyboardMove, KeyboardRotate, WheelZoom, Follow, Spin, Orbit, Wander, RestartOnKey (for the scene
+    // itself) and, last so that it always runs last on an entity, ClampPosition.
     EXPORT void RegisterBuiltinComponents(ComponentRegistry& registry);
 
     template<typename T>

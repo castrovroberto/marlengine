@@ -64,8 +64,6 @@ namespace Marle {
 
     void Application::HandleEvent(Event& e)
     {
-        Input::OnEvent(e);
-
         switch (e.GetEventType()) {
             case EventType::WindowClose:
                 m_Running = false;
@@ -84,6 +82,11 @@ namespace Marle {
         }
 
         m_LayerStack.DispatchEvent(e);
+
+        // Input sees the event after the layers, so a press, scroll or click that a layer took (ImGui over
+        // one of its windows, say) is not input for the game; releases always get through, so no key sticks
+        Input::OnEvent(e);
+
         if (!e.IsHandled())
             OnEvent(e);
     }

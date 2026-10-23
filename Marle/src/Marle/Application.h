@@ -20,6 +20,11 @@ namespace Marle
             void Close() { m_Running = false; } // the loop exits after the current frame
             virtual void OnEvent(Event& e);
 
+            // What the window calls for each event (public so tests can send events the way the window does):
+            // engine-level handling (close, resize, Escape), then the layers top to bottom, then Input for what
+            // they left (releases always), then OnEvent() if nothing handled it.
+            void HandleEvent(Event& e);
+
             // Layers update and render after the application's own OnUpdate/OnRender (bottom to top)
             // and see events before OnEvent (top to bottom, until handled). The application owns them
             // and detaches them, with the GL context still alive, when it is destroyed.
@@ -49,8 +54,6 @@ namespace Marle
             void InitGraphics();
             void ShutdownGraphics();
 
-            // Window callback: handles engine-level events, then forwards to OnEvent().
-            void HandleEvent(Event& e);
             void HandleResize(unsigned int width, unsigned int height);
 
             std::unique_ptr<Window> m_Window;

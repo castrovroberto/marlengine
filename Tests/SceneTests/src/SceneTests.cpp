@@ -315,7 +315,7 @@ int main(int argc, char** argv)
         ComponentRegistry registry;
         RegisterBuiltinComponents(registry);
         std::vector<std::string> names = registry.GetNames();
-        CHECK(names == std::vector<std::string>({ "Transform", "SpriteRenderer", "Camera", "Tilemap", "Random", "KeyboardMove", "KeyboardRotate", "WheelZoom", "Follow", "Spin", "Orbit", "Wander", "ClampPosition" }), "the built-in components register in order, the behaviors last, ClampPosition after all of them");
+        CHECK(names == std::vector<std::string>({ "Transform", "SpriteRenderer", "Camera", "Tilemap", "Random", "KeyboardMove", "KeyboardRotate", "WheelZoom", "Follow", "Spin", "Orbit", "Wander", "RestartOnKey", "ClampPosition" }), "the built-in components register in order, the behaviors last, ClampPosition after all of them");
 
         const ComponentInfo* transform = registry.Find("Transform");
         CHECK(transform && !transform->Description.empty() && transform->Fields.size() == 3, "a component has a description and its fields");
@@ -813,7 +813,7 @@ int main(int argc, char** argv)
 
         std::string order;
         for (auto it = schema["definitions"].begin(); it != schema["definitions"].end(); ++it) order += it.key() + " ";
-        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Random component_KeyboardMove component_KeyboardRotate component_WheelZoom component_Follow component_Spin component_Orbit component_Wander component_ClampPosition ", "components are described in registration order");
+        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Random component_KeyboardMove component_KeyboardRotate component_WheelZoom component_Follow component_Spin component_Orbit component_Wander component_RestartOnKey component_ClampPosition ", "components are described in registration order");
         CHECK(schema["definitions"]["entity"]["properties"]["components"]["properties"]["Camera"]["$ref"] == "#/definitions/component_Camera", "an entity's components point at their definitions");
 
         bool everyField = true, described = !schema["description"].get<std::string>().empty();
@@ -2610,6 +2610,142 @@ int main(int argc, char** argv)
 
         CHECK(HasProblem(problems("Wander", R"("changeEvery": 0)"), "/entities/0/components/Wander/changeEvery", "must be at least 0.01") && HasProblem(problems("Wander", R"("speed": -5)"), "/entities/0/components/Wander/speed", "must be at least 0") && HasProblem(problems("Wander", R"("timer": -1)"), "/entities/0/components/Wander/timer", "must be at least 0") && HasProblem(problems("Wander", R"("timer": 4000)"), "/entities/0/components/Wander/timer", "must be at most 3600"), "a zero interval, a negative speed and a bad timer are refused");
         CHECK(Contains(SaveSceneToText(*problems("Wander", R"("speed": 60, "changeEvery": 0.75, "heading": 1.5, "timer": 0.25)").Scene, registry).Text, R"("Wander": { "speed": 60, "changeEvery": 0.75, "heading": 1.5, "timer": 0.25 })"), "it is written with its state");
+    }
+
+    // restarting: RestartOnKey, and the scene's restart request
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto load = [&](const std::string& scene, const std::string& entities = "") { return LoadSceneFromText(R"({"version": 1, "name": "t", )" + scene + R"("entities": [)" + entities + "]}", "inline", registry); };
+        auto stepWith = [&](Scene& scene, const InputFrame& input, int n = 1) { for (int i = 0; i < n; i++) Simulation::Step(registry, scene, input, 1.0 / 60.0); };
+
+        const ComponentInfo* info = registry.Find("RestartOnKey");
+        CHECK(info->IsBehavior && info->Fields.size() == 1 && info->Fields[0].Default == "R" && info->Fields[0].OneOf == KeyNames() && Contains(info->Description, "restart"), "RestartOnKey is a behavior with a key, R by default");
+
+        Scene plain("p");
+        CHECK(!plain.IsRestartRequested(), "a scene is not asking for a restart");
+        plain.RequestRestart();
+        CHECK(plain.IsRestartRequested(), "it can be asked to");
+        plain.ClearRestartRequest();
+        CHECK(!plain.IsRestartRequested(), "and cleared");
+
+        SceneLoadResult restart = load(R"("components": {"RestartOnKey": {}}, )", R"({"name": "c", "components": {"Counter": {}}})");
+        stepWith(*restart.Scene, InputFrame().Hold(Key::R), 3);
+        CHECK(!restart.Scene->IsRestartRequested(), "a key that is only held does not ask for a restart");
+        stepWith(*restart.Scene, InputFrame().Press(Key::Q));
+        CHECK(!restart.Scene->IsRestartRequested(), "another key does not");
+        stepWith(*restart.Scene, InputFrame().Press(Key::R));
+        CHECK(restart.Scene->IsRestartRequested(), "pressing the key does");
+        stepWith(*restart.Scene, InputFrame(), 5);
+        CHECK(restart.Scene->IsRestartRequested(), "and the request stays until the host clears it");
+        restart.Scene->ClearRestartRequest();
+        stepWith(*restart.Scene, InputFrame());
+        CHECK(!restart.Scene->IsRestartRequested(), "once cleared it is not asked again");
+        InputFrame tap; tap.Press(Key::R).Release(Key::R);
+        stepWith(*restart.Scene, tap);
+        CHECK(restart.Scene->IsRestartRequested(), "a tap that was released before the step still counts as a press");
+
+        SceneLoadResult custom = load(R"("components": {"RestartOnKey": {"key": "F5"}}, )");
+        stepWith(*custom.Scene, InputFrame().Press(Key::R));
+        CHECK(!custom.Scene->IsRestartRequested(), "with another key chosen, R does nothing");
+        stepWith(*custom.Scene, InputFrame().Press(Key::F5));
+        CHECK(custom.Scene->IsRestartRequested(), "and that key does");
+        SceneLoadResult onEntity = load("", R"({"name": "e", "components": {"RestartOnKey": {}}})");
+        stepWith(*onEntity.Scene, InputFrame().Press(Key::R));
+        CHECK(onEntity.Scene->IsRestartRequested(), "it works on an entity too");
+
+        // the request is runtime state
+        SceneLoadResult checked = load("", R"({"name": "c", "components": {"Counter": {}}})");
+        uint64_t before = Simulation::Checksum(registry, *checked.Scene);
+        checked.Scene->RequestRestart();
+        CHECK(Simulation::Checksum(registry, *checked.Scene) == before && !Contains(SaveSceneToText(*checked.Scene, registry).Text, "estart"), "a request is not in the checksum or in a saved scene");
+        CHECK(!load(R"("components": {"RestartOnKey": {}}, )").Scene->IsRestartRequested(), "a loaded scene is not asking");
+
+        CHECK(HasProblem(LoadSceneFromText(R"({"version": 1, "name": "t", "components": {"RestartOnKey": {"key": "r"}}, "entities": []})", "inline", registry), "/components/RestartOnKey/key", "did you mean 'R'?") && HasProblem(LoadSceneFromText(R"({"version": 1, "name": "t", "components": {"RestartOnKey": {"key": ""}}, "entities": []})", "inline", registry), "/components/RestartOnKey/key", "got ''"), "a mistyped key is suggested and no key is refused");
+
+        // taking a component off by name
+        SceneLoadResult removal = load("", R"({"name": "e", "components": {"Camera": {}, "Spin": {}}})");
+        Entity e = removal.Scene->FindEntity("e");
+        CHECK(registry.Remove(e, "Spin") && !e.Has<Spin>() && e.Has<Camera>() && !registry.Remove(e, "Spin") && !registry.Remove(e, "Nope") && !registry.Remove(Entity(), "Camera"), "a component can be taken off by name, once, and an unknown name or an invalid entity does nothing");
+    }
+
+    // keeping the state of a running scene when its file changes
+    {
+        ComponentRegistry registry = MakeSimulationRegistry();
+        auto load = [&](const std::string& text) { return LoadSceneFromText(text, "inline", registry); };
+        auto stepWith = [&](Scene& scene, const InputFrame& input, int n = 1) { for (int i = 0; i < n; i++) Simulation::Step(registry, scene, input, 1.0 / 60.0); };
+        auto world = [](const std::string& playerMove = R"("speed": 60)", const std::string& playerPosition = "[100, 100]", const std::string& extra = "", const std::string& seed = "5") {
+            return R"({"version": 1, "name": "w", "components": {"Random": {"seed": )" + seed + R"(}}, "entities": [
+                {"name": "player", "components": {"Transform": {"position": )" + playerPosition + R"(}, "KeyboardMove": {)" + playerMove + R"(, "relativeTo": "camera"}}},
+                {"name": "light", "components": {"Transform": {}, "Orbit": {"target": "player", "radius": 20, "speed": 2}}},
+                {"name": "rabbit", "components": {"Transform": {"position": [300, 300]}, "Wander": {"speed": 40, "changeEvery": 0.5}}},
+                {"name": "camera", "components": {"Transform": {}, "Camera": {"primary": true}, "Follow": {"target": "player"}, "KeyboardRotate": {}, "WheelZoom": {}}})" + extra + "]}";
+        };
+        InputFrame keys; keys.Hold(Key::W).Hold(Key::D).Hold(Key::Q); keys.Scroll = 0.0f;
+        InputFrame wheel; wheel.Scroll = 2.0f;
+        auto runFor = [&](Scene& scene) { stepWith(scene, keys, 80); stepWith(scene, wheel); stepWith(scene, keys, 40); };
+
+        const std::string baselineText = world();
+        SceneLoadResult baseline = load(baselineText), running = load(baselineText);
+        runFor(*running.Scene);
+        CHECK(glm::length(running.Scene->FindEntity("player").Get<Transform>().Position - glm::vec2(100.0f, 100.0f)) > 20.0f && running.Scene->FindEntity("camera").Get<Camera>().Zoom > 1.0f && running.Scene->FindEntity("camera").Get<Transform>().Rotation > 1.0f && running.Scene->FindEntity("light").Get<Orbit>().Angle > 3.0f, "the scene has been run: the player moved, the camera turned and zoomed, the light went round");
+
+        // the same file again: nothing is lost, and the scene carries on exactly as if it had never been reloaded
+        SceneLoadResult same = load(baselineText);
+        CarryOverState(registry, *baseline.Scene, *running.Scene, *same.Scene);
+        CHECK(Simulation::Checksum(registry, *same.Scene) == Simulation::Checksum(registry, *running.Scene), "reloading an unchanged file gives a scene in exactly the state of the running one, the random sequence included");
+        CHECK(running.Scene->FindEntity("player").Has<PreviousTransform>() && !same.Scene->FindEntity("player").Has<PreviousTransform>(), "a previous transform is runtime data: the running scene has one, the carried scene gets its own from its next step");
+        stepWith(*same.Scene, keys, 60);
+        stepWith(*running.Scene, keys, 60);
+        CHECK(same.Scene->FindEntity("player").Has<PreviousTransform>(), "which it then has");
+        CHECK(Simulation::Checksum(registry, *same.Scene) == Simulation::Checksum(registry, *running.Scene), "and the two stay together when they run on");
+
+        // an edit to one value: the new value, and everything else as it had got to
+        SceneLoadResult faster = load(world(R"("speed": 120)"));
+        glm::vec2 playerNow = running.Scene->FindEntity("player").Get<Transform>().Position;
+        CarryOverState(registry, *baseline.Scene, *running.Scene, *faster.Scene);
+        CHECK(faster.Scene->FindEntity("player").Get<KeyboardMove>().Speed == 120.0f && faster.Scene->FindEntity("player").Get<Transform>().Position == playerNow, "a changed setting takes effect and the player stays where it was");
+        CHECK(faster.Scene->FindEntity("light").Get<Orbit>().Angle == running.Scene->FindEntity("light").Get<Orbit>().Angle && faster.Scene->FindEntity("camera").Get<Camera>().Zoom == running.Scene->FindEntity("camera").Get<Camera>().Zoom && faster.Scene->FindEntity("rabbit").Get<Transform>().Position == running.Scene->FindEntity("rabbit").Get<Transform>().Position, "and the other entities keep their state");
+
+        // the author moved the player: that wins, and the rest still carries
+        SceneLoadResult moved = load(world(R"("speed": 60)", "[500, 500]"));
+        CarryOverState(registry, *baseline.Scene, *running.Scene, *moved.Scene);
+        CHECK(moved.Scene->FindEntity("player").Get<Transform>().Position == glm::vec2(500.0f, 500.0f) && moved.Scene->FindEntity("camera").Get<Transform>().Rotation == running.Scene->FindEntity("camera").Get<Transform>().Rotation, "a value the file changed is the file's, even though the simulation had moved it");
+
+        // seeds
+        SceneLoadResult reseeded = load(world(R"("speed": 60)", "[100, 100]", "", "6"));
+        CarryOverState(registry, *baseline.Scene, *running.Scene, *reseeded.Scene);
+        CHECK(reseeded.Scene->GetRandom().GetState() == RandomGenerator(6).GetState() && reseeded.Scene->GetRandom().GetState() != running.Scene->GetRandom().GetState(), "a changed seed starts the random sequence again");
+
+        // entities and components added and removed
+        SceneLoadResult edited = load(world(R"("speed": 60)", "[100, 100]", R"(, {"name": "newcomer", "components": {"Transform": {"position": [9, 9]}, "Spin": {"speed": 3}}})"));
+        edited.Scene->FindEntity("rabbit").Remove<Wander>();
+        CarryOverState(registry, *baseline.Scene, *running.Scene, *edited.Scene);
+        CHECK(edited.Scene->FindEntity("newcomer").Get<Transform>().Position == glm::vec2(9.0f, 9.0f) && edited.Scene->FindEntity("newcomer").Get<Spin>().Speed == 3.0f && !edited.Scene->FindEntity("rabbit").Has<Wander>() && edited.Scene->FindEntity("rabbit").Get<Transform>().Position == running.Scene->FindEntity("rabbit").Get<Transform>().Position, "an entity added in the file is as the file has it, and a component removed stays removed");
+        const std::string withoutLight = R"({"version": 1, "name": "w", "components": {"Random": {"seed": 5}}, "entities": [{"name": "player", "components": {"Transform": {"position": [100, 100]}}}, {"name": "renamed_rabbit", "components": {"Transform": {"position": [300, 300]}}}]})";
+        SceneLoadResult trimmed = load(withoutLight);
+        CarryOverState(registry, *baseline.Scene, *running.Scene, *trimmed.Scene);
+        CHECK(!trimmed.Scene->FindEntity("light") && trimmed.Scene->FindEntity("renamed_rabbit").Get<Transform>().Position == glm::vec2(300.0f, 300.0f) && trimmed.Scene->FindEntity("player").Get<Transform>().Position == playerNow, "an entity removed from the file is gone, and a renamed one starts over as a new entity");
+
+        // a file that changed a component and then the simulation: only that component is the file's
+        SceneLoadResult both = load(world(R"("speed": 60)", "[100, 100]", R"(, {"name": "late", "components": {"Counter": {}}})"));
+        SceneLoadResult baseWithLate = load(world(R"("speed": 60)", "[100, 100]", R"(, {"name": "late", "components": {"Counter": {}}})"));
+        stepWith(*both.Scene, keys, 10);
+        SceneLoadResult next = load(world(R"("speed": 60)", "[100, 100]", R"(, {"name": "late", "components": {"Counter": {"every": 5}}})"));
+        CarryOverState(registry, *baseWithLate.Scene, *both.Scene, *next.Scene);
+        CHECK(next.Scene->FindEntity("late").Get<Counter>().Every == 5 && next.Scene->FindEntity("late").Get<Counter>().Count == 0, "a component the file changed is as the file has it (its running count is not mixed in)");
+        CHECK(next.Scene->FindEntity("player").Get<Transform>().Position == both.Scene->FindEntity("player").Get<Transform>().Position, "while the unchanged player carries");
+
+        // reload twice in a row, each time from the file as it then was: still one continuous run
+        SceneLoadResult chainA = load(baselineText), chainRun = load(baselineText), chainControl = load(baselineText);
+        stepWith(*chainRun.Scene, keys, 30); stepWith(*chainControl.Scene, keys, 30);
+        SceneLoadResult second = load(baselineText);
+        CarryOverState(registry, *chainA.Scene, *chainRun.Scene, *second.Scene);
+        stepWith(*second.Scene, keys, 30); stepWith(*chainControl.Scene, keys, 30);
+        SceneLoadResult baselineAgain = load(baselineText), third = load(baselineText);
+        CarryOverState(registry, *baselineAgain.Scene, *second.Scene, *third.Scene);
+        stepWith(*third.Scene, keys, 30); stepWith(*chainControl.Scene, keys, 30);
+        CHECK(Simulation::Checksum(registry, *third.Scene) == Simulation::Checksum(registry, *chainControl.Scene), "two reloads along the way leave the run exactly as an unbroken one");
     }
 
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL PASSED", fails);

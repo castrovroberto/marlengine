@@ -49,6 +49,7 @@ namespace Marle {
     {
         switch (e.GetEventType()) {
             case EventType::KeyPressed: {
+                if (e.IsHandled()) break;
                 auto& pressed = static_cast<const KeyPressedEvent&>(e);
                 int key = pressed.GetKeyCode();
                 if (key >= 0 && key < MaxKeys) {
@@ -58,6 +59,7 @@ namespace Marle {
                 break;
             }
             case EventType::MouseScrolled:
+                if (e.IsHandled()) break;
                 s_ScrollSinceFrame += static_cast<const MouseScrolledEvent&>(e).GetYOffset();
                 break;
             case EventType::KeyReleased: {
@@ -66,6 +68,7 @@ namespace Marle {
                 break;
             }
             case EventType::MouseButtonPressed: {
+                if (e.IsHandled()) break;
                 int button = static_cast<const MouseButtonPressedEvent&>(e).GetMouseButton();
                 if (button >= 0 && button < MaxMouseButtons) s_MouseButtons.set(button);
                 break;

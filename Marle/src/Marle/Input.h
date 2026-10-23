@@ -28,7 +28,10 @@ namespace Marle {
             // scroll. Key repeats are not presses. Losing focus drops presses that were not yet delivered.
             static InputFrame TakeFrame();
 
-            // Feeds an event into the state. Called by Application; exposed for tests.
+            // Feeds an event into the state. Called by Application after the layers have seen it; exposed for
+            // tests. An event a layer marked handled does not count as a key press, a wheel movement or a mouse
+            // button press (the game should not react to a click that ImGui took), but a release, a mouse move
+            // and losing focus always do, so nothing is left held down.
             static void OnEvent(const Event& e);
     };
 

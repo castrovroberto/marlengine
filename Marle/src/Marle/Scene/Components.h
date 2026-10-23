@@ -121,6 +121,11 @@ namespace Marle {
         float Timer = 0.0f;                         // seconds until the next new direction; 0 picks one on the first step
     };
 
+    // On the scene itself: asks the host to restart the scene when a key is pressed.
+    struct RestartOnKey {
+        std::string Key = "R";
+    };
+
     // Keeps the entity's position inside a rectangle.
     struct ClampPosition {
         glm::vec2 Min = { 0.0f, 0.0f };

@@ -92,6 +92,7 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 | | `changeEvery` | float | `1` | Seconds between new directions. 0.01 to 3600. |
 | | `heading` | float | `0` | The direction it is walking now, in radians; it changes by itself. |
 | | `timer` | float | `0` | Seconds until the next new direction, counting down; `0` picks one on the first step. 0 to 3600. |
+| `RestartOnKey` | `key` | string | `"R"` | Behavior, for the scene itself (its top-level `components`). When this key is pressed it asks the host to restart the scene; the Sandbox loads it from its file again. A key name. |
 | `ClampPosition` | `min` | vec2 | `[0, 0]` | Behavior. The lower left corner of the rectangle the position is kept in. |
 | | `max` | vec2 | `[100, 100]` | The upper right corner; not smaller than `min` on either axis. |
 

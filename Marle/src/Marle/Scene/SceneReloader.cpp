@@ -3,6 +3,33 @@
 
 namespace Marle {
 
+    void CarryOverState(const ComponentRegistry& registry, const Scene& baseline, const Scene& running, Scene& fresh)
+    {
+        auto carry = [&](Entity before, Entity now, Entity next) {
+            if (!before || !now || !next) return;
+            for (const std::string& component : registry.GetComponentNames(next)) {
+                Json inBaseline = registry.Write(before, component);
+                Json inRunning = registry.Write(now, component);
+                if (inBaseline.is_null() || inRunning.is_null()) continue;      // not in all three
+                Json inFresh = registry.Write(next, component);
+                if (inBaseline != inFresh || inRunning == inFresh) continue;    // the file changed it, or nothing to carry
+
+                registry.Remove(next, component);
+                if (!registry.Read(next, component, inRunning).empty())          // no longer valid: the file's value stays
+                    registry.Read(next, component, inFresh);
+            }
+        };
+
+        carry(baseline.GetSceneEntity(), running.GetSceneEntity(), fresh.GetSceneEntity());
+        for (const Entity& entity : fresh.GetEntities()) {
+            const std::string name = entity.GetName();
+            carry(baseline.FindEntity(name), running.FindEntity(name), entity);
+        }
+
+        if (registry.Write(baseline.GetSceneEntity(), "Random") == registry.Write(fresh.GetSceneEntity(), "Random"))
+            fresh.GetRandom().SetState(running.GetRandom().GetState());
+    }
+
     SceneReloader::SceneReloader(std::string file, const ComponentRegistry& registry)
         : m_Registry(registry)
     {
