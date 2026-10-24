@@ -745,6 +745,83 @@ protected:
             CHECK(tile == Frame(), "a tilemap is drawn halfway between where it was and where it is");
         }
 
+        // 9f. lines and circles
+        {
+            auto IsBg = [&](int x, int y) { return Near(Read(x, y), bg.r, bg.g, bg.b); };
+
+            // a thick horizontal line: coloured along it, square at its ends, nothing beside it
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawLine({ 100, 200 }, { 300, 200 }, glm::vec4(1, 0, 0, 1), 10.0f);
+            Renderer2D::EndBatch();
+            CHECK(Near(Read(100 + 1, 200), 255, 0, 0) && Near(Read(200, 200), 255, 0, 0) && Near(Read(300 - 2, 200), 255, 0, 0) && Near(Read(200, 203), 255, 0, 0) && Near(Read(200, 196), 255, 0, 0), "a line is coloured along its length and as thick as asked");
+            CHECK(IsBg(95, 200) && IsBg(305, 200) && IsBg(200, 207) && IsBg(200, 193), "and stops at its ends and edges");
+            CHECK(Renderer2D::GetStats().QuadCount == 1 && Renderer2D::GetStats().DrawCalls == 1, "a line is one quad");
+
+            // a diagonal one, drawn from either end, is the same line
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawLine({ 600, 100 }, { 700, 200 }, glm::vec4(0, 1, 0, 1), 6.0f);
+            Renderer2D::EndBatch();
+            CHECK(Near(Read(650, 150), 0, 255, 0) && Near(Read(620, 120), 0, 255, 0) && IsBg(650, 170) && IsBg(670, 130), "a diagonal line follows its direction");
+
+            // nothing to draw
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawLine({ 100, 100 }, { 100, 100 }, glm::vec4(1), 5.0f);
+            Renderer2D::DrawLine({ 100, 100 }, { 200, 100 }, glm::vec4(1), 0.0f);
+            Renderer2D::DrawCircle({ 100, 100 }, 0.0f, glm::vec4(1));
+            Renderer2D::EndBatch();
+            CHECK(Renderer2D::GetStats().QuadCount == 0 && IsBg(100, 100) && IsBg(150, 100), "a zero-length or zero-width line and a zero radius circle draw nothing");
+
+            // a filled circle
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawCircle({ 400, 300 }, 50.0f, glm::vec4(0, 1, 0, 1));
+            Renderer2D::EndBatch();
+            CHECK(Near(Read(400, 300), 0, 255, 0) && Near(Read(440, 300), 0, 255, 0) && Near(Read(400, 345), 0, 255, 0) && Near(Read(360, 300), 0, 255, 0), "a circle is filled inside its radius");
+            CHECK(IsBg(400, 355) && IsBg(455, 300) && IsBg(445, 345) && IsBg(355, 255), "and empty outside it, corners of its quad included");
+            Px edge = Read(449, 300);
+            CHECK(!Near(edge, bg.r, bg.g, bg.b, 10) && !Near(edge, 0, 255, 0, 10) && edge.g > bg.g, "its edge is anti-aliased: a pixel on it is part way between the circle and the background (g %d)", edge.g);
+            CHECK(Renderer2D::GetStats().QuadCount == 1 && Renderer2D::GetStats().DrawCalls == 1, "a circle is one quad");
+
+            // a ring
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawCircle({ 400, 300 }, 50.0f, glm::vec4(0, 0, 1, 1), 10.0f);
+            Renderer2D::EndBatch();
+            CHECK(IsBg(400, 300) && IsBg(400 + 30, 300) && IsBg(400, 300 + 35), "a ring is empty inside");
+            CHECK(Near(Read(400 + 45, 300), 0, 0, 255) && Near(Read(400, 300 + 43), 0, 0, 255) && Near(Read(400 - 47, 300), 0, 0, 255) && IsBg(400 + 55, 300), "and coloured as wide as asked, just inside the radius");
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawCircle({ 400, 300 }, 50.0f, glm::vec4(0, 0, 1, 1), 50.0f);
+            Renderer2D::DrawCircle({ 700, 300 }, 50.0f, glm::vec4(0, 0, 1, 1), 500.0f);
+            Renderer2D::EndBatch();
+            CHECK(Near(Read(400, 300), 0, 0, 255) && Near(Read(700, 300), 0, 0, 255), "a thickness of the radius or more is a disk");
+
+            // a camera: the circle is round in the world and the edge stays sharp however far in it is zoomed
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(OrthographicCamera(-W / 8.0f, W / 8.0f, -H / 8.0f, H / 8.0f));   // 4 times zoomed in
+            Renderer2D::DrawCircle({ 0, 0 }, 10.0f, glm::vec4(1, 1, 0, 1));
+            Renderer2D::DrawLine({ -50, 0 }, { 50, 0 }, glm::vec4(1, 0, 1, 1), 1.0f);
+            Renderer2D::EndBatch();
+            const int cx = (int)(W / 2), cy = (int)(H / 2);
+            CHECK(Near(Read(cx + 3, cy + 20), 255, 255, 0) && Near(Read(cx + 35, cy + 3), 255, 255, 0) && IsBg(cx + 45, cy + 20) && Near(Read(cx + 100, cy), 255, 0, 255), "in a camera's world units a circle of 10 is 40 pixels at 4 times zoom, and a line is 4 pixels wide");
+
+            // drawn in order with quads, and alpha blends
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawQuad({ 400, 300 }, { 200, 20 }, glm::vec4(1, 0, 0, 1));
+            Renderer2D::DrawCircle({ 400, 300 }, 40.0f, glm::vec4(0, 1, 0, 1));
+            Renderer2D::DrawQuad({ 400, 300 }, { 20, 200 }, glm::vec4(0, 0, 1, 1));
+            Renderer2D::DrawLine({ 300, 300 }, { 500, 300 }, glm::vec4(1, 1, 1, 0.5f), 4.0f);
+            Renderer2D::EndBatch();
+            CHECK(Renderer2D::GetStats().QuadCount == 4 && Renderer2D::GetStats().DrawCalls == 1, "lines and circles batch with quads in one draw call");
+            Px blended = Read(430, 300);
+            CHECK(Near(Read(430, 306), 0, 255, 0) && Near(Read(480, 306), 255, 0, 0) && Near(Read(400, 325), 0, 0, 255), "they are drawn in submission order: the circle over the red bar, the blue bar over the circle");
+            CHECK(blended.r > 100 && blended.r < 160 && blended.g > 240 && blended.b > 100 && blended.b < 160, "and a translucent line blends over what is under it (r,g,b %d,%d,%d)", blended.r, blended.g, blended.b);
+        }
+
         // 10. GL errors
         GLenum err = glGetError();
         CHECK(err == GL_NO_ERROR, "no GL error (0x%x)", err);
