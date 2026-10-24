@@ -94,6 +94,30 @@ namespace Marle {
         return fabsf(d.x) < r.H.x - kContact && fabsf(d.y) < r.H.y - kContact;
     }
 
+    void FindOverlaps(Scene& scene)
+    {
+        struct Placed { Entity Who; bool IsTrigger; CollisionShape Shape; };
+        std::vector<Placed> placed;
+        bool anyTrigger = false;
+        for (const Entity& entity : scene.GetEntities()) {
+            const Collider* collider = entity.TryGet<Collider>();
+            const Transform* transform = entity.TryGet<Transform>();
+            if (!collider || !transform) continue;
+            placed.push_back({ entity, collider->Kind == "trigger", ShapeOfCollider(*collider, transform->Position) });
+            anyTrigger = anyTrigger || placed.back().IsTrigger;
+        }
+
+        std::vector<Overlap> touching;
+        if (anyTrigger)
+            for (const Placed& trigger : placed) {
+                if (!trigger.IsTrigger) continue;
+                for (const Placed& other : placed)
+                    if (other.Who != trigger.Who && ShapesOverlap(trigger.Shape, other.Shape))
+                        touching.push_back({ trigger.Who.GetName(), other.Who.GetName() });
+            }
+        scene.UpdateOverlaps(std::move(touching));
+    }
+
     void ResolveSolidMove(Scene& scene, Entity entity)
     {
         const Collider* collider = entity.TryGet<Collider>();

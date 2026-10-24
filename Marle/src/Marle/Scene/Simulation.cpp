@@ -40,6 +40,8 @@ namespace Marle {
             registry.RunBehaviors(entity, context);
             ResolveSolidMove(scene, entity);   // right after the entity's own behaviors, so what follows sees where it ended up
         }
+
+        FindOverlaps(scene);   // once every entity is where it ends up; behaviors see this on the next step
     }
 
     uint64_t Simulation::Checksum(const ComponentRegistry& registry, const Scene& scene)

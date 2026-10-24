@@ -9,6 +9,23 @@
 
 namespace Marle {
 
+    // One trigger collider overlapping one other collider (solid or trigger), by entity names (ADR-0003).
+    struct Overlap {
+        std::string Trigger;   // the entity with the trigger collider
+        std::string Other;     // the entity it overlaps
+        bool operator==(const Overlap& o) const { return Trigger == o.Trigger && Other == o.Other; }
+    };
+
+    // What overlapped at the end of the last simulation step. Pairs are sorted by the creation order of the
+    // trigger, then of the other entity. Two triggers that overlap are listed both ways round.
+    struct SceneOverlaps {
+        std::vector<Overlap> Touching;   // every pair that overlaps now
+        std::vector<Overlap> Entered;    // in Touching, and not in the previous step
+        std::vector<Overlap> Staying;    // in Touching, and in the previous step too
+        std::vector<Overlap> Left;       // not in Touching, and in the previous step (in its order); includes pairs
+                                         // whose entity has since been destroyed
+    };
+
     // A named collection of entities. Entity names are unique within a scene. Entities are stored
     // in entt, which clients never see. Destroying the scene invalidates every Entity handle made
     // from it. Don't create or destroy entities from inside ForEach.
@@ -54,6 +71,15 @@ namespace Marle {
             bool IsRestartRequested() const { return m_RestartRequested; }
             void ClearRestartRequest() { m_RestartRequested = false; }
 
+            // Which triggers overlap what, as of the end of the last Simulation::Step, so a behavior sees what
+            // happened in the step before. Empty for a scene that has not stepped. Runtime state, worked out
+            // again from positions every step: it is not in a scene file or a checksum (ADR-0003).
+            const SceneOverlaps& GetOverlaps() const { return m_Overlaps; }
+
+            // Replaces the overlaps with the pairs now touching, sorted as SceneOverlaps says, and works out
+            // Entered, Staying and Left against the ones it had. For Simulation::Step.
+            void UpdateOverlaps(std::vector<Overlap> touching);
+
             // The entity with this name, or an invalid Entity.
             Entity FindEntity(const std::string& name) const;
 
@@ -76,6 +102,7 @@ namespace Marle {
             std::shared_ptr<detail::SceneState> m_State;
             RandomGenerator m_Random;
             bool m_RestartRequested = false;
+            SceneOverlaps m_Overlaps;
     };
 
     template<typename... Components, typename Fn>

@@ -28,6 +28,12 @@ namespace Marle {
     // not overlap it.
     EXPORT bool ShapesOverlap(const CollisionShape& a, const CollisionShape& b);
 
+    // Works out which trigger colliders overlap which other colliders (solid or trigger, never itself)
+    // from where the entities are now, and stores it with Scene::UpdateOverlaps. Entities and triggers are
+    // visited in creation order. An entity needs a Collider and a Transform to take part. Called by
+    // Simulation::Step once every entity has run.
+    EXPORT void FindOverlaps(Scene& scene);
+
     // Stops an entity that moved this step at the solid things in its way. An entity is stopped when it
     // has a solid Collider and a Transform whose position differs from its PreviousTransform; it is moved
     // from there along x, then along y, and stops flush against any other solid collider or solid tile it

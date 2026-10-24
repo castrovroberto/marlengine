@@ -2547,6 +2547,69 @@ int main(int argc, char** argv)
         stepWith(*camera.Scene, right, 20);
         CHECK(position(camera, "camera") == position(camera, "p") && position(camera, "p").x == 40.0f, "a camera later in the file follows the stopped position, not the one before the wall");
 
+        // overlap events
+        {
+            auto pairs = [](const std::vector<Overlap>& list) {
+                std::string text;
+                for (const Overlap& pair : list) text += pair.Trigger + ">" + pair.Other + " ";
+                return text;
+            };
+            const std::string zone = R"({"name": "zone", "components": {"Transform": {"position": [50, 0]}, "Collider": {"shape": "box", "size": [30, 30], "kind": "trigger"}}})";
+            SceneLoadResult walk = load(zone + ", " + player("[0, 0]", box10));
+            CHECK(walk.Scene->GetOverlaps().Touching.empty() && walk.Scene->GetOverlaps().Entered.empty(), "a scene that has not stepped has no overlaps");
+            std::string log;
+            for (int step = 1; step <= 8; step++) {
+                stepWith(*walk.Scene, right);
+                const SceneOverlaps& o = walk.Scene->GetOverlaps();
+                log += std::to_string(step) + ":" + (o.Entered.empty() ? "" : "E") + (o.Staying.empty() ? "" : "S") + (o.Left.empty() ? "" : "L") + (o.Touching.empty() ? "" : "T") + " ";
+            }
+            CHECK(log == "1: 2: 3: 4:ET 5:ST 6:ST 7:L 8: ", "a trigger reports entered on the step the player gets in, staying while it is, left on the step it gets out");
+            SceneLoadResult again = load(zone + ", " + player("[0, 0]", box10));
+            stepWith(*again.Scene, right, 4);
+            CHECK(pairs(again.Scene->GetOverlaps().Entered) == "zone>p " && pairs(again.Scene->GetOverlaps().Touching) == "zone>p ", "the pair is the trigger's name and then the other entity's");
+            stepWith(*again.Scene, right, 3);
+            CHECK(pairs(again.Scene->GetOverlaps().Left) == "zone>p " && again.Scene->GetOverlaps().Touching.empty(), "and the same pair is what left");
+
+            // it is all worked out from positions, so a scene loaded with an overlap already in place says entered on its first step
+            SceneLoadResult already = load(zone + ", " + player("[50, 0]", box10));
+            stepWith(*already.Scene, InputFrame());
+            CHECK(pairs(already.Scene->GetOverlaps().Entered) == "zone>p ", "a scene that starts with an overlap reports it as entered on the first step");
+            stepWith(*already.Scene, InputFrame());
+            CHECK(already.Scene->GetOverlaps().Entered.empty() && pairs(already.Scene->GetOverlaps().Staying) == "zone>p ", "and as staying after that");
+
+            // order: by the trigger's creation order, then the other's, not by name
+            SceneLoadResult crowd = load(R"({"name": "trig_b", "components": {"Transform": {}, "Collider": {"kind": "trigger"}}}, {"name": "trig_a", "components": {"Transform": {}, "Collider": {"kind": "trigger"}}}, {"name": "thing_2", "components": {"Transform": {}, "Collider": {}}}, {"name": "thing_1", "components": {"Transform": {}, "Collider": {}}})");
+            stepWith(*crowd.Scene, InputFrame());
+            CHECK(pairs(crowd.Scene->GetOverlaps().Touching) == "trig_b>trig_a trig_b>thing_2 trig_b>thing_1 trig_a>trig_b trig_a>thing_2 trig_a>thing_1 ", "pairs come in creation order of the trigger then the other, two triggers both ways round, never a trigger with itself");
+
+            // what counts
+            SceneLoadResult solids = load(wall("[0, 0]", box10) + R"(, {"name": "wall2", "components": {"Transform": {}, "Collider": {}}}, {"name": "ghost", "components": {"Collider": {"kind": "trigger"}}}, {"name": "far", "components": {"Transform": {"position": [500, 0]}, "Collider": {"kind": "trigger"}}})");
+            stepWith(*solids.Scene, InputFrame());
+            CHECK(solids.Scene->GetOverlaps().Touching.empty(), "two solids overlapping are not reported, a trigger with no Transform takes no part, and one far away overlaps nothing");
+            SceneLoadResult flush = load(zone + ", " + player("[30, 0]", box10));   // its right edge is on the zone's left edge
+            stepWith(*flush.Scene, InputFrame());
+            CHECK(flush.Scene->GetOverlaps().Touching.empty(), "shapes that only touch do not overlap");
+            SceneLoadResult solidInTrigger = load(zone + ", " + wall("[60, 0]", box10));
+            stepWith(*solidInTrigger.Scene, InputFrame());
+            CHECK(pairs(solidInTrigger.Scene->GetOverlaps().Touching) == "zone>wall ", "a solid collider inside a trigger is reported");
+
+            // a trigger that moves into something, and an entity destroyed while overlapping
+            SceneLoadResult gone = load(zone + ", " + player("[50, 0]", box10));
+            stepWith(*gone.Scene, InputFrame(), 2);
+            gone.Scene->DestroyEntity(gone.Scene->FindEntity("p"));
+            stepWith(*gone.Scene, InputFrame());
+            CHECK(pairs(gone.Scene->GetOverlaps().Left) == "zone>p " && gone.Scene->GetOverlaps().Touching.empty(), "an entity destroyed while overlapping is reported as left on the next step");
+            stepWith(*gone.Scene, InputFrame());
+            CHECK(gone.Scene->GetOverlaps().Left.empty(), "and only once");
+
+            // runtime state only: not in the checksum or the written scene
+            SceneLoadResult checked = load(zone + ", " + player("[50, 0]", box10));
+            const std::string before = SaveSceneToText(*checked.Scene, registry).Text;
+            uint64_t sum = Simulation::Checksum(registry, *checked.Scene);
+            stepWith(*checked.Scene, InputFrame());
+            CHECK(!checked.Scene->GetOverlaps().Touching.empty() && sum == Simulation::Checksum(registry, *checked.Scene) && before == SaveSceneToText(*checked.Scene, registry).Text, "overlaps are not in the checksum or in a saved scene");
+        }
+
         // the same run twice ends in the same state
         auto run = [&]() {
             SceneLoadResult r = load(player("[0, 0]", circle5) + ", " + wall("[50, 8]", box10) + ", " + tiles);

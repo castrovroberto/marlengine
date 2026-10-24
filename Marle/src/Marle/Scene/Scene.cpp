@@ -45,6 +45,19 @@ namespace Marle {
         m_Random.Seed((uint64_t)(uint32_t)GetSeed());
     }
 
+    void Scene::UpdateOverlaps(std::vector<Overlap> touching)
+    {
+        auto contains = [](const std::vector<Overlap>& list, const Overlap& pair) { return std::find(list.begin(), list.end(), pair) != list.end(); };
+
+        SceneOverlaps next;
+        for (const Overlap& pair : touching)
+            (contains(m_Overlaps.Touching, pair) ? next.Staying : next.Entered).push_back(pair);
+        for (const Overlap& pair : m_Overlaps.Touching)
+            if (!contains(touching, pair)) next.Left.push_back(pair);
+        next.Touching = std::move(touching);
+        m_Overlaps = std::move(next);
+    }
+
     Entity Scene::GetSceneEntity() const
     {
         return Entity(m_State, m_State->SceneEntity);
