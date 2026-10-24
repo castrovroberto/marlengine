@@ -20,7 +20,8 @@ namespace Marle {
             // One fixed step of `dt` seconds. First it records where each entity's Transform is, as its
             // PreviousTransform (for SceneRenderer to draw between steps). Then it runs behaviors: the
             // scene's own components first, then each entity in the order of the scene file, and within
-            // an entity its behaviors in registration order. An entity created during the step first runs
+            // an entity its behaviors in registration order, followed by stopping it at solid colliders and
+            // solid tiles if it moved (ADR-0003, ResolveSolidMove). An entity created during the step first runs
             // on the next one; one destroyed during the step is skipped.
             static void Step(const ComponentRegistry& registry, Scene& scene, const InputFrame& input, double dt);
 

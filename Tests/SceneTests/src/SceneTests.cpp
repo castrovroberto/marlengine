@@ -10,6 +10,7 @@
 #include "Marle/Scene/SceneReloader.h"
 #include "Marle/Scene/RandomGenerator.h"
 #include "Marle/Scene/Simulation.h"
+#include "Marle/Scene/Collision.h"
 #include "Marle/Scene/InputRecording.h"
 #include "Marle/CommandLine.h"
 #include "Marle/Core/KeyNames.h"
@@ -2426,6 +2427,133 @@ int main(int argc, char** argv)
         std::string text = SaveSceneToText(*sceneWith.Scene, registry).Text;
         SceneLoadResult again = LoadSceneFromText(text, "inline", registry);
         CHECK(again.Ok() && SaveSceneToText(*again.Scene, registry).Text == text && Contains(text, R"("Collider": { "shape": "circle", "size": [32, 32], "radius": 3, "offset": [0, 0], "kind": "trigger" })"), "it is written with every field and reads back the same");
+    }
+
+    // stopping at solids (ADR-0003)
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto load = [&](const std::string& entities) { return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [)" + entities + "]}", "inline", registry); };
+        auto stepWith = [&](Scene& scene, const InputFrame& input, int n = 1) { for (int i = 0; i < n; i++) Simulation::Step(registry, scene, input, 1.0 / 60.0); };
+        auto near = [](glm::vec2 a, glm::vec2 b) { return fabsf(a.x - b.x) < 0.01f && fabsf(a.y - b.y) < 0.01f; };
+        auto position = [&](SceneLoadResult& r, const char* name) { return r.Scene->FindEntity(name).Get<Transform>().Position; };
+        // the player moves 10 units a step; the collider is described by `shape`, the wall by `wall`
+        auto player = [&](const std::string& at, const std::string& shape, const std::string& kind = "solid") {
+            return R"({"name": "p", "components": {"Transform": {"position": )" + at + R"(}, "Collider": {)" + shape + R"(, "kind": ")" + kind + R"("}, "KeyboardMove": {"speed": 600, "runKey": ""}}})";
+        };
+        auto wall = [&](const std::string& at, const std::string& shape, const std::string& kind = "solid") {
+            return R"({"name": "wall", "components": {"Transform": {"position": )" + at + R"(}, "Collider": {)" + shape + R"(, "kind": ")" + kind + R"("}}})";
+        };
+        const std::string box10 = R"("shape": "box", "size": [10, 10])";
+        const std::string circle5 = R"("shape": "circle", "radius": 5)";
+        const InputFrame right = InputFrame().Hold(Key::D);
+
+        // shapes overlapping
+        {
+            CollisionShape a = ShapeOfCollider(Collider(), { 0.0f, 0.0f });   // 32 by 32
+            CollisionShape b = ShapeOfCollider(Collider(), { 31.0f, 0.0f });
+            CollisionShape c = ShapeOfCollider(Collider(), { 32.0f, 0.0f });
+            CHECK(ShapesOverlap(a, b) && ShapesOverlap(b, a), "boxes that share some area overlap, either way round");
+            CHECK(!ShapesOverlap(a, c) && !ShapesOverlap(c, a) && !ShapesOverlap(a, ShapeOfCollider(Collider(), { 100.0f, 0.0f })), "boxes that only touch, or are apart, do not");
+            Collider ring; ring.Shape = "circle"; ring.Radius = 5.0f;
+            Collider square; square.Size = { 10.0f, 10.0f };
+            CHECK(ShapesOverlap(ShapeOfCollider(ring, { 8.0f, 8.0f }), ShapeOfCollider(square, { 0.0f, 0.0f })) && !ShapesOverlap(ShapeOfCollider(ring, { 9.0f, 9.0f }), ShapeOfCollider(square, { 0.0f, 0.0f })), "a circle meets a box's corner by distance, not by its bounding square");
+            CHECK(ShapesOverlap(ShapeOfCollider(ring, { 9.0f, 0.0f }), ShapeOfCollider(ring, { 0.0f, 0.0f })) && !ShapesOverlap(ShapeOfCollider(ring, { 10.0f, 0.0f }), ShapeOfCollider(ring, { 0.0f, 0.0f })), "two circles overlap when closer than the sum of their radii");
+            Collider shifted; shifted.Size = { 10.0f, 10.0f }; shifted.Offset = { 20.0f, 0.0f };
+            CHECK(ShapeOfCollider(shifted, { 5.0f, 5.0f }).Center == glm::vec2(25.0f, 5.0f), "the offset moves the shape from the position");
+        }
+
+        // a box stops flush against a box wall
+        SceneLoadResult toWall = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", box10));
+        stepWith(*toWall.Scene, right, 3);
+        CHECK(near(position(toWall, "p"), { 30.0f, 0.0f }), "it walks freely until the wall");
+        stepWith(*toWall.Scene, right, 17);
+        CHECK(position(toWall, "p") == glm::vec2(40.0f, 0.0f) && position(toWall, "wall") == glm::vec2(50.0f, 0.0f), "and stops flush against it, without moving the wall");
+        stepWith(*toWall.Scene, right, 5);
+        CHECK(position(toWall, "p") == glm::vec2(40.0f, 0.0f), "pushing on goes nowhere");
+        stepWith(*toWall.Scene, InputFrame().Hold(Key::A), 2);
+        CHECK(near(position(toWall, "p"), { 20.0f, 0.0f }), "and it can walk back out");
+
+        // along a wall, not into it
+        SceneLoadResult slide = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", R"("shape": "box", "size": [10, 4000])"));
+        stepWith(*slide.Scene, InputFrame().Hold(Key::D).Hold(Key::W), 30);
+        CHECK(position(slide, "p").x == 40.0f && position(slide, "p").y > 150.0f, "diagonally into a wall it slides along it");
+        SceneLoadResult slideDown = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", R"("shape": "box", "size": [10, 4000])"));
+        stepWith(*slideDown.Scene, InputFrame().Hold(Key::D).Hold(Key::S), 30);
+        CHECK(position(slideDown, "p").x == 40.0f && position(slideDown, "p").y < -150.0f, "whichever way it goes along it");
+        SceneLoadResult floor = load(player("[0, 30]", box10) + ", " + wall("[0, 0]", R"("shape": "box", "size": [400, 10])"));
+        stepWith(*floor.Scene, InputFrame().Hold(Key::S).Hold(Key::D), 10);
+        CHECK(position(floor, "p").y == 10.0f && position(floor, "p").x > 40.0f, "and on the other axis");
+
+        // shapes
+        SceneLoadResult circleToBox = load(player("[0, 0]", circle5) + ", " + wall("[50, 0]", box10));
+        stepWith(*circleToBox.Scene, right, 20);
+        CHECK(position(circleToBox, "p") == glm::vec2(40.0f, 0.0f), "a circle stops flush against a box");
+        SceneLoadResult circleToCorner = load(player("[0, 8]", circle5) + ", " + wall("[50, 0]", box10));
+        stepWith(*circleToCorner.Scene, right, 20);
+        CHECK(near(position(circleToCorner, "p"), { 41.0f, 8.0f }), "and against a corner it stops where its edge touches the corner");
+        SceneLoadResult circleToCircle = load(player("[0, 0]", circle5) + ", " + wall("[50, 0]", circle5));
+        stepWith(*circleToCircle.Scene, right, 20);
+        CHECK(position(circleToCircle, "p") == glm::vec2(40.0f, 0.0f), "a circle stops against a circle");
+        SceneLoadResult boxToCircle = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", circle5));
+        stepWith(*boxToCircle.Scene, right, 20);
+        CHECK(position(boxToCircle, "p") == glm::vec2(40.0f, 0.0f), "a box stops against a circle");
+        SceneLoadResult offset = load(player("[0, 0]", R"("shape": "box", "size": [10, 10], "offset": [4, 0])") + ", " + wall("[50, 0]", box10));
+        stepWith(*offset.Scene, right, 20);
+        CHECK(position(offset, "p") == glm::vec2(36.0f, 0.0f), "the collider's offset is respected: its center is 4 ahead of the position");
+
+        // solid tiles
+        const std::string tiles = R"({"name": "ground", "components": {"Transform": {"position": [0, 0]}, "Tilemap": {"tileSize": [10, 10], "rows": ["....", "..cd", "...."], "solid": "c"}}})";
+        SceneLoadResult intoTile = load(player("[0, 15]", R"("shape": "box", "size": [4, 4])") + ", " + tiles);
+        stepWith(*intoTile.Scene, right, 20);
+        CHECK(position(intoTile, "p") == glm::vec2(18.0f, 15.0f), "a mover stops flush against a solid tile");
+        SceneLoadResult pastTile = load(player("[0, 25]", R"("shape": "box", "size": [4, 4])") + ", " + tiles);
+        stepWith(*pastTile.Scene, right, 6);
+        CHECK(position(pastTile, "p").x > 50.0f, "and walks past a row that has none");
+        SceneLoadResult otherTile = load(player("[22, 5]", R"("shape": "box", "size": [4, 4])") + ", " + R"({"name": "ground", "components": {"Tilemap": {"tileSize": [10, 10], "rows": ["..cd"], "solid": "c"}}})");
+        stepWith(*otherTile.Scene, right, 10);
+        CHECK(position(otherTile, "p").x > 40.0f, "a tile whose character is not listed does not stop it (the 'd' next to the solid 'c')");
+        SceneLoadResult movedMap = load(player("[0, 105]", R"("shape": "box", "size": [4, 4])") + ", " + R"({"name": "ground", "components": {"Transform": {"position": [0, 100], "scale": [2, 1]}, "Tilemap": {"tileSize": [10, 10], "rows": ["..c."], "solid": "c"}}})");
+        stepWith(*movedMap.Scene, right, 20);
+        CHECK(position(movedMap, "p") == glm::vec2(38.0f, 105.0f), "a tilemap's own position and scale place its solid tiles");
+
+        // what does and does not stop
+        SceneLoadResult inside = load(player("[50, 0]", box10) + ", " + wall("[50, 0]", box10));
+        stepWith(*inside.Scene, right, 3);
+        CHECK(near(position(inside, "p"), { 80.0f, 0.0f }), "a mover that starts inside a solid is not stopped by it, and can walk out");
+        SceneLoadResult fast = load(R"({"name": "p", "components": {"Transform": {"position": [0, 0]}, "Collider": {"shape": "box", "size": [10, 10]}, "KeyboardMove": {"speed": 100000, "runKey": ""}}}, )" + wall("[500, 0]", R"("shape": "box", "size": [2, 10])"));
+        stepWith(*fast.Scene, right, 3);
+        CHECK(position(fast, "p") == glm::vec2(494.0f, 0.0f), "a mover faster than the wall is thick still stops at it");
+        SceneLoadResult trigger = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", box10, "trigger"));
+        stepWith(*trigger.Scene, right, 12);
+        CHECK(position(trigger, "p").x > 100.0f, "a trigger blocks nothing");
+        SceneLoadResult triggerMover = load(player("[0, 0]", box10, "trigger") + ", " + wall("[50, 0]", box10));
+        stepWith(*triggerMover.Scene, right, 12);
+        CHECK(position(triggerMover, "p").x > 100.0f, "and a trigger is not stopped");
+        SceneLoadResult noCollider = load(R"({"name": "p", "components": {"Transform": {"position": [0, 0]}, "KeyboardMove": {"speed": 600, "runKey": ""}}}, )" + wall("[50, 0]", box10));
+        stepWith(*noCollider.Scene, right, 12);
+        CHECK(position(noCollider, "p").x > 100.0f, "an entity with no Collider walks through");
+        SceneLoadResult walls = load(R"({"name": "a", "components": {"Transform": {"position": [0, 0]}, "Collider": {"shape": "box", "size": [10, 10]}}}, {"name": "b", "components": {"Transform": {"position": [5, 0]}, "Collider": {"shape": "box", "size": [10, 10]}}})");
+        stepWith(*walls.Scene, InputFrame(), 5);
+        CHECK(position(walls, "a") == glm::vec2(0.0f, 0.0f) && position(walls, "b") == glm::vec2(5.0f, 0.0f), "walls that overlap each other and do not move are left as they are");
+
+        // not only the keyboard: any behavior that moves an entity
+        SceneLoadResult following = load(R"({"name": "t", "components": {"Transform": {"position": [100, 0]}}}, {"name": "p", "components": {"Transform": {"position": [0, 0]}, "Collider": {"shape": "box", "size": [10, 10]}, "Follow": {"target": "t"}}}, )" + wall("[50, 0]", box10));
+        stepWith(*following.Scene, InputFrame(), 1);
+        CHECK(position(following, "p") == glm::vec2(40.0f, 0.0f), "Follow's jump of 100 units stops at the wall too");
+
+        // what follows an entity sees where it ended up
+        SceneLoadResult camera = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", box10) + R"(, {"name": "camera", "components": {"Transform": {}, "Camera": {}, "Follow": {"target": "p"}}})");
+        stepWith(*camera.Scene, right, 20);
+        CHECK(position(camera, "camera") == position(camera, "p") && position(camera, "p").x == 40.0f, "a camera later in the file follows the stopped position, not the one before the wall");
+
+        // the same run twice ends in the same state
+        auto run = [&]() {
+            SceneLoadResult r = load(player("[0, 0]", circle5) + ", " + wall("[50, 8]", box10) + ", " + tiles);
+            stepWith(*r.Scene, InputFrame().Hold(Key::D).Hold(Key::W), 40);
+            return Simulation::Checksum(registry, *r.Scene);
+        };
+        CHECK(run() == run(), "a run with collisions gives the same checksum every time");
     }
 
     // movement behaviors: KeyboardRotate, WheelZoom, ClampPosition

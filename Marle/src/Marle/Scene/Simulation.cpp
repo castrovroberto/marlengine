@@ -1,6 +1,7 @@
 #include "mrlpch.h"
 #include "Simulation.h"
 #include "Components.h"
+#include "Collision.h"
 
 namespace Marle {
 
@@ -37,6 +38,7 @@ namespace Marle {
             if (!entity.IsValid()) continue;   // destroyed by an earlier behavior
             context.Self = entity;
             registry.RunBehaviors(entity, context);
+            ResolveSolidMove(scene, entity);   // right after the entity's own behaviors, so what follows sees where it ended up
         }
     }
 

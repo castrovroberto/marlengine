@@ -23,7 +23,7 @@ Entities touch things through a **Collider** component: an axis-aligned box or a
 
 ## Consequences
 
-- **Limits.** There is no continuous collision: an entity that moves further in one step than the thickness of what it should hit can pass through it. At the Sandbox's speeds that is far from happening; scene authors keep colliders and speeds in that range, and `marle-scene simulate` can show when something got through.
+- **Limits.** Each axis is a sweep from the old coordinate to the new one, so a mover that is faster than a wall is thick still stops at it. The diagonal path as a whole is not swept, though: moving past the corner of a solid in one step can skip it. Nothing is simulated between steps, and there are no forces, velocities or rotation.
 - **Order matters.** Between two moving solid entities, the one earlier in the file is resolved first against the other's position at that moment (its new position if it has run, its old one if not). That is deterministic and a result of the file's order, as for behaviors.
 - Collision needs no window or GL context, so it runs headless in `Simulation::Step` and in `marle-scene simulate`.
 - All of it is arithmetic on floats in a fixed order, with no clock, no unseeded randomness and no unordered iteration: pairs are visited in creation order. The determinism promise stays as ADR-0002 states it, per build and platform.
