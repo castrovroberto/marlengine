@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "scene": "The Sunken Orangerie",
+  "sceneHash": "6680f50ac5ddd640",
+  "seed": 1,
+  "stepsPerSecond": 60,
+  "steps": 890,
+  "checksum": "831d51694e824a58",
+  "changes": [
+    { "step": 0, "down": ["A"] },
+    { "step": 100, "down": ["W"], "up": ["A"] },
+    { "step": 160, "down": ["D"], "up": ["W"] },
+    { "step": 260, "up": ["D"] },
+    { "step": 280, "down": ["W"] },
+    { "step": 380, "down": ["D", "LeftShift"], "up": ["W"] },
+    { "step": 440, "down": ["S"], "up": ["D", "LeftShift"] },
+    { "step": 590, "down": ["A", "LeftShift"], "up": ["S"] },
+    { "step": 650, "down": ["W"], "up": ["LeftShift"] },
+    { "step": 690, "down": ["D", "S", "LeftShift"], "up": ["A", "W"] }
+  ]
+}

@@ -3510,6 +3510,185 @@ int main(int argc, char** argv)
         CHECK(RunSceneTool({ "simulate", world, "--recording", golden, "--expect", Simulation::ChecksumText(read.Recording.Checksum) }, registry, out, err) == 0, "marle-scene simulate reaches the golden checksum from the committed file");
     }
 
+    // determinism (ADR-0003): a route through world.json that runs into its pillar, a wall, the trigger zone and the border
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::string world = "Assets/Scenes/world.json";
+        const std::string golden = "Tests/SceneTests/fixtures/world_collide.recording.json";
+        auto fresh = [&] { return LoadScene(world, registry); };
+
+        // held keys and for how many steps: left into the pillar, up past it, right through the trigger zone and
+        // on up out of it, right and down (running), left (running) into wall_b, up and left along it (a slide),
+        // then down and right (running) into the border's corner
+        struct Leg { std::vector<int> Keys; int Steps; };
+        const std::vector<Leg> route = {
+            { { Key::A }, 100 }, { { Key::W }, 60 }, { { Key::D }, 100 }, { {}, 20 }, { { Key::W }, 100 },
+            { { Key::D, Key::LeftShift }, 60 }, { { Key::S }, 150 }, { { Key::A, Key::LeftShift }, 60 },
+            { { Key::W, Key::A }, 40 }, { { Key::S, Key::D, Key::LeftShift }, 200 } };
+        std::vector<InputFrame> frames;
+        std::vector<int> legEnd;
+        for (const Leg& leg : route) {
+            InputFrame frame;
+            for (int key : leg.Keys) frame.Hold(key);
+            for (int i = 0; i < leg.Steps; i++) frames.push_back(frame);
+            legEnd.push_back((int)frames.size());
+        }
+        const int steps = (int)frames.size();
+
+        // the run, with where the player was at the end of each leg, and what overlapped when
+        SceneLoadResult live = fresh();
+        InputRecorder recorder;
+        recorder.Start(live.Scene->GetName(), live.TextHash, live.Scene->GetSeed(), 60);
+        std::vector<glm::vec2> atLegEnd;
+        uint64_t overlapDigest = 1469598103934665603ull;
+        int entered = 0, left = 0;
+        auto mixOverlaps = [&](const Scene& scene, uint64_t& digest) {
+            std::string text;
+            const SceneOverlaps& o = scene.GetOverlaps();
+            for (const Overlap& pair : o.Entered) text += "E" + pair.Trigger + ">" + pair.Other + ";";
+            for (const Overlap& pair : o.Staying) text += "S" + pair.Trigger + ">" + pair.Other + ";";
+            for (const Overlap& pair : o.Left) text += "L" + pair.Trigger + ">" + pair.Other + ";";
+            text += "|";
+            digest = digest * 1099511628211ull ^ Fnv1a64(text.data(), text.size());
+        };
+        for (int i = 0; i < steps; i++) {
+            recorder.Record(frames[i]);
+            Simulation::Step(registry, *live.Scene, frames[i], 1.0 / 60.0);
+            mixOverlaps(*live.Scene, overlapDigest);
+            entered += (int)live.Scene->GetOverlaps().Entered.size();
+            left += (int)live.Scene->GetOverlaps().Left.size();
+            if (std::find(legEnd.begin(), legEnd.end(), i + 1) != legEnd.end()) atLegEnd.push_back(live.Scene->FindEntity("player").Get<Transform>().Position);
+        }
+        const uint64_t checksum = Simulation::Checksum(registry, *live.Scene);
+        const std::string recordingText = WriteRecording(recorder.Finish(checksum)).Text;
+
+        // it ran into what it should have
+        auto at = [&](size_t leg, glm::vec2 expected) { return fabsf(atLegEnd[leg].x - expected.x) < 0.1f && fabsf(atLegEnd[leg].y - expected.y) < 0.1f; };
+        CHECK(at(0, { 764.0f, 518.0f }), "walking left it stops against the pillar (700 + 40 + 24)");
+        CHECK(at(1, { 764.0f, 818.0f }), "and goes on up past it");
+        CHECK(at(2, { 1264.0f, 818.0f }), "right through the zone's edge");
+        CHECK(at(4, { 1264.0f, 1318.0f }), "up and out of the zone");
+        CHECK(at(7, { 1640.0f, 568.0f }), "running left it stops against wall_b's east face (1616 + 24)");
+        CHECK(at(8, { 1640.0f, 568.0f + 40.0f * 5.0f / 1.41421356f }), "pushing left and going up, it slides up along the wall and stays against it");
+        CHECK(at(9, { 1960.0f, 88.0f }), "and ends in the border's corner");
+        if (!(entered == 1 && left == 1)) printf("      entered %d, left %d\n", entered, left);
+        CHECK(entered == 1 && left == 1, "the player entered the zone once and left it once");
+
+        // the committed copy is this run: if world.json or the collision rules change the run, this fails, and
+        // MARLE_UPDATE_GOLDEN=1 rewrites it once the change is meant
+        if (UpdateGolden()) WriteFile(golden, recordingText);
+        const std::string committed = ReadFile(golden);
+        CHECK(committed == recordingText, "the committed recording is the route (MARLE_UPDATE_GOLDEN=1 regenerates it)");
+        RecordingReadResult read = ReadRecording(committed);
+        CHECK(read.Ok() && read.Recording.HasChecksum && read.Recording.GetStepCount() == steps, "the committed recording reads, with its checksum");
+        SceneLoadResult replayed = fresh();
+        CHECK(RecordingMismatch(read.Recording, replayed.Scene->GetName(), replayed.TextHash, replayed.Scene->GetSeed(), 60).empty() && ReplayRecording(registry, *replayed.Scene, read.Recording) == read.Recording.Checksum, "replaying it reaches the golden checksum");
+
+        // the same run twice, step by step, and in uneven chunks with other scenes and reads in between: the same
+        // checksum, and the same overlaps on every step
+        SceneLoadResult a = fresh(), b = fresh(), other = fresh();
+        uint64_t digestA = 1469598103934665603ull, digestB = 1469598103934665603ull;
+        RandomGenerator chunker(11);
+        int done = 0;
+        bool sameAlways = true;
+        while (done < steps) {
+            const int chunk = chunker.IntBetween(1, 53);
+            for (int i = 0; i < chunk && done + i < steps; i++) {
+                Simulation::Step(registry, *a.Scene, read.Recording.Frames[done + i], 1.0 / 60.0);
+                mixOverlaps(*a.Scene, digestA);
+            }
+            for (int i = 0; i < chunk && done + i < steps; i++) Simulation::Step(registry, *other.Scene, InputFrame().Hold(Key::D), 1.0 / 60.0);
+            (void)SaveSceneToText(*a.Scene, registry).Text;
+            (void)Simulation::Checksum(registry, *a.Scene);
+            done += chunk;
+        }
+        for (int i = 0; i < steps; i++) {
+            Simulation::Step(registry, *b.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+            mixOverlaps(*b.Scene, digestB);
+        }
+        sameAlways = Simulation::Checksum(registry, *a.Scene) == read.Recording.Checksum && Simulation::Checksum(registry, *b.Scene) == read.Recording.Checksum;
+        CHECK(sameAlways, "a straight run and one in uneven chunks both end on the golden checksum");
+        CHECK(digestA == digestB && digestA == overlapDigest, "and had the same overlaps entered, staying and left on every step");
+
+        // without the player's collider the same input is another run: the collisions are what made it
+        SceneLoadResult ghost = fresh();
+        registry.Remove(ghost.Scene->FindEntity("player"), "Collider");
+        ReplayRecording(registry, *ghost.Scene, read.Recording);
+        CHECK(Simulation::Checksum(registry, *ghost.Scene) != read.Recording.Checksum, "the same input without the player's collider ends elsewhere");
+
+        // saved part way (inside the zone) and loaded again, the scene carries on to the same end
+        SceneLoadResult first = fresh();
+        for (int i = 0; i < 270; i++) Simulation::Step(registry, *first.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+        CHECK(first.Scene->GetOverlaps().Touching.size() == 1, "(step 270 is inside the zone)");
+        SceneLoadResult resumed = LoadSceneFromText(SaveSceneToText(*first.Scene, registry).Text, "saved", registry);
+        for (int i = 270; i < steps; i++) {
+            Simulation::Step(registry, *first.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+            Simulation::Step(registry, *resumed.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+            if (i == 270) CHECK(resumed.Scene->GetOverlaps().Entered.size() == 1 && first.Scene->GetOverlaps().Entered.empty(), "a loaded scene says it entered what it was already inside, the one it came from does not");
+        }
+        CHECK(resumed.Ok() && Simulation::Checksum(registry, *resumed.Scene) == read.Recording.Checksum, "a scene saved and loaded part way carries on to the golden checksum");
+
+        // the tool agrees, and says what the route touched
+        std::ostringstream out, err;
+        CHECK(RunSceneTool({ "simulate", world, "--recording", golden, "--expect", Simulation::ChecksumText(read.Recording.Checksum) }, registry, out, err) == 0 && out.str().find("zone > player: steps 246 to 316") != std::string::npos && out.str().find("entered once") != std::string::npos, "marle-scene simulate reaches the golden checksum and reports the zone");
+
+        // hot reload: the file moves a wall while the player is in the zone. The player (and everything the file
+        // did not change) carries on, the wall is the file's, and the overlap is worked out again
+        SceneLoadResult baseline = fresh(), running = fresh();
+        for (int i = 0; i < 270; i++) Simulation::Step(registry, *running.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+        std::string edited = ReadFile(world);
+        const size_t wallAt = edited.find("[1500, 600]");
+        CHECK(wallAt != std::string::npos, "(the wall is where this test expects)");
+        edited.replace(wallAt, 11, "[1500, 300]");
+        SceneLoadResult moved = LoadSceneFromText(edited, world, registry);
+        CarryOverState(registry, *baseline.Scene, *running.Scene, *moved.Scene);
+        CHECK(moved.Scene->FindEntity("player").Get<Transform>().Position == running.Scene->FindEntity("player").Get<Transform>().Position && moved.Scene->FindEntity("wall_a").Get<Transform>().Position == glm::vec2(1500.0f, 300.0f), "a reload keeps where the player had got to and takes the wall from the file");
+        Simulation::Step(registry, *moved.Scene, read.Recording.Frames[270], 1.0 / 60.0);
+        CHECK(moved.Scene->GetOverlaps().Entered.size() == 1 && moved.Scene->GetOverlaps().Entered[0].Trigger == "zone", "and the zone's overlap is found again on the next step");
+        for (int i = 271; i < steps; i++) Simulation::Step(registry, *moved.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+        CHECK(Simulation::Checksum(registry, *moved.Scene) != read.Recording.Checksum, "with the wall moved the rest of the route ends elsewhere than the golden");
+    }
+
+    // determinism (ADR-0003): how the file lists walls and solid characters does not change what stops a mover
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto solid = [](const std::string& name, int x, int y, int w, int h) {
+            return R"({"name": ")" + name + R"(", "components": {"Transform": {"position": [)" + std::to_string(x) + ", " + std::to_string(y) + R"(]}, "Collider": {"shape": "box", "size": [)" + std::to_string(w) + ", " + std::to_string(h) + R"(], "kind": "solid"}}})";
+        };
+        // a mover set loose with a random walk up and to the right, through walls and a block of tiles
+        const std::string walls[] = { solid("a", 50, 0, 20, 120), solid("b", 80, 90, 100, 20), solid("c", 200, 150, 30, 30) };
+        const std::string tiles = R"({"name": "ground", "components": {"Transform": {"position": [260, 120]}, "Tilemap": {"tileSize": [40, 40], "rows": ["0101", "1010", "0101"], "solid": "SOLID"}}})";
+        const std::string mover = R"({"name": "p", "components": {"Transform": {"position": [0, 0]}, "Collider": {"shape": "circle", "radius": 8, "kind": "solid"}, "KeyboardMove": {"speed": 240, "runKey": ""}}})";
+        // the mover's whole path, as a hash of where it was after every step
+        auto run = [&](const std::vector<int>& order, const std::string& solidChars) {
+            std::string text = R"({"version": 1, "name": "t", "entities": [)" + mover;
+            for (int index : order) text += ", " + walls[index];
+            std::string map = tiles;
+            map.replace(map.find("SOLID"), 5, solidChars);
+            text += ", " + map + "]}";
+            SceneLoadResult result = LoadSceneFromText(text, "inline", registry);
+            RandomGenerator script(77);
+            uint64_t path = 1469598103934665603ull;
+            for (int i = 0; i < 400; i++) {
+                Simulation::Step(registry, *result.Scene, ScriptedFrame(script), 1.0 / 60.0);
+                const glm::vec2 at = result.Scene->FindEntity("p").Get<Transform>().Position;
+                path = path * 1099511628211ull ^ Fnv1a64(&at, sizeof(at));
+            }
+            return path;
+        };
+        const uint64_t reference = run({ 0, 1, 2 }, "01");
+        bool all = true;
+        for (const std::vector<int>& order : std::vector<std::vector<int>>{ { 0, 2, 1 }, { 1, 0, 2 }, { 1, 2, 0 }, { 2, 0, 1 }, { 2, 1, 0 } })
+            all = all && run(order, "01") == reference;
+        CHECK(all, "static walls listed in any order give the mover the same path, step for step");
+        CHECK(run({ 0, 1, 2 }, "10") == reference, "and so does listing a tilemap's solid characters the other way round");
+
+        // and every wall and tile does stop it: take any away and the path is different
+        CHECK(run({ 1, 2 }, "01") != reference && run({ 0, 2 }, "01") != reference && run({ 0, 1 }, "01") != reference && run({ 0, 1, 2 }, "0") != reference && run({ 0, 1, 2 }, "1") != reference && run({ 0, 1, 2 }, "") != reference, "the walls and each kind of solid tile all change the path (so the checks above mean something)");
+    }
+
     // determinism (ADR-0002): the seed changes a Wander walk and nothing else
     {
         ComponentRegistry registry;
