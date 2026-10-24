@@ -10,6 +10,7 @@
 #include "Marle/Scene/SceneReloader.h"
 #include "Marle/Scene/RandomGenerator.h"
 #include "Marle/Scene/Simulation.h"
+#include "Marle/Scene/Collision.h"
 #include "Marle/Scene/InputRecording.h"
 #include "Marle/CommandLine.h"
 #include "Marle/Core/KeyNames.h"
@@ -338,7 +339,7 @@ int main(int argc, char** argv)
         ComponentRegistry registry;
         RegisterBuiltinComponents(registry);
         std::vector<std::string> names = registry.GetNames();
-        CHECK(names == std::vector<std::string>({ "Transform", "SpriteRenderer", "Camera", "Tilemap", "Random", "KeyboardMove", "KeyboardRotate", "WheelZoom", "Follow", "Spin", "Orbit", "Wander", "RestartOnKey", "ClampPosition" }), "the built-in components register in order, the behaviors last, ClampPosition after all of them");
+        CHECK(names == std::vector<std::string>({ "Transform", "SpriteRenderer", "Camera", "Tilemap", "Collider", "Random", "KeyboardMove", "KeyboardRotate", "WheelZoom", "Follow", "Spin", "Orbit", "Wander", "RestartOnKey", "ClampPosition" }), "the built-in components register in order, the behaviors last, ClampPosition after all of them");
 
         const ComponentInfo* transform = registry.Find("Transform");
         CHECK(transform && !transform->Description.empty() && transform->Fields.size() == 3, "a component has a description and its fields");
@@ -836,7 +837,7 @@ int main(int argc, char** argv)
 
         std::string order;
         for (auto it = schema["definitions"].begin(); it != schema["definitions"].end(); ++it) order += it.key() + " ";
-        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Random component_KeyboardMove component_KeyboardRotate component_WheelZoom component_Follow component_Spin component_Orbit component_Wander component_RestartOnKey component_ClampPosition ", "components are described in registration order");
+        CHECK(order == "entity component_Transform component_SpriteRenderer component_Camera component_Tilemap component_Collider component_Random component_KeyboardMove component_KeyboardRotate component_WheelZoom component_Follow component_Spin component_Orbit component_Wander component_RestartOnKey component_ClampPosition ", "components are described in registration order");
         CHECK(schema["definitions"]["entity"]["properties"]["components"]["properties"]["Camera"]["$ref"] == "#/definitions/component_Camera", "an entity's components point at their definitions");
 
         bool everyField = true, described = !schema["description"].get<std::string>().empty();
@@ -984,7 +985,7 @@ int main(int argc, char** argv)
 
         // directories
         ToolRun scenes = RunTool(registry, { "validate", "Assets/Scenes" });
-        CHECK(scenes.Code == 0 && scenes.Out == ok.Out + "OK    Assets/Scenes/world.json: 8 entities, 27 components\n2 files, 0 with problems\n", "a directory means its scene files, and the schema file is not one of them");
+        CHECK(scenes.Code == 0 && scenes.Out == ok.Out + "OK    Assets/Scenes/world.json: 12 entities, 40 components\n2 files, 0 with problems\n", "a directory means its scene files, and the schema file is not one of them");
         WriteFile((work / "b.json").string(), R"({"version": 1, "name": "b", "entities": []})");
         WriteFile((work / "sub" / "a.json").string(), R"({"version": 1, "name": "a", "entities": []})");
         WriteFile((work / "notes.txt").string(), "not a scene");
@@ -1167,6 +1168,33 @@ int main(int argc, char** argv)
         CHECK(registry.Write(defaults, "Tilemap", true) == Json::object(), "an all-default tilemap writes as an empty object with skipDefaults");
         CHECK(registry.Find("Tilemap")->Fields[3].Type == FieldType::StringArray && std::string(FieldTypeName(FieldType::StringArray)) == "string[]" && registry.Find("Tilemap")->Fields[0].AssetPath, "rows is a string[] field and the sheet is an asset path");
 
+        // solid tiles
+        CHECK(registry.Find("Tilemap")->Fields[4].Name == "solid" && registry.Find("Tilemap")->Fields[4].Default == "" && defaults.Get<Tilemap>().Solid.empty(), "a tilemap has a solid field after the rows, and no tile blocks by default");
+        Entity walls = scene.CreateEntity("walls");
+        CHECK(registry.Read(walls, "Tilemap", Json::parse(R"({"rows": ["cc.", "c.d", "..."], "solid": "cd"})")).empty() && walls.Get<Tilemap>().Solid == "cd", "the solid characters are read");
+        CHECK(TilemapSolidTiles(walls.Get<Tilemap>(), nullptr).size() == 4, "every tile whose character is listed is solid, and '.' never is");
+        Entity badSolid = scene.CreateEntity("badSolid");
+        CHECK(HasError(registry.Read(badSolid, "Tilemap", Json::parse(R"({"solid": "cD"})")), "/solid", "'D' at position 1 is not a tile character") && HasError(registry.Read(badSolid, "Tilemap", Json::parse(R"({"solid": "c."})")), "/solid", "'.' at position 1") && HasError(registry.Read(badSolid, "Tilemap", Json::parse(R"({"solid": "cac"})")), "/solid", "'c' is listed more than once") && !badSolid.Has<Tilemap>(), "a solid list with a non-tile character or a repeat is refused");
+        CHECK(HasError(registry.Read(badSolid, "Tilemap", Json::parse(R"({"solid": "c c"})")), "/solid", "position 1"), "a space is not a tile character");
+
+        // where they are: the same place the renderer draws the tile (rows top to bottom, the map's corner at the position)
+        {
+            Tilemap map2;
+            map2.TileSize = { 10.0f, 20.0f };
+            map2.Rows = { "a.", "bc" };
+            map2.Solid = "ac";
+            std::vector<TileBox> boxes = TilemapSolidTiles(map2, nullptr);
+            CHECK(boxes.size() == 2 && boxes[0].Center == glm::vec2(5.0f, 30.0f) && boxes[0].Size == glm::vec2(10.0f, 20.0f) && boxes[1].Center == glm::vec2(15.0f, 10.0f), "the top row is highest, the first column leftmost, and the boxes come in row order");
+            Transform placed;
+            placed.Position = { 100.0f, -50.0f };
+            placed.Scale = { 2.0f, 0.5f };
+            placed.Rotation = 1.0f;
+            boxes = TilemapSolidTiles(map2, &placed);
+            CHECK(boxes.size() == 2 && boxes[0].Center == glm::vec2(110.0f, -50.0f + 15.0f) && boxes[0].Size == glm::vec2(20.0f, 10.0f) && boxes[1].Center == glm::vec2(130.0f, -50.0f + 5.0f), "the transform's position and scale place and size them, its rotation is not used");
+            map2.Solid.clear();
+            CHECK(TilemapSolidTiles(map2, nullptr).empty(), "with nothing listed there are no boxes");
+        }
+
         // the writer lays a component with a list of strings out as a block, one string per line
         Scene ground("Ground");
         Entity g = ground.CreateEntity("ground");
@@ -1190,7 +1218,8 @@ int main(int argc, char** argv)
           "rows": [
             "01",
             "2."
-          ]
+          ],
+          "solid": ""
         }
       }
     },
@@ -1201,7 +1230,8 @@ int main(int argc, char** argv)
           "texture": "",
           "cellSize": [32, 32],
           "tileSize": [64, 64],
-          "rows": []
+          "rows": [],
+          "solid": ""
         }
       }
     }
@@ -1250,7 +1280,7 @@ int main(int argc, char** argv)
 
         std::string names;
         for (Entity e : world.Scene->GetEntities()) names += e.GetName() + " ";
-        CHECK(names == "world spinner_0 spinner_1 spinner_2 spinner_3 player satellite camera ", "its entities are in draw order, with the camera after the player and the satellite it follows");
+        CHECK(names == "world zone wall_a wall_b pillar spinner_0 spinner_1 spinner_2 spinner_3 player satellite camera ", "its entities are in draw order, with the camera after the player and the satellite it follows");
 
         Entity camera = world.Scene->FindEntity("camera"), player = world.Scene->FindEntity("player"), map = world.Scene->FindEntity("world");
         CHECK(camera.Get<Camera>().Primary && camera.Get<Camera>().Zoom == 1.0f && camera.Get<Transform>().Position == player.Get<Transform>().Position && player.Get<Transform>().Position == glm::vec2(1024.0f, 518.0f), "the camera is primary and starts on the player");
@@ -1261,6 +1291,22 @@ int main(int argc, char** argv)
         CHECK(camera.Get<KeyboardRotate>().Speed == 1.0f && camera.Get<KeyboardRotate>().CounterClockwiseKey == "Q" && camera.Get<KeyboardRotate>().ClockwiseKey == "E" && camera.Get<WheelZoom>().Factor == 1.1f && camera.Get<WheelZoom>().MinZoom == 0.25f && camera.Get<WheelZoom>().MaxZoom == 4.0f && camera.Get<Follow>().Target == "player", "the camera follows the player, turns with Q and E and zooms with the wheel between 0.25 and 4");
         Entity satelliteEntity = world.Scene->FindEntity("satellite");
         CHECK(satelliteEntity.Get<Orbit>().Target == "player" && satelliteEntity.Get<Orbit>().Radius == 44.0f && satelliteEntity.Get<Orbit>().Speed == 2.0f && satelliteEntity.Get<Orbit>().RotationSpeed == 6.0f, "the satellite orbits the player at 44 units, 2 radians a second, turning three times as fast");
+        // what it can run into
+        const Collider& body = player.Get<Collider>();
+        CHECK(body.Shape == "box" && body.Size == glm::vec2(48.0f, 48.0f) && body.Kind == "solid" && map.Get<Tilemap>().Solid == "cdef", "the player is a solid 48 by 48 box and the border tiles (c to f) are walls");
+        CHECK(world.Scene->FindEntity("zone").Get<Collider>().Kind == "trigger" && world.Scene->FindEntity("wall_a").Get<Collider>().Kind == "solid" && world.Scene->FindEntity("pillar").Get<Collider>().Shape == "circle" && world.Scene->FindEntity("pillar").Get<Collider>().Radius == 40.0f, "there is a trigger zone, a wall and a round pillar");
+        {
+            SceneLoadResult play = LoadScene(file, registry);
+            for (int i = 0; i < 100; i++) Simulation::Step(registry, *play.Scene, InputFrame().Hold(Key::A), 1.0 / 60.0);
+            CHECK(play.Scene->FindEntity("player").Get<Transform>().Position == glm::vec2(764.0f, 518.0f), "walking left, the player stops against the pillar (700 + 40 + 24) and not before");
+            SceneLoadResult north = LoadScene(file, registry);
+            for (int i = 0; i < 300; i++) Simulation::Step(registry, *north.Scene, InputFrame().Hold(Key::W), 1.0 / 60.0);
+            CHECK(north.Scene->FindEntity("player").Get<Transform>().Position == glm::vec2(1024.0f, 1448.0f), "walking up, it stops at the border wall, where its clamp is");
+            SceneLoadResult zone = LoadScene(file, registry);
+            zone.Scene->FindEntity("player").Get<Transform>().Position = { 1300.0f, 900.0f };
+            Simulation::Step(registry, *zone.Scene, InputFrame(), 1.0 / 60.0);
+            CHECK(zone.Scene->GetOverlaps().Entered.size() == 1 && zone.Scene->GetOverlaps().Entered[0].Trigger == "zone" && zone.Scene->GetOverlaps().Entered[0].Other == "player", "standing in the zone, the player has entered it");
+        }
         bool spinnersOk = true;
         for (int i = 0; i < 4; i++) {
             Entity spinner = world.Scene->FindEntity("spinner_" + std::to_string(i));
@@ -1612,7 +1658,8 @@ int main(int argc, char** argv)
       "rows": [
         "ab",
         "cd"
-      ]
+      ],
+      "solid": ""
     }
   },
   "entities": []
@@ -2367,6 +2414,225 @@ int main(int argc, char** argv)
         const std::string golden = R"("KeyboardMove": { "speed": 100, "runMultiplier": 2, "runKey": "LeftShift", "keys": "both", "relativeTo": "", "tintWhenRunning": false, "idleTint": [1, 1, 1, 1], "runTint": [1, 0.65, 0.3, 1] })";
         SceneLoadResult written = problems("");
         CHECK(written.Ok() && Contains(SaveSceneToText(*written.Scene, registry).Text, golden), "it is written with every field, in this order");
+    }
+
+    // Collider
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto load = [&](const std::string& fields) { return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [{"name": "c", "components": {"Collider": {)" + fields + "}}}]}", "inline", registry); };
+
+        const ComponentInfo* info = registry.Find("Collider");
+        std::string names;
+        for (const FieldInfo& field : info->Fields) names += field.Name + " ";
+        CHECK(info && !info->IsBehavior && names == "shape size radius offset kind ", "Collider is data with a shape, its size, a radius, an offset and a kind");
+        CHECK(info->Fields[0].Default == "box" && info->Fields[1].Default == Json::array({ 32.0, 32.0 }) && info->Fields[2].Default == 16.0 && info->Fields[3].Default == Json::array({ 0.0, 0.0 }) && info->Fields[4].Default == "solid", "a collider is a solid 32 by 32 box by default");
+
+        SceneLoadResult empty = load("");
+        CHECK(empty.Ok() && empty.Scene->FindEntity("c").Get<Collider>().Shape == "box" && empty.Scene->FindEntity("c").Get<Collider>().Kind == "solid", "every field has a default, so {} is a solid box");
+        SceneLoadResult circle = load(R"("shape": "circle", "radius": 12.5, "offset": [4, -6], "kind": "trigger")");
+        const Collider& c = circle.Scene->FindEntity("c").Get<Collider>();
+        CHECK(circle.Ok() && c.Shape == "circle" && c.Radius == 12.5f && c.Offset == glm::vec2(4.0f, -6.0f) && c.Kind == "trigger", "a trigger circle reads back as written");
+
+        CHECK(HasProblem(load(R"("shape": "cirlce")"), "/entities/0/components/Collider/shape", "circle") && HasProblem(load(R"("kind": "solod")"), "/entities/0/components/Collider/kind", "solid"), "an unknown shape or kind is refused with a suggestion");
+        CHECK(!load(R"("radius": 0)").Ok() && !load(R"("radius": -1)").Ok() && !load(R"("size": [0, 10])").Ok() && !load(R"("size": [10, -2])").Ok() && load(R"("size": [0.5, 0.5], "radius": 0.5)").Ok(), "a size or radius that is not positive is refused");
+        CHECK(!load(R"("size": [10])").Ok() && !load(R"("colour": "red")").Ok(), "a size with one number and an unknown field are refused");
+
+        SceneSchemaToText(registry);
+        SceneLoadResult sceneWith = load(R"("shape": "circle", "radius": 3, "kind": "trigger")");
+        std::string text = SaveSceneToText(*sceneWith.Scene, registry).Text;
+        SceneLoadResult again = LoadSceneFromText(text, "inline", registry);
+        CHECK(again.Ok() && SaveSceneToText(*again.Scene, registry).Text == text && Contains(text, R"("Collider": { "shape": "circle", "size": [32, 32], "radius": 3, "offset": [0, 0], "kind": "trigger" })"), "it is written with every field and reads back the same");
+    }
+
+    // stopping at solids (ADR-0003)
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto load = [&](const std::string& entities) { return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [)" + entities + "]}", "inline", registry); };
+        auto stepWith = [&](Scene& scene, const InputFrame& input, int n = 1) { for (int i = 0; i < n; i++) Simulation::Step(registry, scene, input, 1.0 / 60.0); };
+        auto near = [](glm::vec2 a, glm::vec2 b) { return fabsf(a.x - b.x) < 0.01f && fabsf(a.y - b.y) < 0.01f; };
+        auto position = [&](SceneLoadResult& r, const char* name) { return r.Scene->FindEntity(name).Get<Transform>().Position; };
+        // the player moves 10 units a step; the collider is described by `shape`, the wall by `wall`
+        auto player = [&](const std::string& at, const std::string& shape, const std::string& kind = "solid") {
+            return R"({"name": "p", "components": {"Transform": {"position": )" + at + R"(}, "Collider": {)" + shape + R"(, "kind": ")" + kind + R"("}, "KeyboardMove": {"speed": 600, "runKey": ""}}})";
+        };
+        auto wall = [&](const std::string& at, const std::string& shape, const std::string& kind = "solid") {
+            return R"({"name": "wall", "components": {"Transform": {"position": )" + at + R"(}, "Collider": {)" + shape + R"(, "kind": ")" + kind + R"("}}})";
+        };
+        const std::string box10 = R"("shape": "box", "size": [10, 10])";
+        const std::string circle5 = R"("shape": "circle", "radius": 5)";
+        const InputFrame right = InputFrame().Hold(Key::D);
+
+        // shapes overlapping
+        {
+            CollisionShape a = ShapeOfCollider(Collider(), { 0.0f, 0.0f });   // 32 by 32
+            CollisionShape b = ShapeOfCollider(Collider(), { 31.0f, 0.0f });
+            CollisionShape c = ShapeOfCollider(Collider(), { 32.0f, 0.0f });
+            CHECK(ShapesOverlap(a, b) && ShapesOverlap(b, a), "boxes that share some area overlap, either way round");
+            CHECK(!ShapesOverlap(a, c) && !ShapesOverlap(c, a) && !ShapesOverlap(a, ShapeOfCollider(Collider(), { 100.0f, 0.0f })), "boxes that only touch, or are apart, do not");
+            Collider ring; ring.Shape = "circle"; ring.Radius = 5.0f;
+            Collider square; square.Size = { 10.0f, 10.0f };
+            CHECK(ShapesOverlap(ShapeOfCollider(ring, { 8.0f, 8.0f }), ShapeOfCollider(square, { 0.0f, 0.0f })) && !ShapesOverlap(ShapeOfCollider(ring, { 9.0f, 9.0f }), ShapeOfCollider(square, { 0.0f, 0.0f })), "a circle meets a box's corner by distance, not by its bounding square");
+            CHECK(ShapesOverlap(ShapeOfCollider(ring, { 9.0f, 0.0f }), ShapeOfCollider(ring, { 0.0f, 0.0f })) && !ShapesOverlap(ShapeOfCollider(ring, { 10.0f, 0.0f }), ShapeOfCollider(ring, { 0.0f, 0.0f })), "two circles overlap when closer than the sum of their radii");
+            Collider shifted; shifted.Size = { 10.0f, 10.0f }; shifted.Offset = { 20.0f, 0.0f };
+            CHECK(ShapeOfCollider(shifted, { 5.0f, 5.0f }).Center == glm::vec2(25.0f, 5.0f), "the offset moves the shape from the position");
+        }
+
+        // a box stops flush against a box wall
+        SceneLoadResult toWall = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", box10));
+        stepWith(*toWall.Scene, right, 3);
+        CHECK(near(position(toWall, "p"), { 30.0f, 0.0f }), "it walks freely until the wall");
+        stepWith(*toWall.Scene, right, 17);
+        CHECK(position(toWall, "p") == glm::vec2(40.0f, 0.0f) && position(toWall, "wall") == glm::vec2(50.0f, 0.0f), "and stops flush against it, without moving the wall");
+        stepWith(*toWall.Scene, right, 5);
+        CHECK(position(toWall, "p") == glm::vec2(40.0f, 0.0f), "pushing on goes nowhere");
+        stepWith(*toWall.Scene, InputFrame().Hold(Key::A), 2);
+        CHECK(near(position(toWall, "p"), { 20.0f, 0.0f }), "and it can walk back out");
+
+        // along a wall, not into it
+        SceneLoadResult slide = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", R"("shape": "box", "size": [10, 4000])"));
+        stepWith(*slide.Scene, InputFrame().Hold(Key::D).Hold(Key::W), 30);
+        CHECK(position(slide, "p").x == 40.0f && position(slide, "p").y > 150.0f, "diagonally into a wall it slides along it");
+        SceneLoadResult slideDown = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", R"("shape": "box", "size": [10, 4000])"));
+        stepWith(*slideDown.Scene, InputFrame().Hold(Key::D).Hold(Key::S), 30);
+        CHECK(position(slideDown, "p").x == 40.0f && position(slideDown, "p").y < -150.0f, "whichever way it goes along it");
+        SceneLoadResult floor = load(player("[0, 30]", box10) + ", " + wall("[0, 0]", R"("shape": "box", "size": [400, 10])"));
+        stepWith(*floor.Scene, InputFrame().Hold(Key::S).Hold(Key::D), 10);
+        CHECK(position(floor, "p").y == 10.0f && position(floor, "p").x > 40.0f, "and on the other axis");
+
+        // shapes
+        SceneLoadResult circleToBox = load(player("[0, 0]", circle5) + ", " + wall("[50, 0]", box10));
+        stepWith(*circleToBox.Scene, right, 20);
+        CHECK(position(circleToBox, "p") == glm::vec2(40.0f, 0.0f), "a circle stops flush against a box");
+        SceneLoadResult circleToCorner = load(player("[0, 8]", circle5) + ", " + wall("[50, 0]", box10));
+        stepWith(*circleToCorner.Scene, right, 20);
+        CHECK(near(position(circleToCorner, "p"), { 41.0f, 8.0f }), "and against a corner it stops where its edge touches the corner");
+        SceneLoadResult circleToCircle = load(player("[0, 0]", circle5) + ", " + wall("[50, 0]", circle5));
+        stepWith(*circleToCircle.Scene, right, 20);
+        CHECK(position(circleToCircle, "p") == glm::vec2(40.0f, 0.0f), "a circle stops against a circle");
+        SceneLoadResult boxToCircle = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", circle5));
+        stepWith(*boxToCircle.Scene, right, 20);
+        CHECK(position(boxToCircle, "p") == glm::vec2(40.0f, 0.0f), "a box stops against a circle");
+        SceneLoadResult offset = load(player("[0, 0]", R"("shape": "box", "size": [10, 10], "offset": [4, 0])") + ", " + wall("[50, 0]", box10));
+        stepWith(*offset.Scene, right, 20);
+        CHECK(position(offset, "p") == glm::vec2(36.0f, 0.0f), "the collider's offset is respected: its center is 4 ahead of the position");
+
+        // solid tiles
+        const std::string tiles = R"({"name": "ground", "components": {"Transform": {"position": [0, 0]}, "Tilemap": {"tileSize": [10, 10], "rows": ["....", "..cd", "...."], "solid": "c"}}})";
+        SceneLoadResult intoTile = load(player("[0, 15]", R"("shape": "box", "size": [4, 4])") + ", " + tiles);
+        stepWith(*intoTile.Scene, right, 20);
+        CHECK(position(intoTile, "p") == glm::vec2(18.0f, 15.0f), "a mover stops flush against a solid tile");
+        SceneLoadResult pastTile = load(player("[0, 25]", R"("shape": "box", "size": [4, 4])") + ", " + tiles);
+        stepWith(*pastTile.Scene, right, 6);
+        CHECK(position(pastTile, "p").x > 50.0f, "and walks past a row that has none");
+        SceneLoadResult otherTile = load(player("[22, 5]", R"("shape": "box", "size": [4, 4])") + ", " + R"({"name": "ground", "components": {"Tilemap": {"tileSize": [10, 10], "rows": ["..cd"], "solid": "c"}}})");
+        stepWith(*otherTile.Scene, right, 10);
+        CHECK(position(otherTile, "p").x > 40.0f, "a tile whose character is not listed does not stop it (the 'd' next to the solid 'c')");
+        SceneLoadResult movedMap = load(player("[0, 105]", R"("shape": "box", "size": [4, 4])") + ", " + R"({"name": "ground", "components": {"Transform": {"position": [0, 100], "scale": [2, 1]}, "Tilemap": {"tileSize": [10, 10], "rows": ["..c."], "solid": "c"}}})");
+        stepWith(*movedMap.Scene, right, 20);
+        CHECK(position(movedMap, "p") == glm::vec2(38.0f, 105.0f), "a tilemap's own position and scale place its solid tiles");
+
+        // what does and does not stop
+        SceneLoadResult inside = load(player("[50, 0]", box10) + ", " + wall("[50, 0]", box10));
+        stepWith(*inside.Scene, right, 3);
+        CHECK(near(position(inside, "p"), { 80.0f, 0.0f }), "a mover that starts inside a solid is not stopped by it, and can walk out");
+        SceneLoadResult fast = load(R"({"name": "p", "components": {"Transform": {"position": [0, 0]}, "Collider": {"shape": "box", "size": [10, 10]}, "KeyboardMove": {"speed": 100000, "runKey": ""}}}, )" + wall("[500, 0]", R"("shape": "box", "size": [2, 10])"));
+        stepWith(*fast.Scene, right, 3);
+        CHECK(position(fast, "p") == glm::vec2(494.0f, 0.0f), "a mover faster than the wall is thick still stops at it");
+        SceneLoadResult trigger = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", box10, "trigger"));
+        stepWith(*trigger.Scene, right, 12);
+        CHECK(position(trigger, "p").x > 100.0f, "a trigger blocks nothing");
+        SceneLoadResult triggerMover = load(player("[0, 0]", box10, "trigger") + ", " + wall("[50, 0]", box10));
+        stepWith(*triggerMover.Scene, right, 12);
+        CHECK(position(triggerMover, "p").x > 100.0f, "and a trigger is not stopped");
+        SceneLoadResult noCollider = load(R"({"name": "p", "components": {"Transform": {"position": [0, 0]}, "KeyboardMove": {"speed": 600, "runKey": ""}}}, )" + wall("[50, 0]", box10));
+        stepWith(*noCollider.Scene, right, 12);
+        CHECK(position(noCollider, "p").x > 100.0f, "an entity with no Collider walks through");
+        SceneLoadResult walls = load(R"({"name": "a", "components": {"Transform": {"position": [0, 0]}, "Collider": {"shape": "box", "size": [10, 10]}}}, {"name": "b", "components": {"Transform": {"position": [5, 0]}, "Collider": {"shape": "box", "size": [10, 10]}}})");
+        stepWith(*walls.Scene, InputFrame(), 5);
+        CHECK(position(walls, "a") == glm::vec2(0.0f, 0.0f) && position(walls, "b") == glm::vec2(5.0f, 0.0f), "walls that overlap each other and do not move are left as they are");
+
+        // not only the keyboard: any behavior that moves an entity
+        SceneLoadResult following = load(R"({"name": "t", "components": {"Transform": {"position": [100, 0]}}}, {"name": "p", "components": {"Transform": {"position": [0, 0]}, "Collider": {"shape": "box", "size": [10, 10]}, "Follow": {"target": "t"}}}, )" + wall("[50, 0]", box10));
+        stepWith(*following.Scene, InputFrame(), 1);
+        CHECK(position(following, "p") == glm::vec2(40.0f, 0.0f), "Follow's jump of 100 units stops at the wall too");
+
+        // what follows an entity sees where it ended up
+        SceneLoadResult camera = load(player("[0, 0]", box10) + ", " + wall("[50, 0]", box10) + R"(, {"name": "camera", "components": {"Transform": {}, "Camera": {}, "Follow": {"target": "p"}}})");
+        stepWith(*camera.Scene, right, 20);
+        CHECK(position(camera, "camera") == position(camera, "p") && position(camera, "p").x == 40.0f, "a camera later in the file follows the stopped position, not the one before the wall");
+
+        // overlap events
+        {
+            auto pairs = [](const std::vector<Overlap>& list) {
+                std::string text;
+                for (const Overlap& pair : list) text += pair.Trigger + ">" + pair.Other + " ";
+                return text;
+            };
+            const std::string zone = R"({"name": "zone", "components": {"Transform": {"position": [50, 0]}, "Collider": {"shape": "box", "size": [30, 30], "kind": "trigger"}}})";
+            SceneLoadResult walk = load(zone + ", " + player("[0, 0]", box10));
+            CHECK(walk.Scene->GetOverlaps().Touching.empty() && walk.Scene->GetOverlaps().Entered.empty(), "a scene that has not stepped has no overlaps");
+            std::string log;
+            for (int step = 1; step <= 8; step++) {
+                stepWith(*walk.Scene, right);
+                const SceneOverlaps& o = walk.Scene->GetOverlaps();
+                log += std::to_string(step) + ":" + (o.Entered.empty() ? "" : "E") + (o.Staying.empty() ? "" : "S") + (o.Left.empty() ? "" : "L") + (o.Touching.empty() ? "" : "T") + " ";
+            }
+            CHECK(log == "1: 2: 3: 4:ET 5:ST 6:ST 7:L 8: ", "a trigger reports entered on the step the player gets in, staying while it is, left on the step it gets out");
+            SceneLoadResult again = load(zone + ", " + player("[0, 0]", box10));
+            stepWith(*again.Scene, right, 4);
+            CHECK(pairs(again.Scene->GetOverlaps().Entered) == "zone>p " && pairs(again.Scene->GetOverlaps().Touching) == "zone>p ", "the pair is the trigger's name and then the other entity's");
+            stepWith(*again.Scene, right, 3);
+            CHECK(pairs(again.Scene->GetOverlaps().Left) == "zone>p " && again.Scene->GetOverlaps().Touching.empty(), "and the same pair is what left");
+
+            // it is all worked out from positions, so a scene loaded with an overlap already in place says entered on its first step
+            SceneLoadResult already = load(zone + ", " + player("[50, 0]", box10));
+            stepWith(*already.Scene, InputFrame());
+            CHECK(pairs(already.Scene->GetOverlaps().Entered) == "zone>p ", "a scene that starts with an overlap reports it as entered on the first step");
+            stepWith(*already.Scene, InputFrame());
+            CHECK(already.Scene->GetOverlaps().Entered.empty() && pairs(already.Scene->GetOverlaps().Staying) == "zone>p ", "and as staying after that");
+
+            // order: by the trigger's creation order, then the other's, not by name
+            SceneLoadResult crowd = load(R"({"name": "trig_b", "components": {"Transform": {}, "Collider": {"kind": "trigger"}}}, {"name": "trig_a", "components": {"Transform": {}, "Collider": {"kind": "trigger"}}}, {"name": "thing_2", "components": {"Transform": {}, "Collider": {}}}, {"name": "thing_1", "components": {"Transform": {}, "Collider": {}}})");
+            stepWith(*crowd.Scene, InputFrame());
+            CHECK(pairs(crowd.Scene->GetOverlaps().Touching) == "trig_b>trig_a trig_b>thing_2 trig_b>thing_1 trig_a>trig_b trig_a>thing_2 trig_a>thing_1 ", "pairs come in creation order of the trigger then the other, two triggers both ways round, never a trigger with itself");
+
+            // what counts
+            SceneLoadResult solids = load(wall("[0, 0]", box10) + R"(, {"name": "wall2", "components": {"Transform": {}, "Collider": {}}}, {"name": "ghost", "components": {"Collider": {"kind": "trigger"}}}, {"name": "far", "components": {"Transform": {"position": [500, 0]}, "Collider": {"kind": "trigger"}}})");
+            stepWith(*solids.Scene, InputFrame());
+            CHECK(solids.Scene->GetOverlaps().Touching.empty(), "two solids overlapping are not reported, a trigger with no Transform takes no part, and one far away overlaps nothing");
+            SceneLoadResult flush = load(zone + ", " + player("[30, 0]", box10));   // its right edge is on the zone's left edge
+            stepWith(*flush.Scene, InputFrame());
+            CHECK(flush.Scene->GetOverlaps().Touching.empty(), "shapes that only touch do not overlap");
+            SceneLoadResult solidInTrigger = load(zone + ", " + wall("[60, 0]", box10));
+            stepWith(*solidInTrigger.Scene, InputFrame());
+            CHECK(pairs(solidInTrigger.Scene->GetOverlaps().Touching) == "zone>wall ", "a solid collider inside a trigger is reported");
+
+            // a trigger that moves into something, and an entity destroyed while overlapping
+            SceneLoadResult gone = load(zone + ", " + player("[50, 0]", box10));
+            stepWith(*gone.Scene, InputFrame(), 2);
+            gone.Scene->DestroyEntity(gone.Scene->FindEntity("p"));
+            stepWith(*gone.Scene, InputFrame());
+            CHECK(pairs(gone.Scene->GetOverlaps().Left) == "zone>p " && gone.Scene->GetOverlaps().Touching.empty(), "an entity destroyed while overlapping is reported as left on the next step");
+            stepWith(*gone.Scene, InputFrame());
+            CHECK(gone.Scene->GetOverlaps().Left.empty(), "and only once");
+
+            // runtime state only: not in the checksum or the written scene
+            SceneLoadResult checked = load(zone + ", " + player("[50, 0]", box10));
+            const std::string before = SaveSceneToText(*checked.Scene, registry).Text;
+            uint64_t sum = Simulation::Checksum(registry, *checked.Scene);
+            stepWith(*checked.Scene, InputFrame());
+            CHECK(!checked.Scene->GetOverlaps().Touching.empty() && sum == Simulation::Checksum(registry, *checked.Scene) && before == SaveSceneToText(*checked.Scene, registry).Text, "overlaps are not in the checksum or in a saved scene");
+        }
+
+        // the same run twice ends in the same state
+        auto run = [&]() {
+            SceneLoadResult r = load(player("[0, 0]", circle5) + ", " + wall("[50, 8]", box10) + ", " + tiles);
+            stepWith(*r.Scene, InputFrame().Hold(Key::D).Hold(Key::W), 40);
+            return Simulation::Checksum(registry, *r.Scene);
+        };
+        CHECK(run() == run(), "a run with collisions gives the same checksum every time");
     }
 
     // movement behaviors: KeyboardRotate, WheelZoom, ClampPosition
@@ -3244,6 +3510,185 @@ int main(int argc, char** argv)
         CHECK(RunSceneTool({ "simulate", world, "--recording", golden, "--expect", Simulation::ChecksumText(read.Recording.Checksum) }, registry, out, err) == 0, "marle-scene simulate reaches the golden checksum from the committed file");
     }
 
+    // determinism (ADR-0003): a route through world.json that runs into its pillar, a wall, the trigger zone and the border
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        const std::string world = "Assets/Scenes/world.json";
+        const std::string golden = "Tests/SceneTests/fixtures/world_collide.recording.json";
+        auto fresh = [&] { return LoadScene(world, registry); };
+
+        // held keys and for how many steps: left into the pillar, up past it, right through the trigger zone and
+        // on up out of it, right and down (running), left (running) into wall_b, up and left along it (a slide),
+        // then down and right (running) into the border's corner
+        struct Leg { std::vector<int> Keys; int Steps; };
+        const std::vector<Leg> route = {
+            { { Key::A }, 100 }, { { Key::W }, 60 }, { { Key::D }, 100 }, { {}, 20 }, { { Key::W }, 100 },
+            { { Key::D, Key::LeftShift }, 60 }, { { Key::S }, 150 }, { { Key::A, Key::LeftShift }, 60 },
+            { { Key::W, Key::A }, 40 }, { { Key::S, Key::D, Key::LeftShift }, 200 } };
+        std::vector<InputFrame> frames;
+        std::vector<int> legEnd;
+        for (const Leg& leg : route) {
+            InputFrame frame;
+            for (int key : leg.Keys) frame.Hold(key);
+            for (int i = 0; i < leg.Steps; i++) frames.push_back(frame);
+            legEnd.push_back((int)frames.size());
+        }
+        const int steps = (int)frames.size();
+
+        // the run, with where the player was at the end of each leg, and what overlapped when
+        SceneLoadResult live = fresh();
+        InputRecorder recorder;
+        recorder.Start(live.Scene->GetName(), live.TextHash, live.Scene->GetSeed(), 60);
+        std::vector<glm::vec2> atLegEnd;
+        uint64_t overlapDigest = 1469598103934665603ull;
+        int entered = 0, left = 0;
+        auto mixOverlaps = [&](const Scene& scene, uint64_t& digest) {
+            std::string text;
+            const SceneOverlaps& o = scene.GetOverlaps();
+            for (const Overlap& pair : o.Entered) text += "E" + pair.Trigger + ">" + pair.Other + ";";
+            for (const Overlap& pair : o.Staying) text += "S" + pair.Trigger + ">" + pair.Other + ";";
+            for (const Overlap& pair : o.Left) text += "L" + pair.Trigger + ">" + pair.Other + ";";
+            text += "|";
+            digest = digest * 1099511628211ull ^ Fnv1a64(text.data(), text.size());
+        };
+        for (int i = 0; i < steps; i++) {
+            recorder.Record(frames[i]);
+            Simulation::Step(registry, *live.Scene, frames[i], 1.0 / 60.0);
+            mixOverlaps(*live.Scene, overlapDigest);
+            entered += (int)live.Scene->GetOverlaps().Entered.size();
+            left += (int)live.Scene->GetOverlaps().Left.size();
+            if (std::find(legEnd.begin(), legEnd.end(), i + 1) != legEnd.end()) atLegEnd.push_back(live.Scene->FindEntity("player").Get<Transform>().Position);
+        }
+        const uint64_t checksum = Simulation::Checksum(registry, *live.Scene);
+        const std::string recordingText = WriteRecording(recorder.Finish(checksum)).Text;
+
+        // it ran into what it should have
+        auto at = [&](size_t leg, glm::vec2 expected) { return fabsf(atLegEnd[leg].x - expected.x) < 0.1f && fabsf(atLegEnd[leg].y - expected.y) < 0.1f; };
+        CHECK(at(0, { 764.0f, 518.0f }), "walking left it stops against the pillar (700 + 40 + 24)");
+        CHECK(at(1, { 764.0f, 818.0f }), "and goes on up past it");
+        CHECK(at(2, { 1264.0f, 818.0f }), "right through the zone's edge");
+        CHECK(at(4, { 1264.0f, 1318.0f }), "up and out of the zone");
+        CHECK(at(7, { 1640.0f, 568.0f }), "running left it stops against wall_b's east face (1616 + 24)");
+        CHECK(at(8, { 1640.0f, 568.0f + 40.0f * 5.0f / 1.41421356f }), "pushing left and going up, it slides up along the wall and stays against it");
+        CHECK(at(9, { 1960.0f, 88.0f }), "and ends in the border's corner");
+        if (!(entered == 1 && left == 1)) printf("      entered %d, left %d\n", entered, left);
+        CHECK(entered == 1 && left == 1, "the player entered the zone once and left it once");
+
+        // the committed copy is this run: if world.json or the collision rules change the run, this fails, and
+        // MARLE_UPDATE_GOLDEN=1 rewrites it once the change is meant
+        if (UpdateGolden()) WriteFile(golden, recordingText);
+        const std::string committed = ReadFile(golden);
+        CHECK(committed == recordingText, "the committed recording is the route (MARLE_UPDATE_GOLDEN=1 regenerates it)");
+        RecordingReadResult read = ReadRecording(committed);
+        CHECK(read.Ok() && read.Recording.HasChecksum && read.Recording.GetStepCount() == steps, "the committed recording reads, with its checksum");
+        SceneLoadResult replayed = fresh();
+        CHECK(RecordingMismatch(read.Recording, replayed.Scene->GetName(), replayed.TextHash, replayed.Scene->GetSeed(), 60).empty() && ReplayRecording(registry, *replayed.Scene, read.Recording) == read.Recording.Checksum, "replaying it reaches the golden checksum");
+
+        // the same run twice, step by step, and in uneven chunks with other scenes and reads in between: the same
+        // checksum, and the same overlaps on every step
+        SceneLoadResult a = fresh(), b = fresh(), other = fresh();
+        uint64_t digestA = 1469598103934665603ull, digestB = 1469598103934665603ull;
+        RandomGenerator chunker(11);
+        int done = 0;
+        bool sameAlways = true;
+        while (done < steps) {
+            const int chunk = chunker.IntBetween(1, 53);
+            for (int i = 0; i < chunk && done + i < steps; i++) {
+                Simulation::Step(registry, *a.Scene, read.Recording.Frames[done + i], 1.0 / 60.0);
+                mixOverlaps(*a.Scene, digestA);
+            }
+            for (int i = 0; i < chunk && done + i < steps; i++) Simulation::Step(registry, *other.Scene, InputFrame().Hold(Key::D), 1.0 / 60.0);
+            (void)SaveSceneToText(*a.Scene, registry).Text;
+            (void)Simulation::Checksum(registry, *a.Scene);
+            done += chunk;
+        }
+        for (int i = 0; i < steps; i++) {
+            Simulation::Step(registry, *b.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+            mixOverlaps(*b.Scene, digestB);
+        }
+        sameAlways = Simulation::Checksum(registry, *a.Scene) == read.Recording.Checksum && Simulation::Checksum(registry, *b.Scene) == read.Recording.Checksum;
+        CHECK(sameAlways, "a straight run and one in uneven chunks both end on the golden checksum");
+        CHECK(digestA == digestB && digestA == overlapDigest, "and had the same overlaps entered, staying and left on every step");
+
+        // without the player's collider the same input is another run: the collisions are what made it
+        SceneLoadResult ghost = fresh();
+        registry.Remove(ghost.Scene->FindEntity("player"), "Collider");
+        ReplayRecording(registry, *ghost.Scene, read.Recording);
+        CHECK(Simulation::Checksum(registry, *ghost.Scene) != read.Recording.Checksum, "the same input without the player's collider ends elsewhere");
+
+        // saved part way (inside the zone) and loaded again, the scene carries on to the same end
+        SceneLoadResult first = fresh();
+        for (int i = 0; i < 270; i++) Simulation::Step(registry, *first.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+        CHECK(first.Scene->GetOverlaps().Touching.size() == 1, "(step 270 is inside the zone)");
+        SceneLoadResult resumed = LoadSceneFromText(SaveSceneToText(*first.Scene, registry).Text, "saved", registry);
+        for (int i = 270; i < steps; i++) {
+            Simulation::Step(registry, *first.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+            Simulation::Step(registry, *resumed.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+            if (i == 270) CHECK(resumed.Scene->GetOverlaps().Entered.size() == 1 && first.Scene->GetOverlaps().Entered.empty(), "a loaded scene says it entered what it was already inside, the one it came from does not");
+        }
+        CHECK(resumed.Ok() && Simulation::Checksum(registry, *resumed.Scene) == read.Recording.Checksum, "a scene saved and loaded part way carries on to the golden checksum");
+
+        // the tool agrees, and says what the route touched
+        std::ostringstream out, err;
+        CHECK(RunSceneTool({ "simulate", world, "--recording", golden, "--expect", Simulation::ChecksumText(read.Recording.Checksum) }, registry, out, err) == 0 && out.str().find("zone > player: steps 246 to 316") != std::string::npos && out.str().find("entered once") != std::string::npos, "marle-scene simulate reaches the golden checksum and reports the zone");
+
+        // hot reload: the file moves a wall while the player is in the zone. The player (and everything the file
+        // did not change) carries on, the wall is the file's, and the overlap is worked out again
+        SceneLoadResult baseline = fresh(), running = fresh();
+        for (int i = 0; i < 270; i++) Simulation::Step(registry, *running.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+        std::string edited = ReadFile(world);
+        const size_t wallAt = edited.find("[1500, 600]");
+        CHECK(wallAt != std::string::npos, "(the wall is where this test expects)");
+        edited.replace(wallAt, 11, "[1500, 300]");
+        SceneLoadResult moved = LoadSceneFromText(edited, world, registry);
+        CarryOverState(registry, *baseline.Scene, *running.Scene, *moved.Scene);
+        CHECK(moved.Scene->FindEntity("player").Get<Transform>().Position == running.Scene->FindEntity("player").Get<Transform>().Position && moved.Scene->FindEntity("wall_a").Get<Transform>().Position == glm::vec2(1500.0f, 300.0f), "a reload keeps where the player had got to and takes the wall from the file");
+        Simulation::Step(registry, *moved.Scene, read.Recording.Frames[270], 1.0 / 60.0);
+        CHECK(moved.Scene->GetOverlaps().Entered.size() == 1 && moved.Scene->GetOverlaps().Entered[0].Trigger == "zone", "and the zone's overlap is found again on the next step");
+        for (int i = 271; i < steps; i++) Simulation::Step(registry, *moved.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+        CHECK(Simulation::Checksum(registry, *moved.Scene) != read.Recording.Checksum, "with the wall moved the rest of the route ends elsewhere than the golden");
+    }
+
+    // determinism (ADR-0003): how the file lists walls and solid characters does not change what stops a mover
+    {
+        ComponentRegistry registry;
+        RegisterBuiltinComponents(registry);
+        auto solid = [](const std::string& name, int x, int y, int w, int h) {
+            return R"({"name": ")" + name + R"(", "components": {"Transform": {"position": [)" + std::to_string(x) + ", " + std::to_string(y) + R"(]}, "Collider": {"shape": "box", "size": [)" + std::to_string(w) + ", " + std::to_string(h) + R"(], "kind": "solid"}}})";
+        };
+        // a mover set loose with a random walk up and to the right, through walls and a block of tiles
+        const std::string walls[] = { solid("a", 50, 0, 20, 120), solid("b", 80, 90, 100, 20), solid("c", 200, 150, 30, 30) };
+        const std::string tiles = R"({"name": "ground", "components": {"Transform": {"position": [260, 120]}, "Tilemap": {"tileSize": [40, 40], "rows": ["0101", "1010", "0101"], "solid": "SOLID"}}})";
+        const std::string mover = R"({"name": "p", "components": {"Transform": {"position": [0, 0]}, "Collider": {"shape": "circle", "radius": 8, "kind": "solid"}, "KeyboardMove": {"speed": 240, "runKey": ""}}})";
+        // the mover's whole path, as a hash of where it was after every step
+        auto run = [&](const std::vector<int>& order, const std::string& solidChars) {
+            std::string text = R"({"version": 1, "name": "t", "entities": [)" + mover;
+            for (int index : order) text += ", " + walls[index];
+            std::string map = tiles;
+            map.replace(map.find("SOLID"), 5, solidChars);
+            text += ", " + map + "]}";
+            SceneLoadResult result = LoadSceneFromText(text, "inline", registry);
+            RandomGenerator script(77);
+            uint64_t path = 1469598103934665603ull;
+            for (int i = 0; i < 400; i++) {
+                Simulation::Step(registry, *result.Scene, ScriptedFrame(script), 1.0 / 60.0);
+                const glm::vec2 at = result.Scene->FindEntity("p").Get<Transform>().Position;
+                path = path * 1099511628211ull ^ Fnv1a64(&at, sizeof(at));
+            }
+            return path;
+        };
+        const uint64_t reference = run({ 0, 1, 2 }, "01");
+        bool all = true;
+        for (const std::vector<int>& order : std::vector<std::vector<int>>{ { 0, 2, 1 }, { 1, 0, 2 }, { 1, 2, 0 }, { 2, 0, 1 }, { 2, 1, 0 } })
+            all = all && run(order, "01") == reference;
+        CHECK(all, "static walls listed in any order give the mover the same path, step for step");
+        CHECK(run({ 0, 1, 2 }, "10") == reference, "and so does listing a tilemap's solid characters the other way round");
+
+        // and every wall and tile does stop it: take any away and the path is different
+        CHECK(run({ 1, 2 }, "01") != reference && run({ 0, 2 }, "01") != reference && run({ 0, 1 }, "01") != reference && run({ 0, 1, 2 }, "0") != reference && run({ 0, 1, 2 }, "1") != reference && run({ 0, 1, 2 }, "") != reference, "the walls and each kind of solid tile all change the path (so the checks above mean something)");
+    }
+
     // determinism (ADR-0002): the seed changes a Wander walk and nothing else
     {
         ComponentRegistry registry;
@@ -3315,6 +3760,16 @@ int main(int argc, char** argv)
         ToolRun expectBad = RunTool(registry, { "simulate", world, "--steps", "120", "--expect", "0000000000000000" });
         CHECK(expectBad.Code == 1 && Contains(expectBad.Out, "DIFF  expected 0000000000000000"), "and with another one fails with exit 1");
 
+        // overlaps: a mover going round a post passes through a trigger every 63 steps (0.1 radians a step)
+        WriteFile(w + "/orbit.json", R"({"version": 1, "name": "o", "entities": [
+            {"name": "post", "components": {"Transform": {"position": [0, 0]}}},
+            {"name": "gate", "components": {"Transform": {"position": [100, 0]}, "Collider": {"shape": "box", "size": [20, 20], "kind": "trigger"}}},
+            {"name": "mover", "components": {"Transform": {"position": [0, 0]}, "Collider": {"shape": "box", "size": [10, 10]}, "Orbit": {"target": "post", "radius": 100, "speed": 6}}}]})");
+        ToolRun orbit = RunTool(registry, { "simulate", w + "/orbit.json", "--steps", "200" });
+        CHECK(orbit.Code == 0 && Contains(orbit.Out, "overlaps (trigger > what it touched):\n  gate > mover: steps 0 to 189, touching for 11 steps, entered 4 times\nchecksum "), "simulate says which trigger touched what, from which step to which, for how long and how many times it was entered");
+        CHECK(!Contains(RunTool(registry, { "simulate", w + "/orbit.json", "--steps", "0" }).Out, "overlaps"), "and says nothing about overlaps when there were none");
+        CHECK(!Contains(RunTool(registry, { "simulate", world, "--steps", "120" }).Out, "overlaps"), "the Sandbox world has none either until the player reaches the zone");
+
         // a recording: held D for a second, 120 steps (the checksum was also what the Sandbox ended on replaying it)
         const std::string text = ReadFile(world);
         char hash[17];
@@ -3323,7 +3778,7 @@ int main(int argc, char** argv)
         WriteFile(w + "/d.json", header + "\"changes\": [ { \"step\": 0, \"down\": [\"D\"] }, { \"step\": 60, \"up\": [\"D\"] } ] }\n");
         ToolRun played = RunTool(registry, { "simulate", world, "--recording", w + "/d.json" });
         CHECK(played.Code == 0 && Contains(played.Out, "120 steps, seed 1, input from") && Contains(played.Out, "camera.Transform.position: [1024.0,518.0] -> [1324.0,518.0]"), "a recording sets the length and the input, and the camera followed the player");
-        CHECK(checksumLine(played.Out) == "39cf7e73f04937f7", "its checksum is the one the Sandbox replay ended on");
+        CHECK(checksumLine(played.Out) == "aa1bd6a10180f5cb", "its checksum is the one the Sandbox replay ended on");
         CHECK(Contains(RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--steps", "200" }).Out, "no input after that") && Contains(RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--steps", "30" }).Out, "stopped early"), "more steps than the recording run on without input, fewer stop early");
 
         // a recording that carries a checksum must reproduce it
@@ -3364,7 +3819,7 @@ int main(int argc, char** argv)
         CHECK(checksumLine(seed5Again.Out) == checksumLine(seed5.Out), "and the scene's own seed given again is the same run");
         CHECK(Contains(RunTool(registry, { "simulate", world, "--steps", "10", "--seed", "-3" }).Out, "seed -3"), "a negative seed is fine");
         ToolRun forced = RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--seed", "9" });
-        CHECK(forced.Code == 0 && checksumLine(forced.Out) != "39cf7e73f04937f7", "a recording can be tried on another seed (its own is not compared)");
+        CHECK(forced.Code == 0 && checksumLine(forced.Out) != "aa1bd6a10180f5cb", "a recording can be tried on another seed (its own is not compared)");
 
         // usage
         CHECK(RunTool(registry, { "simulate" }).Code == 2 && Contains(RunTool(registry, { "simulate" }).Err, "no scene file"), "no file is a usage error");

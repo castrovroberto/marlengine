@@ -20,6 +20,11 @@ namespace Marle {
     //   - a SpriteRenderer at its Transform: a flat color, a texture, or one cell of a sheet
     //   - a Tilemap at its Transform: one quad per tile
     // An entity needs a Transform to be drawn (a Tilemap without one sits at the origin).
+    //
+    // With SetShowColliders(true) every Collider and every solid tile is also drawn as an outline on top
+    // (a debugging aid, ADR-0003): green for a solid collider, a fainter green for a solid tile, yellow
+    // for a trigger and red for a trigger that something is overlapping right now (Scene::GetOverlaps).
+    // Outlines are about two pixels wide whatever the zoom.
     class EXPORT SceneRenderer
     {
         public:
@@ -34,6 +39,9 @@ namespace Marle {
             // was toward where it is, camera included. 1, the default, draws the current state.
             void Render(const Scene& scene, float viewportWidth, float viewportHeight, float alpha = 1.0f);
 
+            void SetShowColliders(bool show) { m_ShowColliders = show; }
+            bool GetShowColliders() const { return m_ShowColliders; }
+
             static Entity FindPrimaryCamera(const Scene& scene);
 
         private:
@@ -42,6 +50,7 @@ namespace Marle {
 
             std::unordered_map<std::string, std::unique_ptr<OpenGLTexture2D>> m_Textures;
             std::set<std::string> m_Reported;
+            bool m_ShowColliders = false;
     };
 
 }

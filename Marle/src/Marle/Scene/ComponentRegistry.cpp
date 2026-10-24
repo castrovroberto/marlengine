@@ -188,7 +188,15 @@ namespace Marle {
             .Field(&Tilemap::CellSize, "cellSize", "One sprite sheet cell [width, height] in pixels.").Min(1)
             .Field(&Tilemap::TileSize, "tileSize", "One tile [width, height] in world units.").Min(0.001)
             .Field(&Tilemap::Rows, "rows", "The tiles, one string per row, listed top to bottom as the map looks. Each character is a sprite sheet cell counted from the sheet's bottom-left cell, left to right then up, in base 36 (0-9 then a-z), or '.' for no tile. Every row must be the same length.")
+            .Field(&Tilemap::Solid, "solid", "The tile characters that block movement, for example \"cdef\"; each is 0-9 or a-z and listed once. Empty means no tile blocks. A solid tile is a box of tileSize where the tile is drawn.")
             .Validate([](const Tilemap& map, std::vector<ValidationError>& errors) {
+                for (size_t i = 0; i < map.Solid.size(); i++) {
+                    const char c = map.Solid[i];
+                    if (TilemapCell(c) < 0)
+                        errors.push_back({ "/solid", std::string("'") + c + "' at position " + std::to_string(i) + " is not a tile character (use 0-9 and a-z)" });
+                    else if (map.Solid.find(c) != i)
+                        errors.push_back({ "/solid", std::string("'") + c + "' is listed more than once" });
+                }
                 for (size_t i = 0; i < map.Rows.size(); i++) {
                     const std::string& row = map.Rows[i];
                     for (size_t x = 0; x < row.size(); x++)
@@ -200,6 +208,13 @@ namespace Marle {
                         errors.push_back({ "/rows/" + std::to_string(i), "this row has " + std::to_string(row.size()) + " tiles but the first row has " + std::to_string(map.Rows[0].size()) + "; every row must be the same length" });
                 }
             });
+
+        registry.Register<Collider>("Collider", "A shape that things touch, an axis-aligned box or a circle centered on the entity's Transform position plus offset. A solid collider stops entities that move into it; a trigger blocks nothing and only reports what overlaps it. The Transform's rotation and scale do not change it.")
+            .Field(&Collider::Shape, "shape", "box or circle.").OneOf({ "box", "circle" })
+            .Field(&Collider::Size, "size", "A box's [width, height], in world units; not used by a circle.").Min(0.001)
+            .Field(&Collider::Radius, "radius", "A circle's radius, in world units; not used by a box.").Min(0.001)
+            .Field(&Collider::Offset, "offset", "From the entity's position to the shape's center [x, y], in world units.")
+            .Field(&Collider::Kind, "kind", "solid stops movement; trigger blocks nothing and only reports overlaps.").OneOf({ "solid", "trigger" });
 
         registry.Register<Random>("Random", "On the scene itself: where the scene's random numbers start, so the same seed gives the same sequence on every run. Nothing is ever seeded from the clock.")
             .Field(&Random::Seed, "seed", "Any integer. The same seed always gives the same sequence of random numbers.");

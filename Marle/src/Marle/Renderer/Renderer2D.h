@@ -46,6 +46,16 @@ namespace Marle {
         static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, OpenGLTexture2D* texture, const glm::vec4& tint);
         static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const glm::vec4& color);
 
+        // A straight line from `from` to `to`, `thickness` wide (world units, or pixels in pixel space),
+        // centered on the line, with square ends. A zero-length line draws nothing. One flat quad.
+        static void DrawLine(const glm::vec2& from, const glm::vec2& to, const glm::vec4& color, float thickness = 1.0f);
+
+        // A circle around `center`, anti-aliased by a shader that tests the distance from the center (one quad).
+        // With `thickness` 0 it is a filled disk; above 0 it is a ring that wide (world units, or pixels in
+        // pixel space) just inside `radius`, and a thickness of `radius` or more is the same as a disk.
+        // Drawn in submission order like any quad, and counted as one in GetStats().
+        static void DrawCircle(const glm::vec2& center, float radius, const glm::vec4& color, float thickness = 0.0f);
+
         // Draws text left to right as one quad per glyph (spaces draw nothing). `position` is the
         // bottom-left corner of the first glyph cell and `glyphHeight` the height of a line in world
         // units; '\n' starts a new line below, and a character the font lacks draws as '?'.
@@ -59,7 +69,7 @@ namespace Marle {
         struct RendererData;
         static void Flush();
         static void NextBatch();
-        static void SubmitQuad(const glm::vec2& position, const glm::vec2& size, float rotation, uint32_t textureID, const glm::vec2* texCoords, const glm::vec4& color);
+        static void SubmitQuad(const glm::vec2& position, const glm::vec2& size, float rotation, uint32_t textureID, const glm::vec2* texCoords, const glm::vec4& color, float circle = 0.0f);
 
         static std::unique_ptr<RendererData> s_Data;
     };

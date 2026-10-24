@@ -745,6 +745,137 @@ protected:
             CHECK(tile == Frame(), "a tilemap is drawn halfway between where it was and where it is");
         }
 
+        // 9f. lines and circles
+        {
+            auto IsBg = [&](int x, int y) { return Near(Read(x, y), bg.r, bg.g, bg.b); };
+
+            // a thick horizontal line: coloured along it, square at its ends, nothing beside it
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawLine({ 100, 200 }, { 300, 200 }, glm::vec4(1, 0, 0, 1), 10.0f);
+            Renderer2D::EndBatch();
+            CHECK(Near(Read(100 + 1, 200), 255, 0, 0) && Near(Read(200, 200), 255, 0, 0) && Near(Read(300 - 2, 200), 255, 0, 0) && Near(Read(200, 203), 255, 0, 0) && Near(Read(200, 196), 255, 0, 0), "a line is coloured along its length and as thick as asked");
+            CHECK(IsBg(95, 200) && IsBg(305, 200) && IsBg(200, 207) && IsBg(200, 193), "and stops at its ends and edges");
+            CHECK(Renderer2D::GetStats().QuadCount == 1 && Renderer2D::GetStats().DrawCalls == 1, "a line is one quad");
+
+            // a diagonal one, drawn from either end, is the same line
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawLine({ 600, 100 }, { 700, 200 }, glm::vec4(0, 1, 0, 1), 6.0f);
+            Renderer2D::EndBatch();
+            CHECK(Near(Read(650, 150), 0, 255, 0) && Near(Read(620, 120), 0, 255, 0) && IsBg(650, 170) && IsBg(670, 130), "a diagonal line follows its direction");
+
+            // nothing to draw
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawLine({ 100, 100 }, { 100, 100 }, glm::vec4(1), 5.0f);
+            Renderer2D::DrawLine({ 100, 100 }, { 200, 100 }, glm::vec4(1), 0.0f);
+            Renderer2D::DrawCircle({ 100, 100 }, 0.0f, glm::vec4(1));
+            Renderer2D::EndBatch();
+            CHECK(Renderer2D::GetStats().QuadCount == 0 && IsBg(100, 100) && IsBg(150, 100), "a zero-length or zero-width line and a zero radius circle draw nothing");
+
+            // a filled circle
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawCircle({ 400, 300 }, 50.0f, glm::vec4(0, 1, 0, 1));
+            Renderer2D::EndBatch();
+            CHECK(Near(Read(400, 300), 0, 255, 0) && Near(Read(440, 300), 0, 255, 0) && Near(Read(400, 345), 0, 255, 0) && Near(Read(360, 300), 0, 255, 0), "a circle is filled inside its radius");
+            CHECK(IsBg(400, 355) && IsBg(455, 300) && IsBg(445, 345) && IsBg(355, 255), "and empty outside it, corners of its quad included");
+            Px edge = Read(449, 300);
+            CHECK(!Near(edge, bg.r, bg.g, bg.b, 10) && !Near(edge, 0, 255, 0, 10) && edge.g > bg.g, "its edge is anti-aliased: a pixel on it is part way between the circle and the background (g %d)", edge.g);
+            CHECK(Renderer2D::GetStats().QuadCount == 1 && Renderer2D::GetStats().DrawCalls == 1, "a circle is one quad");
+
+            // a ring
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawCircle({ 400, 300 }, 50.0f, glm::vec4(0, 0, 1, 1), 10.0f);
+            Renderer2D::EndBatch();
+            CHECK(IsBg(400, 300) && IsBg(400 + 30, 300) && IsBg(400, 300 + 35), "a ring is empty inside");
+            CHECK(Near(Read(400 + 45, 300), 0, 0, 255) && Near(Read(400, 300 + 43), 0, 0, 255) && Near(Read(400 - 47, 300), 0, 0, 255) && IsBg(400 + 55, 300), "and coloured as wide as asked, just inside the radius");
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawCircle({ 400, 300 }, 50.0f, glm::vec4(0, 0, 1, 1), 50.0f);
+            Renderer2D::DrawCircle({ 700, 300 }, 50.0f, glm::vec4(0, 0, 1, 1), 500.0f);
+            Renderer2D::EndBatch();
+            CHECK(Near(Read(400, 300), 0, 0, 255) && Near(Read(700, 300), 0, 0, 255), "a thickness of the radius or more is a disk");
+
+            // a camera: the circle is round in the world and the edge stays sharp however far in it is zoomed
+            glClear(GL_COLOR_BUFFER_BIT);
+            Renderer2D::BeginBatch(OrthographicCamera(-W / 8.0f, W / 8.0f, -H / 8.0f, H / 8.0f));   // 4 times zoomed in
+            Renderer2D::DrawCircle({ 0, 0 }, 10.0f, glm::vec4(1, 1, 0, 1));
+            Renderer2D::DrawLine({ -50, 0 }, { 50, 0 }, glm::vec4(1, 0, 1, 1), 1.0f);
+            Renderer2D::EndBatch();
+            const int cx = (int)(W / 2), cy = (int)(H / 2);
+            CHECK(Near(Read(cx + 3, cy + 20), 255, 255, 0) && Near(Read(cx + 35, cy + 3), 255, 255, 0) && IsBg(cx + 45, cy + 20) && Near(Read(cx + 100, cy), 255, 0, 255), "in a camera's world units a circle of 10 is 40 pixels at 4 times zoom, and a line is 4 pixels wide");
+
+            // drawn in order with quads, and alpha blends
+            glClear(GL_COLOR_BUFFER_BIT); Renderer2D::ResetStats();
+            Renderer2D::BeginBatch(W, H);
+            Renderer2D::DrawQuad({ 400, 300 }, { 200, 20 }, glm::vec4(1, 0, 0, 1));
+            Renderer2D::DrawCircle({ 400, 300 }, 40.0f, glm::vec4(0, 1, 0, 1));
+            Renderer2D::DrawQuad({ 400, 300 }, { 20, 200 }, glm::vec4(0, 0, 1, 1));
+            Renderer2D::DrawLine({ 300, 300 }, { 500, 300 }, glm::vec4(1, 1, 1, 0.5f), 4.0f);
+            Renderer2D::EndBatch();
+            CHECK(Renderer2D::GetStats().QuadCount == 4 && Renderer2D::GetStats().DrawCalls == 1, "lines and circles batch with quads in one draw call");
+            Px blended = Read(430, 300);
+            CHECK(Near(Read(430, 306), 0, 255, 0) && Near(Read(480, 306), 255, 0, 0) && Near(Read(400, 325), 0, 0, 255), "they are drawn in submission order: the circle over the red bar, the blue bar over the circle");
+            CHECK(blended.r > 100 && blended.r < 160 && blended.g > 240 && blended.b > 100 && blended.b < 160, "and a translucent line blends over what is under it (r,g,b %d,%d,%d)", blended.r, blended.g, blended.b);
+        }
+
+        // 9g. collider outlines (SceneRenderer::SetShowColliders)
+        {
+            ComponentRegistry registry;
+            RegisterBuiltinComponents(registry);
+            SceneRenderer sceneRenderer;
+            auto Entity = [](const std::string& name, const std::string& position, const std::string& collider) {
+                return R"({"name": ")" + name + R"(", "components": {"Transform": {"position": )" + position + R"(}, "Collider": )" + collider + "}}";
+            };
+            auto Cam = [](float zoom) { return R"({"name": "cam", "components": {"Transform": {}, "Camera": {"primary": true, "zoom": )" + std::to_string(zoom) + "}}}"; };
+            auto Load = [&](float zoom) {
+                return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [)" + Cam(zoom) + ", "
+                    + Entity("wall", "[-200, 0]", R"({"shape": "box", "size": [100, 60], "kind": "solid"})") + ", "
+                    + Entity("zone", "[200, 0]", R"({"shape": "box", "size": [100, 100], "kind": "trigger"})") + ", "
+                    + Entity("intruder", "[200, 0]", R"({"shape": "box", "size": [10, 10], "kind": "solid"})") + ", "
+                    + Entity("pillar", "[0, 150]", R"({"shape": "circle", "radius": 40, "kind": "solid"})") + ", "
+                    + R"({"name": "ground", "components": {"Transform": {"position": [-100, -300]}, "Tilemap": {"texture": "Assets/Textures/test_sheet.tga", "cellSize": [32, 32], "tileSize": [64, 64], "rows": ["0"], "solid": "0"}}})"
+                    + "]}", "inline", registry);
+            };
+            auto Draw = [&](Scene& scene) { glClear(GL_COLOR_BUFFER_BIT); sceneRenderer.Render(scene, W, H); };
+            auto IsBg = [&](int x, int y) { return Near(Read(x, y), bg.r, bg.g, bg.b); };
+            auto Greens = [&](int x0, int x1, int y) { int n = 0; for (int x = x0; x < x1; x++) if (Near(Read(x, y), 51, 255, 102, 40)) n++; return n; };
+
+            SceneLoadResult world = Load(1.0f);
+            Draw(*world.Scene);
+            CHECK(!sceneRenderer.GetShowColliders() && IsBg(262, 384) && IsBg(512, 573) && IsBg(662, 384), "colliders are not drawn unless asked for");
+
+            sceneRenderer.SetShowColliders(true);
+            Draw(*world.Scene);
+            CHECK(Near(Read(262, 384), 51, 255, 102, 40) && Near(Read(362, 384), 51, 255, 102, 40) && Near(Read(312, 414), 51, 255, 102, 40) && Near(Read(312, 354), 51, 255, 102, 40) && IsBg(312, 384) && IsBg(240, 384), "a solid box is outlined in green and hollow (the wall: 100 by 60 at -200,0)");
+            CHECK(Near(Read(512, 573), 51, 255, 102, 40) && IsBg(512, 534) && IsBg(512, 600), "and a circle is a green ring (the pillar: radius 40 at 0,150)");
+            CHECK(Near(Read(662, 384), 255, 217, 26, 40) && Near(Read(712, 434), 255, 217, 26, 40) && IsBg(712, 384), "an empty trigger is yellow");
+            Px tileEdge = Read(412, 116);
+            CHECK(!Near(tileEdge, 255, 0, 0, 20) && tileEdge.g > 40, "a solid tile is outlined too, fainter, over the tile (g %d)", tileEdge.g);
+            CHECK(Near(Read(707, 384), 51, 255, 102, 40) && Near(Read(717, 384), 51, 255, 102, 40) && IsBg(712, 384), "something solid inside the trigger is outlined as well, and hollow");
+
+            // a trigger with something in it turns red, once the simulation has worked that out
+            Simulation::Step(registry, *world.Scene, InputFrame(), 1.0 / 60.0);
+            Draw(*world.Scene);
+            CHECK(Near(Read(662, 384), 255, 77, 77, 40), "a trigger with something in it is red");
+
+            // outlines stay two pixels wide whatever the zoom
+            SceneLoadResult near = Load(2.0f);
+            Draw(*near.Scene);
+            const int atZoom2 = Greens(0, 30, 384);
+            sceneRenderer.SetShowColliders(true);
+            Draw(*world.Scene);
+            const int atZoom1 = Greens(250, 275, 384);
+            CHECK(atZoom1 >= 1 && atZoom1 <= 3 && atZoom2 >= 1 && atZoom2 <= 3, "outlines are about two pixels wide at zoom 1 and at zoom 2 (%d and %d)", atZoom1, atZoom2);
+
+            sceneRenderer.SetShowColliders(false);
+            Draw(*world.Scene);
+            CHECK(IsBg(262, 384) && IsBg(662, 384), "and are gone again when turned off");
+        }
+
         // 10. GL errors
         GLenum err = glGetError();
         CHECK(err == GL_NO_ERROR, "no GL error (0x%x)", err);

@@ -65,6 +65,12 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 | | `cellSize` | vec2 | `[32, 32]` | One sheet cell in pixels. Min 1. |
 | | `tileSize` | vec2 | `[64, 64]` | One tile in world units. Min 0.001. |
 | | `rows` | string[] | `[]` | The tiles, one string per row (see Tilemaps). |
+| | `solid` | string | `""` | The tile characters that block movement, for example `"cdef"` (see Tilemaps). Each is `0`-`9` or `a`-`z`, listed once; empty means none. |
+| `Collider` | `shape` | string | `"box"` | `"box"` or `"circle"`. |
+| | `size` | vec2 | `[32, 32]` | A box's width and height in world units; not used by a circle. Min 0.001. |
+| | `radius` | float | `16` | A circle's radius in world units; not used by a box. Min 0.001. |
+| | `offset` | vec2 | `[0, 0]` | From the entity's `Transform.position` to the shape's center. |
+| | `kind` | string | `"solid"` | `"solid"` stops movement; `"trigger"` blocks nothing and only reports overlaps. |
 | `Random` | `seed` | int | `1` | On the scene itself (its top-level `components`). Any integer; the same seed gives the same sequence of random numbers on every run. |
 | `KeyboardMove` | `speed` | float | `100` | Behavior. World units per second. 0 to 100000. |
 | | `runMultiplier` | float | `2` | How many times faster while the run key is held. 0 to 100. |
@@ -96,7 +102,9 @@ An entity is identified by its name, nothing else. There are no generated ids, c
 | `ClampPosition` | `min` | vec2 | `[0, 0]` | Behavior. The lower left corner of the rectangle the position is kept in. |
 | | `max` | vec2 | `[100, 100]` | The upper right corner; not smaller than `min` on either axis. |
 
-**Tilemaps.** A `Tilemap` is a grid of tiles cut from a sprite sheet, so a whole map is data and not one entity per tile. The entity's `Transform.position` is the map's bottom-left corner in the world and `Transform.scale` multiplies `tileSize`; its rotation is not used.
+**Colliders.** A `Collider` is a box or a circle centered on the entity's `Transform.position` plus `offset`, in world units; the `Transform`'s rotation and scale do not change it, and an entity with no `Transform` has no collider. Every field is written, so the one that does not fit the shape (`size` for a circle, `radius` for a box) is ignored. The decision is in `docs/adr/0003-collision-is-simple-deterministic-shapes-in-scene-data.md`; **Solid colliders stop movement.** After an entity's behaviors have run, if it has a solid `Collider` and moved, the engine moves it along x and then along y and stops it flush against every other solid collider and solid tile in its way, so it slides along a wall instead of sticking to it. This happens for any behavior that moves it (`KeyboardMove`, `Follow`, `Wander`...), right after that entity's own behaviors and before the next entity's, so an entity later in the file (a camera with `Follow`) sees where it ended up. Things that do not stop it: triggers, entities with no `Collider`, and a solid it already overlapped where the step began (so it can walk out). A mover never pushes another entity, and an entity that did not move is never moved, so walls that overlap each other are left alone. **Triggers report overlaps.** Once every entity has run in a step, the engine works out which triggers overlap which other colliders (solid or trigger, never the trigger itself; solid against solid is not reported, those block). The result is `Scene::GetOverlaps()`: the pairs touching now, and which of them *entered* (not touching in the step before), are *staying*, or *left* (including a pair whose entity was destroyed), each pair being the trigger's name and the other entity's name, in the creation order of the trigger and then of the other entity (two triggers that overlap are listed both ways round). Behaviors see the result of the step before, one step late. It is worked out again from positions every step, so it is not in a scene file or a checksum, and a scene that starts with an overlap reports it as entered on its first step. Shapes that only touch do not overlap.
+
+**Tilemaps.** A `Tilemap` is a grid of tiles cut from a sprite sheet, so a whole map is data and not one entity per tile. The entity's `Transform.position` is the map's bottom-left corner in the world and `Transform.scale` multiplies `tileSize`; its rotation is not used. `solid` lists the tile characters that block movement, for example `"solid": "cdef"` makes every tile drawn with a `c`, `d`, `e` or `f` a wall. A solid tile is a box of `tileSize` (times the scale) exactly where the tile is drawn, so what you see is what blocks; `.` is never solid. Entities with a solid `Collider` stop at solid tiles (see Colliders).
 
 - `rows` lists the map **top to bottom, as it looks**, one string per row. Every row has the same number of characters.
 - Each character is one tile: the sprite sheet cell with that number, counting from the sheet's bottom-left cell, left to right and then up, in base 36 (`0`-`9`, then `a`-`z`; lowercase only). `.` means no tile.
@@ -131,7 +139,7 @@ The engine draws a scene (`SceneRenderer`) like this, so the order and values in
 - **A tilemap** (`Tilemap`) draws one quad per tile.
 - A texture that cannot be loaded is drawn as the magenta and black error checker, and everything else still draws.
 
-`Assets/Scenes/world.json` is the Sandbox's world and a complete example of all of this: a camera, a 32 by 24 tilemap, sprites cut from a sheet, and a flat colored one.
+`Assets/Scenes/world.json` is the Sandbox's world and a complete example of all of this: a camera, a 32 by 24 tilemap whose border tiles (`"solid": "cdef"`) are walls, sprites cut from a sheet, and flat colored ones. It also has colliders: the player is a solid box, `wall_a` and `wall_b` are solid boxes, `pillar` is a solid circle (its sprite is a square, which is what the Sandbox's F4 collider outlines are good for seeing) and `zone` is a trigger. `marle-scene simulate` lists which triggers touched what; the Sandbox's F4 draws every collider as an outline (a trigger turns red while something is in it).
 
 ## Behaviors
 

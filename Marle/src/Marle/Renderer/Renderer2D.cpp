@@ -3,6 +3,7 @@
 #include "Renderer2D.h"
 #include "../Platform/OpenGL/OpenGLShader.h"
 #include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <string>
@@ -29,6 +30,7 @@ namespace Marle {
         glm::vec4 Color;
         glm::vec2 TexCoord;
         float TexIndex;
+        float Circle;   // 0 for a quad; for a circle, the ring width as a fraction of the radius (see Texture.frag)
     };
 
     struct Renderer2D::RendererData {
@@ -90,6 +92,8 @@ namespace Marle {
         glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(QuadVertex), (const void*)offsetof(QuadVertex, TexCoord));
         glEnableVertexAttribArray(3);
         glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(QuadVertex), (const void*)offsetof(QuadVertex, TexIndex));
+        glEnableVertexAttribArray(4);
+        glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(QuadVertex), (const void*)offsetof(QuadVertex, Circle));
 
         // Index buffer is static: every quad uses the same 0,1,2,2,3,0 pattern
         std::vector<uint32_t> indices(MaxIndices);
@@ -204,7 +208,7 @@ namespace Marle {
         s_Data->TextureSlotCount = 1;
     }
 
-    void Renderer2D::SubmitQuad(const glm::vec2& position, const glm::vec2& size, float rotation, uint32_t textureID, const glm::vec2* texCoords, const glm::vec4& color)
+    void Renderer2D::SubmitQuad(const glm::vec2& position, const glm::vec2& size, float rotation, uint32_t textureID, const glm::vec2* texCoords, const glm::vec4& color, float circle)
     {
         if (s_Data->QuadCount >= MaxQuads)
             NextBatch();
@@ -235,6 +239,7 @@ namespace Marle {
             v[i].Color = color;
             v[i].TexCoord = texCoords[i];
             v[i].TexIndex = (float)slot;
+            v[i].Circle = circle;
         }
         s_Data->QuadCount++;
         s_Data->Stats.QuadCount++;
@@ -310,6 +315,29 @@ namespace Marle {
             return;
         }
         SubmitQuad(position, size, rotation, 0, s_FullTexCoords, color);
+    }
+
+    void Renderer2D::DrawLine(const glm::vec2& from, const glm::vec2& to, const glm::vec4& color, float thickness)
+    {
+        if (!s_Data) {
+            ReportOnce("Cannot draw line - Renderer2D not initialized");
+            return;
+        }
+        const glm::vec2 delta = to - from;
+        const float length = glm::length(delta);
+        if (length <= 0.0f || thickness <= 0.0f) return;
+        SubmitQuad((from + to) * 0.5f, { length, thickness }, atan2f(delta.y, delta.x), 0, s_FullTexCoords, color);
+    }
+
+    void Renderer2D::DrawCircle(const glm::vec2& center, float radius, const glm::vec4& color, float thickness)
+    {
+        if (!s_Data) {
+            ReportOnce("Cannot draw circle - Renderer2D not initialized");
+            return;
+        }
+        if (radius <= 0.0f) return;
+        const float ring = thickness <= 0.0f ? 1.0f : std::min(thickness / radius, 1.0f);
+        SubmitQuad(center, { radius * 2.0f, radius * 2.0f }, 0.0f, 0, s_FullTexCoords, color, ring);
     }
 
     void Renderer2D::DrawString(const BitmapFont& font, const std::string& text, const glm::vec2& position, float glyphHeight, const glm::vec4& color)

@@ -268,6 +268,8 @@ void WorldLayer::DrawScenePanel()
 
         if (status.Failures > 0) ImGui::TextDisabled("%u reload%s refused so far", status.Failures, status.Failures == 1 ? "" : "s");
         if (ImGui::Button("Reload now")) PollScene(true);
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Colliders (F4)", &m_ShowColliders)) m_Renderer->SetShowColliders(m_ShowColliders);
 
         if (m_Recorder.IsRecording())
             coloredText(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), ("Recording: " + std::to_string(m_Recorder.GetStepCount()) + " steps (F5 stops)").c_str());
@@ -287,7 +289,7 @@ void WorldLayer::DrawScenePanel()
             ImGui::PopTextWrapPos();
             ImGui::EndChild();
         }
-        ImGui::TextDisabled("F3 toggles this panel, F5 records");
+        ImGui::TextDisabled("F3 toggles this panel, F4 colliders, F5 records");
         ImGui::PopTextWrapPos();
     }
     ImGui::End();
@@ -332,6 +334,11 @@ void WorldLayer::OnEvent(Marle::Event& e)
     }
     else if (key.GetKeyCode() == Marle::Key::F3 && key.GetRepeatCount() == 0) {
         m_ShowScenePanel = !m_ShowScenePanel;
+        e.SetHandled();
+    }
+    else if (key.GetKeyCode() == Marle::Key::F4 && key.GetRepeatCount() == 0) {
+        m_ShowColliders = !m_ShowColliders;
+        m_Renderer->SetShowColliders(m_ShowColliders);
         e.SetHandled();
     }
     else if (key.GetKeyCode() == Marle::Key::F5 && key.GetRepeatCount() == 0) {

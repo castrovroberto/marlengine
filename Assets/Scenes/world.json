@@ -38,8 +38,41 @@
             "e100260220511211373600637253103f",
             "d637300213075201346025135621627e",
             "cfefccfdddcceefcfecfdceeceddecef"
-          ]
+          ],
+          "solid": "cdef"
         }
+      }
+    },
+    {
+      "name": "zone",
+      "components": {
+        "Transform": { "position": [1300, 900], "rotation": 0, "scale": [160, 160] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [0.3, 0.6, 1, 0.3] },
+        "Collider": { "shape": "box", "size": [160, 160], "radius": 16, "offset": [0, 0], "kind": "trigger" }
+      }
+    },
+    {
+      "name": "wall_a",
+      "components": {
+        "Transform": { "position": [1500, 600], "rotation": 0, "scale": [200, 32] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [0.35, 0.25, 0.2, 1] },
+        "Collider": { "shape": "box", "size": [200, 32], "radius": 16, "offset": [0, 0], "kind": "solid" }
+      }
+    },
+    {
+      "name": "wall_b",
+      "components": {
+        "Transform": { "position": [1600, 700], "rotation": 0, "scale": [32, 240] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [0.35, 0.25, 0.2, 1] },
+        "Collider": { "shape": "box", "size": [32, 240], "radius": 16, "offset": [0, 0], "kind": "solid" }
+      }
+    },
+    {
+      "name": "pillar",
+      "components": {
+        "Transform": { "position": [700, 500], "rotation": 0, "scale": [80, 80] },
+        "SpriteRenderer": { "texture": "", "cell": [0, 0], "cellSize": [0, 0], "tint": [0.5, 0.5, 0.55, 1] },
+        "Collider": { "shape": "circle", "size": [32, 32], "radius": 40, "offset": [0, 0], "kind": "solid" }
       }
     },
     {
@@ -79,6 +112,7 @@
       "components": {
         "Transform": { "position": [1024, 518], "rotation": 0, "scale": [48, 48] },
         "SpriteRenderer": { "texture": "Assets/Textures/test_sprite.tga", "cell": [0, 0], "cellSize": [0, 0], "tint": [1, 1, 1, 1] },
+        "Collider": { "shape": "box", "size": [48, 48], "radius": 16, "offset": [0, 0], "kind": "solid" },
         "KeyboardMove": { "speed": 300, "runMultiplier": 2, "runKey": "LeftShift", "keys": "both", "relativeTo": "camera", "tintWhenRunning": true, "idleTint": [1, 1, 1, 1], "runTint": [1, 0.65, 0.3, 1] },
         "ClampPosition": { "min": [88, 88], "max": [1960, 1448] }
       }

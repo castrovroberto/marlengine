@@ -20,6 +20,14 @@ _Avoid_: Property, trait
 A component that makes its entity (or the scene) do something every fixed step, such as move, follow another entity or spin, configured by its fields in the scene file.
 _Avoid_: Script, controller, AI
 
+**Collider**:
+A component that gives an entity a shape (an axis-aligned box or a circle) that is either solid, so movement stops at it, or a trigger, which blocks nothing and only reports what overlaps it.
+_Avoid_: Hitbox, body, physics object
+
+**Trigger**:
+A collider that blocks nothing; a step reports which entities entered, stayed in and left it, for later features such as interactions to read.
+_Avoid_: Sensor, zone, event
+
 **Input frame**:
 What the player's input was during one fixed step, as behaviors see it; a recording is a list of them.
 _Avoid_: Input event, polled input

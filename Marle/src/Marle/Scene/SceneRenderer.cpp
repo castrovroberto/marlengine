@@ -5,6 +5,7 @@
 #include "Marle/Renderer/SubTexture2D.h"
 #include "SceneRenderer.h"
 #include "Components.h"
+#include "Collision.h"
 
 namespace Marle {
 
@@ -41,6 +42,23 @@ namespace Marle {
         drawn.Rotation = glm::mix(previous->Rotation, current.Rotation, alpha);
         drawn.Scale = glm::mix(previous->Scale, current.Scale, alpha);
         return drawn;
+    }
+
+    // A box outline `width` wide, its corners filled in
+    static void DrawBoxOutline(glm::vec2 center, glm::vec2 half, const glm::vec4& color, float width)
+    {
+        const glm::vec2 low = center - half, high = center + half;
+        const float cap = width * 0.5f;
+        Renderer2D::DrawLine({ low.x - cap, low.y }, { high.x + cap, low.y }, color, width);
+        Renderer2D::DrawLine({ low.x - cap, high.y }, { high.x + cap, high.y }, color, width);
+        Renderer2D::DrawLine({ low.x, low.y }, { low.x, high.y }, color, width);
+        Renderer2D::DrawLine({ high.x, low.y }, { high.x, high.y }, color, width);
+    }
+
+    static void DrawShapeOutline(const CollisionShape& shape, const glm::vec4& color, float width)
+    {
+        if (shape.Circle) Renderer2D::DrawCircle(shape.Center, shape.Radius + width * 0.5f, color, width);
+        else DrawBoxOutline(shape.Center, shape.Half, color, width);
     }
 
     void SceneRenderer::Render(const Scene& scene, float viewportWidth, float viewportHeight, float alpha)
@@ -109,8 +127,7 @@ namespace Marle {
                         const int cell = TilemapCell(tiles[column]);
                         if (cell == -1) continue;   // no tile
 
-                        // Rows are listed top to bottom, the world's Y points up
-                        const glm::vec2 center = origin + glm::vec2(((float)column + 0.5f) * tile.x, ((float)(rowCount - 1 - row) + 0.5f) * tile.y);
+                        const glm::vec2 center = TilemapTileCenter(*map, origin, tile, column, row);
                         if (cell < 0 || cell >= columns * sheetRows) {
                             Renderer2D::DrawQuad(center, tile, (OpenGLTexture2D*)nullptr);   // the error checker
                             continue;
@@ -119,6 +136,27 @@ namespace Marle {
                         Renderer2D::DrawQuad(center, tile, sub);
                     }
                 }
+            }
+        }
+
+        if (m_ShowColliders) {
+            const float width = 2.0f / zoom;
+            std::set<std::string> touched;   // triggers with something in them right now
+            for (const Overlap& pair : scene.GetOverlaps().Touching) touched.insert(pair.Trigger);
+
+            for (Entity entity : scene.GetEntities()) {
+                const Transform* current = entity.TryGet<Transform>();
+                if (!current) continue;
+                const Transform drawn = Interpolated(entity, *current, alpha);
+
+                if (const Collider* collider = entity.TryGet<Collider>()) {
+                    const bool trigger = collider->Kind == "trigger";
+                    const glm::vec4 color = !trigger ? glm::vec4(0.2f, 1.0f, 0.4f, 1.0f) : touched.count(entity.GetName()) ? glm::vec4(1.0f, 0.3f, 0.3f, 1.0f) : glm::vec4(1.0f, 0.85f, 0.1f, 1.0f);
+                    DrawShapeOutline(ShapeOfCollider(*collider, drawn.Position), color, width);
+                }
+                if (const Tilemap* map = entity.TryGet<Tilemap>())
+                    for (const TileBox& tile : TilemapSolidTiles(*map, &drawn))
+                        DrawShapeOutline(ShapeOfTile(tile), glm::vec4(0.2f, 1.0f, 0.4f, 0.6f), width);
             }
         }
 
