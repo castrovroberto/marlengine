@@ -29,7 +29,8 @@ namespace Marle {
             "                                     print the JSON Schema for scene files, write it, or check a file\n"
             "  simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>]\n"
             "                                     run a scene headless for N fixed steps (default: the recording's length,\n"
-            "                                     else 600), print what changed and the final checksum; --expect makes it a\n"
+            "                                     else 600), print what changed, which triggers touched what (step\n"
+            "                                     numbers count from 0) and the final checksum; --expect makes it a\n"
             "                                     check (exit 1 on a different checksum)\n"
             "  help                               show this text\n"
             "\n"
@@ -321,11 +322,25 @@ namespace Marle {
             if (steps < 0) steps = hasRecording ? recorded : 600;
             const double dt = 1.0 / (hasRecording ? (double)recording.StepsPerSecond : 60.0);
 
+            // Which triggers touched what, in the order the pairs first touched; steps count from 0, like a recording's
+            struct Touch { Overlap Pair; long long First = 0, Last = 0, Steps = 0, Entered = 0; };
+            std::vector<Touch> touches;
+
             const Snapshot before = TakeSnapshot(scene, registry);
             for (long long step = 0; step < steps; step++) {
                 static const InputFrame none;
                 Simulation::Step(registry, scene, step < recorded ? recording.Frames[(size_t)step] : none, dt);
                 scene.ClearRestartRequest();
+
+                const SceneOverlaps& overlaps = scene.GetOverlaps();
+                for (const Overlap& pair : overlaps.Touching) {
+                    auto it = std::find_if(touches.begin(), touches.end(), [&](const Touch& t) { return t.Pair == pair; });
+                    if (it == touches.end()) { touches.push_back({ pair, step, step, 0, 0 }); it = touches.end() - 1; }
+                    it->Last = step;
+                    it->Steps++;
+                }
+                for (const Overlap& pair : overlaps.Entered)
+                    std::find_if(touches.begin(), touches.end(), [&](const Touch& t) { return t.Pair == pair; })->Entered++;
             }
             const Snapshot after = TakeSnapshot(scene, registry);
             const uint64_t checksum = Simulation::Checksum(registry, scene);
@@ -340,6 +355,14 @@ namespace Marle {
             if (changes.empty()) out << "nothing changed\n";
             for (size_t i = 0; i < changes.size() && i < MaxLines; i++) out << "  " << changes[i] << "\n";
             if (changes.size() > MaxLines) out << "  ... and " << (changes.size() - MaxLines) << " more\n";
+            if (!touches.empty()) {
+                out << "overlaps (trigger > what it touched):\n";
+                for (size_t i = 0; i < touches.size() && i < MaxLines; i++) {
+                    const Touch& t = touches[i];
+                    out << "  " << t.Pair.Trigger << " > " << t.Pair.Other << ": steps " << t.First << " to " << t.Last << ", touching for " << Plural((size_t)t.Steps, "step") << ", entered " << (t.Entered == 1 ? std::string("once") : std::to_string(t.Entered) + " times") << "\n";
+                }
+                if (touches.size() > MaxLines) out << "  ... and " << (touches.size() - MaxLines) << " more\n";
+            }
             out << "checksum " << Simulation::ChecksumText(checksum) << "\n";
 
             int code = 0;

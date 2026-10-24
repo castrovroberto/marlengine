@@ -26,7 +26,7 @@ public:
             else MRL_ERROR("--record needs a file to save to");
         }
 
-        MRL_INFO("Controls: WASD/arrows move (Shift runs), Q/E rotate camera, mouse wheel zooms, R resets, H toggles the HUD, F1 toggles the stats panel, F2 toggles the viewport panel, F3 the scene panel, F5 records, Esc quits");
+        MRL_INFO("Controls: WASD/arrows move (Shift runs), Q/E rotate camera, mouse wheel zooms, R resets, H toggles the HUD, F1 toggles the stats panel, F2 toggles the viewport panel, F3 the scene panel, F4 shows colliders, F5 records, Esc quits");
     }
 
 protected:

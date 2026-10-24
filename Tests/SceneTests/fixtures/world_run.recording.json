@@ -1,11 +1,11 @@
 {
   "version": 1,
   "scene": "The Sunken Orangerie",
-  "sceneHash": "8b10a662d7b77e67",
+  "sceneHash": "6680f50ac5ddd640",
   "seed": 1,
   "stepsPerSecond": 60,
   "steps": 1200,
-  "checksum": "e7e222d14839505b",
+  "checksum": "e894bb11b48e8f1e",
   "changes": [
     { "step": 0, "down": ["D", "W"] },
     { "step": 1, "down": ["Q", "Right"], "scroll": -1 },

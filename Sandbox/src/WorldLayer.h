@@ -63,6 +63,7 @@ private:
     std::unique_ptr<Marle::SceneReloader> m_Reloader;
     int m_ReloadCountdown = 0;      // fixed steps until the file is checked again
     bool m_ShowScenePanel = true;   // F3
+    bool m_ShowColliders = false;   // F4: outline every collider and solid tile
     std::unique_ptr<Marle::Scene> m_Scene;
     std::unique_ptr<Marle::Scene> m_Baseline;   // the file as it was last loaded, never run: what a reload compares with
     std::unique_ptr<Marle::SceneRenderer> m_Renderer;

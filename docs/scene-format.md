@@ -139,7 +139,7 @@ The engine draws a scene (`SceneRenderer`) like this, so the order and values in
 - **A tilemap** (`Tilemap`) draws one quad per tile.
 - A texture that cannot be loaded is drawn as the magenta and black error checker, and everything else still draws.
 
-`Assets/Scenes/world.json` is the Sandbox's world and a complete example of all of this: a camera, a 32 by 24 tilemap, sprites cut from a sheet, and a flat colored one.
+`Assets/Scenes/world.json` is the Sandbox's world and a complete example of all of this: a camera, a 32 by 24 tilemap whose border tiles (`"solid": "cdef"`) are walls, sprites cut from a sheet, and flat colored ones. It also has colliders: the player is a solid box, `wall_a` and `wall_b` are solid boxes, `pillar` is a solid circle (its sprite is a square, which is what the Sandbox's F4 collider outlines are good for seeing) and `zone` is a trigger. `marle-scene simulate` lists which triggers touched what; the Sandbox's F4 draws every collider as an outline (a trigger turns red while something is in it).
 
 ## Behaviors
 

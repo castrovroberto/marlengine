@@ -822,6 +822,60 @@ protected:
             CHECK(blended.r > 100 && blended.r < 160 && blended.g > 240 && blended.b > 100 && blended.b < 160, "and a translucent line blends over what is under it (r,g,b %d,%d,%d)", blended.r, blended.g, blended.b);
         }
 
+        // 9g. collider outlines (SceneRenderer::SetShowColliders)
+        {
+            ComponentRegistry registry;
+            RegisterBuiltinComponents(registry);
+            SceneRenderer sceneRenderer;
+            auto Entity = [](const std::string& name, const std::string& position, const std::string& collider) {
+                return R"({"name": ")" + name + R"(", "components": {"Transform": {"position": )" + position + R"(}, "Collider": )" + collider + "}}";
+            };
+            auto Cam = [](float zoom) { return R"({"name": "cam", "components": {"Transform": {}, "Camera": {"primary": true, "zoom": )" + std::to_string(zoom) + "}}}"; };
+            auto Load = [&](float zoom) {
+                return LoadSceneFromText(R"({"version": 1, "name": "t", "entities": [)" + Cam(zoom) + ", "
+                    + Entity("wall", "[-200, 0]", R"({"shape": "box", "size": [100, 60], "kind": "solid"})") + ", "
+                    + Entity("zone", "[200, 0]", R"({"shape": "box", "size": [100, 100], "kind": "trigger"})") + ", "
+                    + Entity("intruder", "[200, 0]", R"({"shape": "box", "size": [10, 10], "kind": "solid"})") + ", "
+                    + Entity("pillar", "[0, 150]", R"({"shape": "circle", "radius": 40, "kind": "solid"})") + ", "
+                    + R"({"name": "ground", "components": {"Transform": {"position": [-100, -300]}, "Tilemap": {"texture": "Assets/Textures/test_sheet.tga", "cellSize": [32, 32], "tileSize": [64, 64], "rows": ["0"], "solid": "0"}}})"
+                    + "]}", "inline", registry);
+            };
+            auto Draw = [&](Scene& scene) { glClear(GL_COLOR_BUFFER_BIT); sceneRenderer.Render(scene, W, H); };
+            auto IsBg = [&](int x, int y) { return Near(Read(x, y), bg.r, bg.g, bg.b); };
+            auto Greens = [&](int x0, int x1, int y) { int n = 0; for (int x = x0; x < x1; x++) if (Near(Read(x, y), 51, 255, 102, 40)) n++; return n; };
+
+            SceneLoadResult world = Load(1.0f);
+            Draw(*world.Scene);
+            CHECK(!sceneRenderer.GetShowColliders() && IsBg(262, 384) && IsBg(512, 573) && IsBg(662, 384), "colliders are not drawn unless asked for");
+
+            sceneRenderer.SetShowColliders(true);
+            Draw(*world.Scene);
+            CHECK(Near(Read(262, 384), 51, 255, 102, 40) && Near(Read(362, 384), 51, 255, 102, 40) && Near(Read(312, 414), 51, 255, 102, 40) && Near(Read(312, 354), 51, 255, 102, 40) && IsBg(312, 384) && IsBg(240, 384), "a solid box is outlined in green and hollow (the wall: 100 by 60 at -200,0)");
+            CHECK(Near(Read(512, 573), 51, 255, 102, 40) && IsBg(512, 534) && IsBg(512, 600), "and a circle is a green ring (the pillar: radius 40 at 0,150)");
+            CHECK(Near(Read(662, 384), 255, 217, 26, 40) && Near(Read(712, 434), 255, 217, 26, 40) && IsBg(712, 384), "an empty trigger is yellow");
+            Px tileEdge = Read(412, 116);
+            CHECK(!Near(tileEdge, 255, 0, 0, 20) && tileEdge.g > 40, "a solid tile is outlined too, fainter, over the tile (g %d)", tileEdge.g);
+            CHECK(Near(Read(707, 384), 51, 255, 102, 40) && Near(Read(717, 384), 51, 255, 102, 40) && IsBg(712, 384), "something solid inside the trigger is outlined as well, and hollow");
+
+            // a trigger with something in it turns red, once the simulation has worked that out
+            Simulation::Step(registry, *world.Scene, InputFrame(), 1.0 / 60.0);
+            Draw(*world.Scene);
+            CHECK(Near(Read(662, 384), 255, 77, 77, 40), "a trigger with something in it is red");
+
+            // outlines stay two pixels wide whatever the zoom
+            SceneLoadResult near = Load(2.0f);
+            Draw(*near.Scene);
+            const int atZoom2 = Greens(0, 30, 384);
+            sceneRenderer.SetShowColliders(true);
+            Draw(*world.Scene);
+            const int atZoom1 = Greens(250, 275, 384);
+            CHECK(atZoom1 >= 1 && atZoom1 <= 3 && atZoom2 >= 1 && atZoom2 <= 3, "outlines are about two pixels wide at zoom 1 and at zoom 2 (%d and %d)", atZoom1, atZoom2);
+
+            sceneRenderer.SetShowColliders(false);
+            Draw(*world.Scene);
+            CHECK(IsBg(262, 384) && IsBg(662, 384), "and are gone again when turned off");
+        }
+
         // 10. GL errors
         GLenum err = glGetError();
         CHECK(err == GL_NO_ERROR, "no GL error (0x%x)", err);

@@ -985,7 +985,7 @@ int main(int argc, char** argv)
 
         // directories
         ToolRun scenes = RunTool(registry, { "validate", "Assets/Scenes" });
-        CHECK(scenes.Code == 0 && scenes.Out == ok.Out + "OK    Assets/Scenes/world.json: 8 entities, 27 components\n2 files, 0 with problems\n", "a directory means its scene files, and the schema file is not one of them");
+        CHECK(scenes.Code == 0 && scenes.Out == ok.Out + "OK    Assets/Scenes/world.json: 12 entities, 40 components\n2 files, 0 with problems\n", "a directory means its scene files, and the schema file is not one of them");
         WriteFile((work / "b.json").string(), R"({"version": 1, "name": "b", "entities": []})");
         WriteFile((work / "sub" / "a.json").string(), R"({"version": 1, "name": "a", "entities": []})");
         WriteFile((work / "notes.txt").string(), "not a scene");
@@ -1280,7 +1280,7 @@ int main(int argc, char** argv)
 
         std::string names;
         for (Entity e : world.Scene->GetEntities()) names += e.GetName() + " ";
-        CHECK(names == "world spinner_0 spinner_1 spinner_2 spinner_3 player satellite camera ", "its entities are in draw order, with the camera after the player and the satellite it follows");
+        CHECK(names == "world zone wall_a wall_b pillar spinner_0 spinner_1 spinner_2 spinner_3 player satellite camera ", "its entities are in draw order, with the camera after the player and the satellite it follows");
 
         Entity camera = world.Scene->FindEntity("camera"), player = world.Scene->FindEntity("player"), map = world.Scene->FindEntity("world");
         CHECK(camera.Get<Camera>().Primary && camera.Get<Camera>().Zoom == 1.0f && camera.Get<Transform>().Position == player.Get<Transform>().Position && player.Get<Transform>().Position == glm::vec2(1024.0f, 518.0f), "the camera is primary and starts on the player");
@@ -1291,6 +1291,22 @@ int main(int argc, char** argv)
         CHECK(camera.Get<KeyboardRotate>().Speed == 1.0f && camera.Get<KeyboardRotate>().CounterClockwiseKey == "Q" && camera.Get<KeyboardRotate>().ClockwiseKey == "E" && camera.Get<WheelZoom>().Factor == 1.1f && camera.Get<WheelZoom>().MinZoom == 0.25f && camera.Get<WheelZoom>().MaxZoom == 4.0f && camera.Get<Follow>().Target == "player", "the camera follows the player, turns with Q and E and zooms with the wheel between 0.25 and 4");
         Entity satelliteEntity = world.Scene->FindEntity("satellite");
         CHECK(satelliteEntity.Get<Orbit>().Target == "player" && satelliteEntity.Get<Orbit>().Radius == 44.0f && satelliteEntity.Get<Orbit>().Speed == 2.0f && satelliteEntity.Get<Orbit>().RotationSpeed == 6.0f, "the satellite orbits the player at 44 units, 2 radians a second, turning three times as fast");
+        // what it can run into
+        const Collider& body = player.Get<Collider>();
+        CHECK(body.Shape == "box" && body.Size == glm::vec2(48.0f, 48.0f) && body.Kind == "solid" && map.Get<Tilemap>().Solid == "cdef", "the player is a solid 48 by 48 box and the border tiles (c to f) are walls");
+        CHECK(world.Scene->FindEntity("zone").Get<Collider>().Kind == "trigger" && world.Scene->FindEntity("wall_a").Get<Collider>().Kind == "solid" && world.Scene->FindEntity("pillar").Get<Collider>().Shape == "circle" && world.Scene->FindEntity("pillar").Get<Collider>().Radius == 40.0f, "there is a trigger zone, a wall and a round pillar");
+        {
+            SceneLoadResult play = LoadScene(file, registry);
+            for (int i = 0; i < 100; i++) Simulation::Step(registry, *play.Scene, InputFrame().Hold(Key::A), 1.0 / 60.0);
+            CHECK(play.Scene->FindEntity("player").Get<Transform>().Position == glm::vec2(764.0f, 518.0f), "walking left, the player stops against the pillar (700 + 40 + 24) and not before");
+            SceneLoadResult north = LoadScene(file, registry);
+            for (int i = 0; i < 300; i++) Simulation::Step(registry, *north.Scene, InputFrame().Hold(Key::W), 1.0 / 60.0);
+            CHECK(north.Scene->FindEntity("player").Get<Transform>().Position == glm::vec2(1024.0f, 1448.0f), "walking up, it stops at the border wall, where its clamp is");
+            SceneLoadResult zone = LoadScene(file, registry);
+            zone.Scene->FindEntity("player").Get<Transform>().Position = { 1300.0f, 900.0f };
+            Simulation::Step(registry, *zone.Scene, InputFrame(), 1.0 / 60.0);
+            CHECK(zone.Scene->GetOverlaps().Entered.size() == 1 && zone.Scene->GetOverlaps().Entered[0].Trigger == "zone" && zone.Scene->GetOverlaps().Entered[0].Other == "player", "standing in the zone, the player has entered it");
+        }
         bool spinnersOk = true;
         for (int i = 0; i < 4; i++) {
             Entity spinner = world.Scene->FindEntity("spinner_" + std::to_string(i));
@@ -3565,6 +3581,16 @@ int main(int argc, char** argv)
         ToolRun expectBad = RunTool(registry, { "simulate", world, "--steps", "120", "--expect", "0000000000000000" });
         CHECK(expectBad.Code == 1 && Contains(expectBad.Out, "DIFF  expected 0000000000000000"), "and with another one fails with exit 1");
 
+        // overlaps: a mover going round a post passes through a trigger every 63 steps (0.1 radians a step)
+        WriteFile(w + "/orbit.json", R"({"version": 1, "name": "o", "entities": [
+            {"name": "post", "components": {"Transform": {"position": [0, 0]}}},
+            {"name": "gate", "components": {"Transform": {"position": [100, 0]}, "Collider": {"shape": "box", "size": [20, 20], "kind": "trigger"}}},
+            {"name": "mover", "components": {"Transform": {"position": [0, 0]}, "Collider": {"shape": "box", "size": [10, 10]}, "Orbit": {"target": "post", "radius": 100, "speed": 6}}}]})");
+        ToolRun orbit = RunTool(registry, { "simulate", w + "/orbit.json", "--steps", "200" });
+        CHECK(orbit.Code == 0 && Contains(orbit.Out, "overlaps (trigger > what it touched):\n  gate > mover: steps 0 to 189, touching for 11 steps, entered 4 times\nchecksum "), "simulate says which trigger touched what, from which step to which, for how long and how many times it was entered");
+        CHECK(!Contains(RunTool(registry, { "simulate", w + "/orbit.json", "--steps", "0" }).Out, "overlaps"), "and says nothing about overlaps when there were none");
+        CHECK(!Contains(RunTool(registry, { "simulate", world, "--steps", "120" }).Out, "overlaps"), "the Sandbox world has none either until the player reaches the zone");
+
         // a recording: held D for a second, 120 steps (the checksum was also what the Sandbox ended on replaying it)
         const std::string text = ReadFile(world);
         char hash[17];
@@ -3573,7 +3599,7 @@ int main(int argc, char** argv)
         WriteFile(w + "/d.json", header + "\"changes\": [ { \"step\": 0, \"down\": [\"D\"] }, { \"step\": 60, \"up\": [\"D\"] } ] }\n");
         ToolRun played = RunTool(registry, { "simulate", world, "--recording", w + "/d.json" });
         CHECK(played.Code == 0 && Contains(played.Out, "120 steps, seed 1, input from") && Contains(played.Out, "camera.Transform.position: [1024.0,518.0] -> [1324.0,518.0]"), "a recording sets the length and the input, and the camera followed the player");
-        CHECK(checksumLine(played.Out) == "00c145c310568ede", "its checksum is the one the Sandbox replay ended on");
+        CHECK(checksumLine(played.Out) == "aa1bd6a10180f5cb", "its checksum is the one the Sandbox replay ended on");
         CHECK(Contains(RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--steps", "200" }).Out, "no input after that") && Contains(RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--steps", "30" }).Out, "stopped early"), "more steps than the recording run on without input, fewer stop early");
 
         // a recording that carries a checksum must reproduce it
@@ -3614,7 +3640,7 @@ int main(int argc, char** argv)
         CHECK(checksumLine(seed5Again.Out) == checksumLine(seed5.Out), "and the scene's own seed given again is the same run");
         CHECK(Contains(RunTool(registry, { "simulate", world, "--steps", "10", "--seed", "-3" }).Out, "seed -3"), "a negative seed is fine");
         ToolRun forced = RunTool(registry, { "simulate", world, "--recording", w + "/d.json", "--seed", "9" });
-        CHECK(forced.Code == 0 && checksumLine(forced.Out) != "00c145c310568ede", "a recording can be tried on another seed (its own is not compared)");
+        CHECK(forced.Code == 0 && checksumLine(forced.Out) != "aa1bd6a10180f5cb", "a recording can be tried on another seed (its own is not compared)");
 
         // usage
         CHECK(RunTool(registry, { "simulate" }).Code == 2 && Contains(RunTool(registry, { "simulate" }).Err, "no scene file"), "no file is a usage error");
