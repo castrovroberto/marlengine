@@ -85,7 +85,7 @@ Then run `SceneTests` again without the variable, and look at `git diff` on the 
 - **Add or change an entity in a world**: edit `Assets/Scenes/world.json`, run the loop above, regenerate the goldens if it changes how the world plays. Format: `docs/scene-format.md`; worked example: `Assets/Scenes/example.json`.
 - **Check a scene file**: `marle-scene validate`, then `simulate`.
 - **Find out what a component or field does**: `marle-scene describe <Component>` (add `--json` to parse it; no name lists them all), or `docs/scene-format.md`, or `Assets/Scenes/scene.schema.json` (each field has a description). Component registrations are in `Marle/src/Marle/Scene/` (`Components.h`, `ComponentRegistry.cpp` for `RegisterBuiltinComponents`, `BuiltinBehaviors.cpp`).
-- **Add a behavior or component** (C++): ask first. Read ADR 0002 (`docs/adr/0002-...md`) and the "Scenes" section of `CLAUDE.md`. Register it in the component registry, make it a behavior with `ComponentBuilder::Behavior`, add a test in `Tests/SceneTests`, regenerate the goldens, document it in `docs/scene-format.md`.
+- **Add a behavior or component** (C++): ask first, then follow `docs/adding-a-behavior.md`: a checklist and a worked example (`Flash`), with the rules a behavior keeps, the tests to update and the files to regenerate.
 - **Add a test**: put it in the matching `Tests/<Name>/src/` project; a new project is declared with `testProject` in `premake5.lua` (ask first). Test scenes and fixtures go in `Tests/SceneTests/fixtures/`.
 - **Record or replay input**: `docs/input-recording.md`; the Sandbox takes `--record <file>` and `--replay <file> [--exit-when-done]`.
 - **Change rendering, windowing or ImGui**: engine C++, ask first; read the Rendering and Layers sections of `CLAUDE.md`.
