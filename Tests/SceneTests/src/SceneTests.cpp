@@ -1066,6 +1066,51 @@ int main(int argc, char** argv)
         CHECK(jsonUsage.Code == 2 && jsonUsage.Out.empty() && Contains(jsonUsage.Err, "no files given"), "a bad command line is text on stderr even with --json");
         CHECK(RunTool(registry, { "validate", "Assets/Scenes/example.json" }).Out == "OK    Assets/Scenes/example.json: 8 entities, 15 components\n", "validate without --json is unchanged");
 
+        // diff: what a proposed scene would change, checked the way a hot reload checks it
+        {
+            const std::string world = "Assets/Scenes/world.json";
+            const std::string proposedFile = "scene_tool_diff_proposed.json";
+            std::string text = ReadFile(world);
+
+            // moving a wall changes one field, and only the wall's final position differs
+            std::string moved = text;
+            moved.replace(moved.find("[1500, 600]"), 11, "[1500, 300]");
+            WriteFile(proposedFile, moved);
+            ToolRun same = RunTool(registry, { "diff", "--base", world, "--proposed", world, "--steps", "20" });
+            CHECK(same.Code == 0 && Contains(same.Out, "the files describe the same scene") && Contains(same.Out, "(same)") && Contains(same.Out, "the final state is the same"), "diff of a scene with itself says nothing changed");
+            ToolRun edit = RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile, "--steps", "20" });
+            CHECK(edit.Code == 0 && Contains(edit.Out, "a hot reload would accept it") && Contains(edit.Out, "wall_a.Transform.position: [1500.0,600.0] -> [1500.0,300.0]") && Contains(edit.Out, "(different)"), "diff says what an edit changes in the file and that the runs differ");
+
+            Json doc = Json::parse(RunTool(registry, { "diff", "--proposed", proposedFile, "--base", world, "--steps", "20", "--json" }).Out, nullptr, false);
+            CHECK(!doc.is_discarded() && doc["version"] == 1 && doc["ok"] == true && doc["reload_accepted"] == true && doc["steps_run"] == 20 && doc["same_checksum"] == false && doc["base_checksum"] != doc["proposed_checksum"] && doc["file_changes"].size() == 1 && doc["file_changes"][0]["kind"] == "field_changed" && doc["file_changes"][0]["entity"] == "wall_a" && doc["state_changes"].size() == 1 && doc["events"]["same"] == true && doc["events"]["base"]["solid_stopped"] == 0, "diff --json gives the changes, both checksums and the event counts");
+            CHECK(doc["base_checksum"] == Json(Simulation::ChecksumText([&] { SceneLoadResult r = LoadScene(world, registry); for (int i = 0; i < 20; i++) Simulation::Step(registry, *r.Scene, InputFrame(), 1.0 / 60.0); return Simulation::Checksum(registry, *r.Scene); }())), "its base checksum is that of stepping the base 20 times with no input");
+
+            // adding and removing entities
+            std::string grown = text;
+            const size_t entities = grown.find("\"entities\"");
+            const size_t bracket = grown.find('[', entities);
+            grown.insert(bracket + 1, "{ \"name\": \"extra\", \"components\": { \"Transform\": { \"position\": [1, 2], \"rotation\": 0, \"scale\": [1, 1] } } },");
+            WriteFile(proposedFile, grown);
+            Json added = Json::parse(RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile, "--steps", "0", "--json" }).Out, nullptr, false);
+            CHECK(!added.is_discarded() && added["entities_added"] == Json::array({ "extra" }) && added["entities_removed"].empty(), "an added entity is listed");
+            Json removed = Json::parse(RunTool(registry, { "diff", "--base", proposedFile, "--proposed", world, "--steps", "0", "--json" }).Out, nullptr, false);
+            CHECK(!removed.is_discarded() && removed["entities_removed"] == Json::array({ "extra" }) && Contains(RunTool(registry, { "diff", "--base", proposedFile, "--proposed", world, "--steps", "0" }).Out, "removed extra"), "and a removed one");
+
+            // a proposal with a problem is refused as a reload would, and nothing is run
+            std::string broken = text;
+            broken.replace(broken.find("\"zoom\": 1"), 9, "\"zoom\": 9999");
+            WriteFile(proposedFile, broken);
+            ToolRun refused = RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile });
+            CHECK(refused.Code == 1 && Contains(refused.Out, "/Camera/zoom") && Contains(refused.Out, "(proposed): 1 problem") && Contains(refused.Out, "would refuse it") && !Contains(refused.Out, "checksum"), "a proposal with a problem fails with its problems and is not run");
+            Json refusedDoc = Json::parse(RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile, "--json" }).Out, nullptr, false);
+            CHECK(!refusedDoc.is_discarded() && refusedDoc["ok"] == false && refusedDoc["reload_accepted"] == false && refusedDoc["proposed_problems"].size() == 1 && refusedDoc["proposed_problems"][0]["pointer"].get<std::string>().find("zoom") != std::string::npos && refusedDoc["base_problems"].empty() && !refusedDoc.contains("base_checksum"), "the JSON lists the proposal's problems and no run");
+            ToolRun badBase = RunTool(registry, { "diff", "--base", proposedFile, "--proposed", world });
+            CHECK(badBase.Code == 1 && Contains(badBase.Out, "(base)") && Contains(badBase.Out, "base has to be clean"), "a base with problems is refused too");
+
+            CHECK(RunTool(registry, { "diff", "--base", world }).Code == 2 && RunTool(registry, { "diff" }).Code == 2 && RunTool(registry, { "diff", "--base", world, "--proposed", "no/such.json" }).Code == 2 && RunTool(registry, { "diff", "--base", world, "--proposed", world, "--steps", "x" }).Code == 2 && RunTool(registry, { "diff", "--base", world, "--proposed", world, "--wrong" }).Code == 2, "diff needs both scenes, a readable proposal and good options");
+            std::filesystem::remove(proposedFile);
+        }
+
         // describe: what the registry knows about a component
         {
             ComponentRegistry game;
@@ -1218,6 +1263,18 @@ int main(int argc, char** argv)
         ToolRun broken = RunProcess(tool + " validate Tests/SceneTests/fixtures/mixed_errors.json");
         CHECK(broken.Code == 1 && Contains(broken.Out, "FAIL  Tests/SceneTests/fixtures/mixed_errors.json: 14 problems"), "marle-scene validate exits 1 on a bad scene");
         CHECK(RunProcess(tool + " bogus").Code == 2 && RunProcess(tool).Code == 2, "marle-scene exits 2 on a bad command line");
+
+        // diff reads the proposed scene from stdin with -
+        {
+            std::string moved = ReadFile("Assets/Scenes/world.json");
+            const size_t at = moved.find("[1500, 600]");
+            moved.replace(at, 11, "[1500, 300]");
+            WriteFile("scene_tool_proposed.json", moved);
+            ToolRun piped = RunProcess("cat scene_tool_proposed.json | " + tool + " diff --base Assets/Scenes/world.json --proposed - --steps 5 --json");
+            Json pipedDoc = Json::parse(piped.Out, nullptr, false);
+            CHECK(piped.Code == 0 && !pipedDoc.is_discarded() && pipedDoc["proposed"] == "<stdin>" && pipedDoc["file_changes"].size() == 1, "marle-scene diff --proposed - reads the proposed scene from stdin");
+            std::filesystem::remove("scene_tool_proposed.json");
+        }
         ToolRun schema = RunProcess(tool + " schema");
         CHECK(schema.Code == 0 && schema.Out == ReadFile("Assets/Scenes/scene.schema.json"), "marle-scene schema prints the committed schema");
         CHECK(RunProcess(tool + " format --check Assets/Scenes").Code == 0 && RunProcess(tool + " schema --check Assets/Scenes/scene.schema.json").Code == 0, "marle-scene format --check and schema --check pass on the repository's scenes");

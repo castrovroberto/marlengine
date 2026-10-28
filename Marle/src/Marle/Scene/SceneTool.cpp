@@ -35,6 +35,11 @@ namespace Marle {
             "                                     check (exit 1 on a different checksum); --report writes what happened\n"
             "                                     (triggers entered and left, movers stopped by solids) as a JSON array of\n"
             "                                     events with their step, to a file or, with -, to stdout instead of the text\n"
+            "  diff --base <file> --proposed <file|-> [--steps N] [--json]\n"
+            "                                     check a proposed version of a scene as a hot reload would (strictly: any\n"
+            "                                     problem refuses it), then say what it changes in the file and how a run of\n"
+            "                                     N steps (default 600, no input) differs from the base's; - reads the\n"
+            "                                     proposed text from stdin. Exit 1 if either has problems, else 0\n"
             "  describe [--json] [<component>]    show what a component is and each of its fields (type, default, range,\n"
             "                                     required, flags); without a name, list the components\n"
             "  reference [--check <file> | --update <file>]\n"
@@ -43,7 +48,7 @@ namespace Marle {
             "                                     up to date (exit 1 if not)\n"
             "  help                               show this text\n"
             "\n"
-            "--json (validate, simulate, describe) prints one JSON object instead of text; see docs/scene-format.md. A bad\n"
+            "--json (validate, simulate, describe, diff) prints one JSON object instead of text; see docs/scene-format.md. A bad\n"
             "command line is still reported as text on stderr.\n"
             "\n"
             "A directory means every .json file in it, except *.schema.json.\n"
@@ -601,6 +606,129 @@ namespace Marle {
             return code;
         }
 
+
+        // Counts of each kind of event in a run
+        Json EventCounts(const std::vector<StampedEvent>& events)
+        {
+            Json counts = Json::object({ { "trigger_entered", 0 }, { "trigger_left", 0 }, { "solid_stopped", 0 } });
+            for (const StampedEvent& event : events) counts[SimulationEventKindName(event.What.What)] = counts[SimulationEventKindName(event.What.What)].get<int>() + 1;
+            return counts;
+        }
+
+        bool SameEvents(const std::vector<StampedEvent>& a, const std::vector<StampedEvent>& b)
+        {
+            if (a.size() != b.size()) return false;
+            for (size_t i = 0; i < a.size(); i++)
+                if (a[i].Step != b[i].Step || a[i].What.What != b[i].What.What || a[i].What.Entity != b[i].What.Entity || a[i].What.Other != b[i].What.Other || a[i].What.Axis != b[i].What.Axis) return false;
+            return true;
+        }
+
+        int Diff(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        {
+            const bool asJson = TakeFlag(args, "--json");
+            std::string baseFile, proposedArg;
+            long long steps = 600;
+            for (size_t i = 0; i < args.size(); i++) {
+                const bool hasValue = i + 1 < args.size();
+                if (args[i] == "--base" && hasValue) baseFile = args[++i];
+                else if (args[i] == "--proposed" && hasValue) proposedArg = args[++i];
+                else if (args[i] == "--steps" && hasValue) {
+                    if (!ParseCount(args[++i], steps) || steps < 0 || steps > MaxRecordingSteps) { err << "marle-scene diff: --steps needs a whole number from 0 to " << MaxRecordingSteps << "\n"; return 2; }
+                }
+                else { err << "marle-scene diff: unknown or incomplete option '" << args[i] << "'\n\n" << Usage; return 2; }
+            }
+            if (baseFile.empty() || proposedArg.empty()) { err << "marle-scene diff: both --base <file> and --proposed <file|-> are needed\n\n" << Usage; return 2; }
+
+            const std::string proposedName = proposedArg == "-" ? "<stdin>" : proposedArg;
+            std::string proposedText;
+            if (proposedArg == "-") { std::stringstream text; text << std::cin.rdbuf(); proposedText = text.str(); }
+            else {
+                bool readable = false;
+                proposedText = ReadWholeFile(proposedArg, readable);
+                if (!readable) { err << "marle-scene diff: cannot open " << proposedArg << "\n"; return 2; }
+            }
+
+            SceneLoadResult base = LoadScene(baseFile, registry);
+            SceneLoadResult proposed = LoadSceneFromText(proposedText, proposedName, registry);
+            auto problemsJson = [](const SceneLoadResult& result) {
+                Json list = Json::array();
+                for (const SceneProblem& problem : result.Problems) list.push_back({ { "pointer", problem.Path }, { "message", problem.Message } });
+                return list;
+            };
+
+            // A hot reload takes a scene only if it has no problem at all, so that is the test here too
+            if (!base.Ok() || !proposed.Ok()) {
+                if (asJson) {
+                    PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "base", baseFile }, { "proposed", proposedName },
+                                     { "base_problems", problemsJson(base) }, { "proposed_problems", problemsJson(proposed) }, { "reload_accepted", proposed.Ok() } });
+                    return 1;
+                }
+                for (const SceneProblem& problem : base.Problems) out << problem.ToString() << "\n";
+                for (const SceneProblem& problem : proposed.Problems) out << problem.ToString() << "\n";
+                if (!base.Ok()) out << "FAIL  " << baseFile << " (base): " << Plural(base.Problems.size(), "problem") << "; the base has to be clean to compare against\n";
+                if (!proposed.Ok()) out << "FAIL  " << proposedName << " (proposed): " << Plural(proposed.Problems.size(), "problem") << "; a hot reload would refuse it and keep the running scene\n";
+                return 1;
+            }
+
+            const Snapshot baseStart = TakeSnapshot(*base.Scene, registry), proposedStart = TakeSnapshot(*proposed.Scene, registry);
+            const std::vector<Change> fileChanges = Describe(baseStart, proposedStart);
+            auto names = [](const Snapshot& snapshot) { std::vector<std::string> list; for (size_t i = 1; i < snapshot.size(); i++) list.push_back(snapshot[i].first); return list; };   // [0] is the scene's own
+            const std::vector<std::string> baseNames = names(baseStart), proposedNames = names(proposedStart);
+            std::vector<std::string> added, removed;
+            for (const std::string& name : proposedNames) if (std::find(baseNames.begin(), baseNames.end(), name) == baseNames.end()) added.push_back(name);
+            for (const std::string& name : baseNames) if (std::find(proposedNames.begin(), proposedNames.end(), name) == proposedNames.end()) removed.push_back(name);
+
+            auto run = [&](Scene& scene, std::vector<StampedEvent>& events) {
+                static const InputFrame none;
+                std::vector<SimulationEvent> stepEvents;
+                for (long long step = 0; step < steps; step++) {
+                    stepEvents.clear();
+                    Simulation::Step(registry, scene, none, 1.0 / 60.0, &stepEvents);
+                    scene.ClearRestartRequest();
+                    for (SimulationEvent& event : stepEvents) events.push_back({ step, std::move(event) });
+                }
+            };
+            std::vector<StampedEvent> baseEvents, proposedEvents;
+            run(*base.Scene, baseEvents);
+            run(*proposed.Scene, proposedEvents);
+
+            const std::string baseSum = Simulation::ChecksumText(Simulation::Checksum(registry, *base.Scene)), proposedSum = Simulation::ChecksumText(Simulation::Checksum(registry, *proposed.Scene));
+            const std::vector<Change> stateChanges = Describe(TakeSnapshot(*base.Scene, registry), TakeSnapshot(*proposed.Scene, registry));
+            const bool sameEvents = SameEvents(baseEvents, proposedEvents);
+
+            if (asJson) {
+                Json fileList = Json::array(), stateList = Json::array();
+                for (const Change& change : fileChanges) fileList.push_back(change.ToJson());
+                for (const Change& change : stateChanges) stateList.push_back(change.ToJson());
+                PrintJson(out, { { "version", JsonVersion }, { "ok", true }, { "base", baseFile }, { "proposed", proposedName }, { "reload_accepted", true },
+                                 { "entities_added", added }, { "entities_removed", removed }, { "file_changes", std::move(fileList) },
+                                 { "steps_run", steps }, { "base_checksum", baseSum }, { "proposed_checksum", proposedSum }, { "same_checksum", baseSum == proposedSum },
+                                 { "state_changes", std::move(stateList) },
+                                 { "events", { { "base", EventCounts(baseEvents) }, { "proposed", EventCounts(proposedEvents) }, { "same", sameEvents } } } });
+                return 0;
+            }
+
+            constexpr size_t MaxLines = 40;
+            auto list = [&](const std::vector<Change>& changes) {
+                for (size_t i = 0; i < changes.size() && i < MaxLines; i++) out << "  " << changes[i].ToString() << "\n";
+                if (changes.size() > MaxLines) out << "  ... and " << (changes.size() - MaxLines) << " more\n";
+            };
+            auto counts = [](const std::vector<StampedEvent>& events) {
+                const Json c = EventCounts(events);
+                return Plural(c["trigger_entered"].get<size_t>(), "trigger entry") + ", " + Plural(c["trigger_left"].get<size_t>(), "trigger exit") + ", " + Plural(c["solid_stopped"].get<size_t>(), "solid stop");
+            };
+            out << "DIFF  " << baseFile << " (base) -> " << proposedName << " (proposed): a hot reload would accept it\n";
+            if (fileChanges.empty()) out << "the files describe the same scene\n";
+            else { out << "what the edit changes in the file (" << fileChanges.size() << "):\n"; list(fileChanges); }
+            if (!added.empty() || !removed.empty()) out << "entities: added " << (added.empty() ? "none" : detail::Join(added)) << "; removed " << (removed.empty() ? "none" : detail::Join(removed)) << "\n";
+            out << "after " << Plural((size_t)steps, "step") << " with no input:\n";
+            out << "  checksum base " << baseSum << ", proposed " << proposedSum << (baseSum == proposedSum ? " (same)" : " (different)") << "\n";
+            out << "  events " << (sameEvents ? "are the same: " + counts(baseEvents) : "differ: base " + counts(baseEvents) + "; proposed " + counts(proposedEvents)) << "\n";
+            if (stateChanges.empty()) out << "  the final state is the same\n";
+            else { out << "  the final state differs (" << stateChanges.size() << "), base -> proposed:\n"; list(stateChanges); }
+            return 0;
+        }
+
     }
 
     int RunSceneTool(const std::vector<std::string>& args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
@@ -614,6 +742,7 @@ namespace Marle {
         if (command == "format") return Format(rest, registry, out, err);
         if (command == "schema") return Schema(rest, registry, out, err);
         if (command == "simulate") return Simulate(rest, registry, out, err);
+        if (command == "diff") return Diff(rest, registry, out, err);
         if (command == "describe") return DescribeCommand(rest, registry, out, err);
         if (command == "reference") return Reference(rest, registry, out, err);
 
