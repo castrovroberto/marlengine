@@ -28,6 +28,8 @@ Build once (`./r.sh`, or `make config=debug`), then from the repo root:
 ./bin/Debug-linux-x86_64/SceneTool/marle-scene simulate Assets/Scenes/world.json --steps 600
 ```
 
+Add `--json` to either command for one JSON object on stdout instead of text (same exit codes; fields in `docs/scene-format.md`, "JSON output"). Prefer it when you parse the result.
+
 1. `validate` prints every problem with a JSON Pointer and exits 1 if there is any. Fix them all; the loader skips the offending component or entity and hot reload refuses the whole file.
 2. `simulate` runs the scene headless and prints what changed, which triggers touched what and the final checksum. It refuses a scene with problems.
 3. If a recording exists for the scene, check against it: `simulate <scene> --recording <file>` exits 1 if the checksum differs from the recording's. `--expect <checksum>` does the same for a known value.

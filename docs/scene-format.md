@@ -297,13 +297,43 @@ A successful reload keeps what the simulation had worked out. That state lives i
 
 | Command | What it does |
 |---|---|
-| `marle-scene validate <file\|dir>...` | Loads each scene file and prints every problem as `file /pointer: message`, then `OK` or `FAIL` with counts. A directory means every `.json` file in it and below, except `*.schema.json`. |
+| `marle-scene validate [--json] <file\|dir>...` | Loads each scene file and prints every problem as `file /pointer: message`, then `OK` or `FAIL` with counts. A directory means every `.json` file in it and below, except `*.schema.json`. `--json` prints one JSON object instead (see below). |
 | `marle-scene format [--check] [--drop-comments] [--schema <path>] <file\|dir>...` | Rewrites files in canonical form and keeps an existing `$schema` key. It refuses a file that has problems (writing it would drop what failed to load) and leaves a file with comments alone unless you pass `--drop-comments`. `--check` only reports what would change. `--schema` adds a `$schema` key. |
 | `marle-scene schema [--output <file> \| --check <file>]` | Prints the JSON Schema, writes it to a file, or checks that a file is up to date. |
-| `marle-scene simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>]` | Runs a scene headless, with no window or GL context, and prints what changed (field by field, first 40 lines) and the final checksum. A scene with any problem is refused first, as `validate` would report. `--steps` defaults to the recording's length, else 600; input comes from `--recording` (see `docs/input-recording.md`; one made for another version of the scene or another seed is refused), else there is none. `--seed` replaces the scene's seed, and then the recording's seed is not compared. `--expect` makes it a CI check: exit 1 if the checksum differs. A recording that carries a checksum must reproduce it when played whole. The checksum is the same on every run and equals the one the Sandbox reaches replaying the same recording. |
+| `marle-scene simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>] [--json]` | Runs a scene headless, with no window or GL context, and prints what changed (field by field, first 40 lines) and the final checksum. A scene with any problem is refused first, as `validate` would report. `--steps` defaults to the recording's length, else 600; input comes from `--recording` (see `docs/input-recording.md`; one made for another version of the scene or another seed is refused), else there is none. `--seed` replaces the scene's seed, and then the recording's seed is not compared. `--expect` makes it a CI check: exit 1 if the checksum differs. A recording that carries a checksum must reproduce it when played whole. The checksum is the same on every run and equals the one the Sandbox reaches replaying the same recording. `--json` prints one JSON object instead (see below). |
 | `marle-scene help` | Shows the usage. |
 
 Exit status: `0` everything is fine, `1` problems were found (or, with `--check`, files differ), `2` the command line is wrong. That makes `validate` and the `--check` modes usable in CI, and as the feedback loop for an AI: edit, validate, fix the reported paths, repeat.
+
+#### JSON output
+
+`validate` and `simulate` take `--json` and then print exactly one JSON object on stdout instead of text, for programs to read. Exit codes are the same as without it, and a bad command line (exit 2) is still text on stderr. Every object has `version` (now `1`; it goes up when a field is renamed or removed, new fields can appear without it) and `ok`.
+
+`validate --json`:
+
+```json
+{ "version": 1, "ok": false,
+  "files": [ { "file": "a.json", "ok": false, "entities": 10, "components": 7,
+               "problems": [ { "pointer": "/entities/2/components/Transform/position", "message": "expected an array of 2 numbers, got a string; the component is skipped" } ] } ],
+  "summary": { "files": 1, "failing": 1, "problems": 1 } }
+```
+
+`entities` and `components` are what loaded, and are left out when nothing could be loaded. `pointer` is a JSON Pointer into the file, and is empty for a problem with the file as a whole.
+
+`simulate --json`:
+
+```json
+{ "version": 1, "ok": true, "file": "Assets/Scenes/world.json", "steps_run": 890, "seed": 1,
+  "input": { "recording": "run.recording.json", "steps": 890 },
+  "checksum": "831d51694e824a58",
+  "changes": [ { "kind": "field_changed", "entity": "player", "component": "Transform", "field": "position", "before": [1024, 518], "after": [1960, 88], "field_gone": false } ],
+  "overlaps": [ { "trigger": "zone", "other": "player", "first_step": 246, "last_step": 316, "steps_touching": 71, "times_entered": 1 } ],
+  "recording_checksum": "831d51694e824a58", "matches_recording": true }
+```
+
+- `input` is `null` when there is no recording. `changes` is complete (the text stops at 40 lines); `kind` is one of `field_changed`, `component_added`, `component_removed`, `entity_added`, `entity_removed`, and `field`, `before`, `after` appear only for `field_changed`.
+- `recording_checksum` and `matches_recording` appear when the recording carries a checksum and the run is its whole length with its seed; `expected_checksum` and `matches_expected` appear with `--expect`. `ok` is false if either does not match.
+- A scene with problems is not run: `ok` is false, `error` says so and `scene_problems` lists them as in `validate`, with no `checksum`. A recording that cannot be read, or that was made for another scene, seed or step rate, gives `ok` false, `error` and `recording_problems`.
 
 The tool knows the built-in components. A game with components of its own builds its own tool with its own registry: `Marle::RunSceneTool(args, registry, std::cout, std::cerr)` is the whole program (see `tools/marle-scene/src/main.cpp`).
 

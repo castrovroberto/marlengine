@@ -1008,6 +1008,25 @@ int main(int argc, char** argv)
         ToolRun help = RunTool(registry, { "help" });
         CHECK(help.Code == 0 && Contains(help.Out, "validate") && Contains(help.Out, "format") && Contains(help.Out, "schema") && RunTool(registry, { "--help" }).Out == help.Out, "help lists the commands");
 
+        // --json: one JSON object, version 1, same exit codes as the text
+        ToolRun jsonOk = RunTool(registry, { "validate", "--json", "Assets/Scenes/example.json" });
+        Json okDoc = Json::parse(jsonOk.Out, nullptr, false);
+        CHECK(jsonOk.Code == 0 && !okDoc.is_discarded() && okDoc["version"] == 1 && okDoc["ok"] == true && okDoc["files"].size() == 1 && okDoc["files"][0]["file"] == "Assets/Scenes/example.json" && okDoc["files"][0]["entities"] == 8 && okDoc["files"][0]["problems"].empty() && okDoc["summary"]["files"] == 1 && okDoc["summary"]["failing"] == 0, "validate --json describes a clean file");
+        ToolRun jsonBad = RunTool(registry, { "validate", dir + "mixed_errors.json", "--json" });
+        Json badDoc = Json::parse(jsonBad.Out, nullptr, false);
+        CHECK(jsonBad.Code == 1 && !badDoc.is_discarded() && badDoc["ok"] == false && badDoc["files"][0]["ok"] == false && badDoc["summary"]["failing"] == 1, "validate --json fails with exit 1 and ok false, with the flag anywhere");
+        bool problemsMatchText = !badDoc.is_discarded() && badDoc["files"][0]["problems"].size() == badDoc["summary"]["problems"].get<size_t>() && badDoc["summary"]["problems"].get<size_t>() > 0;
+        for (const Json& problem : badDoc["files"][0]["problems"])
+            if (!problem.contains("pointer") || !problem.contains("message") || problem.size() != 2 || !Contains(RunTool(registry, { "validate", dir + "mixed_errors.json" }).Out, problem["pointer"].get<std::string>() + ": " + problem["message"].get<std::string>())) problemsMatchText = false;
+        CHECK(problemsMatchText, "validate --json problems are the text's problems, as pointer and message");
+        Json unloadable = Json::parse(RunTool(registry, { "validate", "--json", dir + "bad_syntax.json" }).Out, nullptr, false);
+        CHECK(!unloadable.is_discarded() && unloadable["files"][0]["ok"] == false && !unloadable["files"][0].contains("entities"), "validate --json leaves out the counts of a file that could not load at all");
+        Json noneDoc = Json::parse(RunTool(registry, { "validate", "--json", w + "/empty" }).Out, nullptr, false);
+        CHECK(!noneDoc.is_discarded() && noneDoc["ok"] == true && noneDoc["files"].empty(), "validate --json on a directory with no scenes is ok with no files");
+        ToolRun jsonUsage = RunTool(registry, { "validate", "--json" });
+        CHECK(jsonUsage.Code == 2 && jsonUsage.Out.empty() && Contains(jsonUsage.Err, "no files given"), "a bad command line is text on stderr even with --json");
+        CHECK(RunTool(registry, { "validate", "Assets/Scenes/example.json" }).Out == "OK    Assets/Scenes/example.json: 8 entities, 15 components\n", "validate without --json is unchanged");
+
         std::filesystem::remove_all(work);
     }
 
@@ -3632,6 +3651,38 @@ int main(int argc, char** argv)
         // the tool agrees, and says what the route touched
         std::ostringstream out, err;
         CHECK(RunSceneTool({ "simulate", world, "--recording", golden, "--expect", Simulation::ChecksumText(read.Recording.Checksum) }, registry, out, err) == 0 && out.str().find("zone > player: steps 246 to 316") != std::string::npos && out.str().find("entered once") != std::string::npos, "marle-scene simulate reaches the golden checksum and reports the zone");
+
+        // simulate --json: the same run as the text, as one object
+        {
+            ToolRun text = RunTool(registry, { "simulate", world, "--recording", golden });
+            ToolRun json = RunTool(registry, { "simulate", "--json", world, "--recording", golden });
+            Json doc = Json::parse(json.Out, nullptr, false);
+            CHECK(json.Code == 0 && !doc.is_discarded() && doc["version"] == 1 && doc["ok"] == true && doc["steps_run"] == steps && doc["seed"] == 1 && doc["input"]["recording"] == golden && doc["input"]["steps"] == steps, "simulate --json reports the run and its input");
+            CHECK(!doc.is_discarded() && doc["checksum"] == Simulation::ChecksumText(read.Recording.Checksum) && doc["matches_recording"] == true && doc["recording_checksum"] == doc["checksum"] && Contains(text.Out, "checksum " + doc["checksum"].get<std::string>()), "its checksum is the text's and the recording's");
+            CHECK(!doc.is_discarded() && doc["overlaps"].size() == 1 && doc["overlaps"][0]["trigger"] == "zone" && doc["overlaps"][0]["other"] == "player" && doc["overlaps"][0]["first_step"] == 246 && doc["overlaps"][0]["last_step"] == 316 && doc["overlaps"][0]["steps_touching"] == 71 && doc["overlaps"][0]["times_entered"] == 1, "its overlaps carry the trigger summary");
+            bool fieldsOk = !doc.is_discarded() && !doc["changes"].empty();
+            for (const Json& change : doc["changes"])
+                if (change["kind"] == "field_changed" && !Contains(text.Out, change["entity"].get<std::string>() + "." + change["component"].get<std::string>() + "." + change["field"].get<std::string>() + ": ")) fieldsOk = false;
+            CHECK(fieldsOk, "every field change in the JSON is a line of the text");
+
+            Json wrong = Json::parse(RunTool(registry, { "simulate", world, "--recording", golden, "--expect", "0000000000000000", "--json" }).Out, nullptr, false);
+            CHECK(RunTool(registry, { "simulate", world, "--expect", "0000000000000000", "--json" }).Code == 1 && !wrong.is_discarded() && wrong["ok"] == false && wrong["matches_expected"] == false && wrong["expected_checksum"] == "0000000000000000", "a wrong --expect is ok false and exit 1 in the JSON");
+
+            ToolRun noRecording = RunTool(registry, { "simulate", world, "--steps", "5", "--json" });
+            Json plain = Json::parse(noRecording.Out, nullptr, false);
+            CHECK(noRecording.Code == 0 && !plain.is_discarded() && plain["input"].is_null() && plain["steps_run"] == 5 && !plain.contains("matches_recording"), "without a recording the input is null and nothing is compared");
+
+            ToolRun missing = RunTool(registry, { "simulate", world, "--recording", "no/such/file.json", "--json" });
+            Json missingDoc = Json::parse(missing.Out, nullptr, false);
+            CHECK(missing.Code == 1 && !missingDoc.is_discarded() && missingDoc["ok"] == false && missingDoc["error"] == "cannot open the file", "an unreadable recording is ok false with an error");
+
+            ToolRun badScene = RunTool(registry, { "simulate", "--json", "Tests/SceneTests/fixtures/mixed_errors.json" });
+            Json badDoc = Json::parse(badScene.Out, nullptr, false);
+            CHECK(badScene.Code == 1 && !badDoc.is_discarded() && badDoc["ok"] == false && !badDoc["scene_problems"].empty() && badDoc["scene_problems"][0].contains("pointer") && !badDoc.contains("checksum"), "a scene with problems is refused with its problems and no checksum");
+
+            CHECK(RunTool(registry, { "simulate", world, "--steps", "5", "--json", "--bogus" }).Code == 2, "a bad option is still a usage error with --json");
+            CHECK(Contains(text.Out, "SIM   ") && !Contains(text.Out, "\"version\""), "simulate without --json is still the text");
+        }
 
         // hot reload: the file moves a wall while the player is in the zone. The player (and everything the file
         // did not change) carries on, the wall is the file's, and the overlap is worked out again

@@ -21,18 +21,21 @@ namespace Marle {
             "usage: marle-scene <command> [options]\n"
             "\n"
             "commands:\n"
-            "  validate <file|dir>...             check scene files and report every problem\n"
+            "  validate [--json] <file|dir>...    check scene files and report every problem\n"
             "  format [--check] [--drop-comments] [--schema <path>] <file|dir>...\n"
             "                                     rewrite scene files in canonical form; a file with comments is\n"
             "                                     left alone unless --drop-comments says to lose the comments\n"
             "  schema [--output <file> | --check <file>]\n"
             "                                     print the JSON Schema for scene files, write it, or check a file\n"
-            "  simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>]\n"
+            "  simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>] [--json]\n"
             "                                     run a scene headless for N fixed steps (default: the recording's length,\n"
             "                                     else 600), print what changed, which triggers touched what (step\n"
             "                                     numbers count from 0) and the final checksum; --expect makes it a\n"
             "                                     check (exit 1 on a different checksum)\n"
             "  help                               show this text\n"
+            "\n"
+            "--json (validate, simulate) prints one JSON object instead of text; see docs/scene-format.md. A bad\n"
+            "command line is still reported as text on stderr.\n"
             "\n"
             "A directory means every .json file in it, except *.schema.json.\n"
             "Exit status: 0 all fine, 1 problems found (or files differ with --check), 2 bad command line.\n";
@@ -80,27 +83,61 @@ namespace Marle {
             return count;
         }
 
-        int Validate(const std::vector<std::string>& paths, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        // Removes `flag` from args and says whether it was there
+        bool TakeFlag(std::vector<std::string>& args, const std::string& flag)
         {
+            auto it = std::remove(args.begin(), args.end(), flag);
+            bool found = it != args.end();
+            args.erase(it, args.end());
+            return found;
+        }
+
+        // The version of the --json output; bump it when a field is renamed or removed
+        constexpr int JsonVersion = 1;
+
+        void PrintJson(std::ostream& out, const Json& json) { out << json.dump(2) << "\n"; }
+
+        int Validate(std::vector<std::string> paths, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        {
+            const bool asJson = TakeFlag(paths, "--json");
             if (paths.empty()) { err << "marle-scene validate: no files given\n\n" << Usage; return 2; }
 
             std::vector<std::string> files = ExpandPaths(paths);
-            if (files.empty()) { out << "no scene files found\n"; return 0; }
+            if (files.empty() && !asJson) { out << "no scene files found\n"; return 0; }
 
-            size_t failing = 0;
+            Json fileList = Json::array();
+            size_t failing = 0, problemCount = 0;
             for (const std::string& file : files) {
                 SceneLoadResult result = LoadScene(file, registry);
+                problemCount += result.Problems.size();
+                if (!result.Ok()) failing++;
+
+                if (asJson) {
+                    Json problems = Json::array();
+                    for (const SceneProblem& problem : result.Problems) problems.push_back({ { "pointer", problem.Path }, { "message", problem.Message } });
+                    Json entry = { { "file", file }, { "ok", result.Ok() } };
+                    if (result.Scene) { entry["entities"] = result.Scene->GetEntityCount(); entry["components"] = CountComponents(*result.Scene, registry); }
+                    entry["problems"] = std::move(problems);
+                    fileList.push_back(std::move(entry));
+                    continue;
+                }
+
                 if (result.Ok()) {
                     out << "OK    " << file << ": " << Plural(result.Scene->GetEntityCount(), "entity") << ", " << Plural(CountComponents(*result.Scene, registry), "component") << "\n";
                     continue;
                 }
 
-                failing++;
                 for (const SceneProblem& problem : result.Problems) out << problem.ToString() << "\n";
                 out << "FAIL  " << file << ": " << Plural(result.Problems.size(), "problem");
                 if (result.Scene) out << " (loaded " << Plural(result.Scene->GetEntityCount(), "entity") << ", " << Plural(CountComponents(*result.Scene, registry), "component") << ")";
                 else out << " (nothing could be loaded)";
                 out << "\n";
+            }
+
+            if (asJson) {
+                PrintJson(out, { { "version", JsonVersion }, { "ok", failing == 0 }, { "files", std::move(fileList) },
+                                 { "summary", { { "files", files.size() }, { "failing", failing }, { "problems", problemCount } } } });
+                return failing ? 1 : 0;
             }
 
             if (files.size() > 1) out << Plural(files.size(), "file") << ", " << failing << " with problems\n";
@@ -220,10 +257,38 @@ namespace Marle {
             return snapshot;
         }
 
-        // One line per field that differs, plus added and removed entities and components
-        std::vector<std::string> Describe(const Snapshot& before, const Snapshot& after)
+        // One field that differs, or an entity or component that was added or removed
+        struct Change {
+            enum class Kind { EntityAdded, EntityRemoved, ComponentAdded, ComponentRemoved, FieldChanged } What;
+            std::string Entity, Component, Field;
+            Json Before, After;   // FieldChanged only; After is null when the field is gone
+            bool FieldGone = false;
+
+            std::string ToString() const
+            {
+                switch (What) {
+                    case Kind::EntityAdded:      return "added entity " + Entity;
+                    case Kind::EntityRemoved:    return "removed entity " + Entity;
+                    case Kind::ComponentAdded:   return Entity + "." + Component + ": added";
+                    case Kind::ComponentRemoved: return Entity + "." + Component + ": removed";
+                    case Kind::FieldChanged:     break;
+                }
+                return Entity + "." + Component + "." + Field + ": " + Before.dump() + " -> " + (FieldGone ? "(gone)" : After.dump());
+            }
+
+            Json ToJson() const
+            {
+                static const char* kinds[] = { "entity_added", "entity_removed", "component_added", "component_removed", "field_changed" };
+                Json json = { { "kind", kinds[(int)What] }, { "entity", Entity } };
+                if (What != Kind::EntityAdded && What != Kind::EntityRemoved) json["component"] = Component;
+                if (What == Kind::FieldChanged) { json["field"] = Field; json["before"] = Before; json["after"] = FieldGone ? Json(nullptr) : After; json["field_gone"] = FieldGone; }
+                return json;
+            }
+        };
+
+        std::vector<Change> Describe(const Snapshot& before, const Snapshot& after)
         {
-            std::vector<std::string> lines;
+            std::vector<Change> changes;
             auto find = [](const auto& list, const std::string& name) -> const typename std::decay_t<decltype(list)>::value_type* {
                 for (const auto& item : list) if (item.first == name) return &item;
                 return nullptr;
@@ -231,21 +296,23 @@ namespace Marle {
 
             for (const auto& entity : before) {
                 const auto* now = find(after, entity.first);
-                if (!now) { lines.push_back("removed entity " + entity.first); continue; }
+                if (!now) { changes.push_back({ Change::Kind::EntityRemoved, entity.first }); continue; }
                 for (const auto& component : entity.second) {
                     const auto* then = find(now->second, component.first);
-                    if (!then) { lines.push_back(entity.first + "." + component.first + ": removed"); continue; }
+                    if (!then) { changes.push_back({ Change::Kind::ComponentRemoved, entity.first, component.first }); continue; }
                     if (component.second == then->second) continue;
                     for (auto it = component.second.begin(); it != component.second.end(); ++it)
-                        if (!then->second.contains(it.key()) || then->second[it.key()] != it.value())
-                            lines.push_back(entity.first + "." + component.first + "." + it.key() + ": " + it.value().dump() + " -> " + (then->second.contains(it.key()) ? then->second[it.key()].dump() : "(gone)"));
+                        if (!then->second.contains(it.key()) || then->second[it.key()] != it.value()) {
+                            const bool gone = !then->second.contains(it.key());
+                            changes.push_back({ Change::Kind::FieldChanged, entity.first, component.first, it.key(), it.value(), gone ? Json(nullptr) : then->second[it.key()], gone });
+                        }
                 }
                 for (const auto& component : now->second)
-                    if (!find(entity.second, component.first)) lines.push_back(entity.first + "." + component.first + ": added");
+                    if (!find(entity.second, component.first)) changes.push_back({ Change::Kind::ComponentAdded, entity.first, component.first });
             }
             for (const auto& entity : after)
-                if (!find(before, entity.first)) lines.push_back("added entity " + entity.first);
-            return lines;
+                if (!find(before, entity.first)) changes.push_back({ Change::Kind::EntityAdded, entity.first });
+            return changes;
         }
 
         bool ParseCount(const std::string& text, long long& value)
@@ -256,8 +323,9 @@ namespace Marle {
             return used == text.size();
         }
 
-        int Simulate(const std::vector<std::string>& args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        int Simulate(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
         {
+            const bool asJson = TakeFlag(args, "--json");
             std::string file, recordingFile, expect;
             long long steps = -1, seed = 0;
             bool hasSeed = false;
@@ -285,6 +353,12 @@ namespace Marle {
             // The scene has to be clean first: a run of a scene with problems would not be the scene in the file
             SceneLoadResult loaded = LoadScene(file, registry);
             if (!loaded.Ok()) {
+                if (asJson) {
+                    Json problems = Json::array();
+                    for (const SceneProblem& problem : loaded.Problems) problems.push_back({ { "pointer", problem.Path }, { "message", problem.Message } });
+                    PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "file", file }, { "error", "the scene has problems; fix them before simulating" }, { "scene_problems", std::move(problems) } });
+                    return 1;
+                }
                 for (const SceneProblem& problem : loaded.Problems) out << problem.ToString() << "\n";
                 out << "FAIL  " << file << ": " << Plural(loaded.Problems.size(), "problem") << "; fix them before simulating\n";
                 return 1;
@@ -299,23 +373,29 @@ namespace Marle {
                 scene.ResetRandom();
             }
 
+            // A run that cannot start for a reason other than the scene's problems
+            auto fail = [&](const std::string& what, const std::vector<std::string>& details) {
+                if (asJson) PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "file", file }, { "error", what }, { "recording_problems", details } });
+                else {
+                    for (const std::string& detail : details) out << recordingFile << ": " << detail << "\n";
+                    out << "FAIL  " << recordingFile << ": " << what << "\n";
+                }
+                return 1;
+            };
+
             InputRecording recording;
             const bool hasRecording = !recordingFile.empty();
             if (hasRecording) {
                 bool readable = false;
                 std::string text = ReadWholeFile(recordingFile, readable);
-                if (!readable) { out << "FAIL  " << recordingFile << ": cannot open the file\n"; return 1; }
+                if (!readable) return fail("cannot open the file", {});
                 RecordingReadResult read = ReadRecording(text);
-                if (!read.Ok()) {
-                    for (const std::string& problem : read.Problems) out << recordingFile << ": " << problem << "\n";
-                    out << "FAIL  " << recordingFile << ": " << Plural(read.Problems.size(), "problem") << "\n";
-                    return 1;
-                }
+                if (!read.Ok()) return fail(Plural(read.Problems.size(), "problem"), read.Problems);
                 recording = std::move(read.Recording);
 
                 // With --seed the point is to try the same input on another seed, so the recording's own is not compared
                 std::string mismatch = RecordingMismatch(recording, scene.GetName(), loaded.TextHash, hasSeed ? recording.Seed : scene.GetSeed(), recording.StepsPerSecond);
-                if (!mismatch.empty()) { out << "FAIL  " << recordingFile << ": " << mismatch << "\n"; return 1; }
+                if (!mismatch.empty()) return fail(mismatch, {});
             }
 
             const long long recorded = hasRecording ? (long long)recording.GetStepCount() : 0;
@@ -345,15 +425,38 @@ namespace Marle {
             const Snapshot after = TakeSnapshot(scene, registry);
             const uint64_t checksum = Simulation::Checksum(registry, scene);
 
+            const std::vector<Change> changes = Describe(before, after);
+            const bool checksComparison = hasRecording && recording.HasChecksum && steps == recorded && !hasSeed;
+            const std::string checksumText = Simulation::ChecksumText(checksum);
+
+            int code = 0;
+            if (checksComparison && recording.Checksum != checksum) code = 1;
+            if (!expect.empty() && expect != checksumText) code = 1;
+
+            if (asJson) {
+                Json changeList = Json::array();
+                for (const Change& change : changes) changeList.push_back(change.ToJson());
+                Json overlapList = Json::array();
+                for (const Touch& t : touches)
+                    overlapList.push_back({ { "trigger", t.Pair.Trigger }, { "other", t.Pair.Other }, { "first_step", t.First }, { "last_step", t.Last }, { "steps_touching", t.Steps }, { "times_entered", t.Entered } });
+
+                Json result = { { "version", JsonVersion }, { "ok", code == 0 }, { "file", file }, { "steps_run", steps }, { "seed", scene.GetSeed() },
+                                { "input", hasRecording ? Json({ { "recording", recordingFile }, { "steps", recorded } }) : Json(nullptr) },
+                                { "checksum", checksumText }, { "changes", std::move(changeList) }, { "overlaps", std::move(overlapList) } };
+                if (checksComparison) result["recording_checksum"] = Simulation::ChecksumText(recording.Checksum), result["matches_recording"] = recording.Checksum == checksum;
+                if (!expect.empty()) result["expected_checksum"] = expect, result["matches_expected"] = expect == checksumText;
+                PrintJson(out, result);
+                return code;
+            }
+
             out << "SIM   " << file << ": " << Plural((size_t)steps, "step") << ", seed " << scene.GetSeed();
             if (hasRecording) out << ", input from " << recordingFile << " (" << Plural((size_t)recorded, "step") << (steps > recorded ? "; no input after that" : steps < recorded ? "; stopped early" : "") << ")";
             else out << ", no input";
             out << "\n";
 
-            const std::vector<std::string> changes = Describe(before, after);
             constexpr size_t MaxLines = 40;
             if (changes.empty()) out << "nothing changed\n";
-            for (size_t i = 0; i < changes.size() && i < MaxLines; i++) out << "  " << changes[i] << "\n";
+            for (size_t i = 0; i < changes.size() && i < MaxLines; i++) out << "  " << changes[i].ToString() << "\n";
             if (changes.size() > MaxLines) out << "  ... and " << (changes.size() - MaxLines) << " more\n";
             if (!touches.empty()) {
                 out << "overlaps (trigger > what it touched):\n";
@@ -363,16 +466,15 @@ namespace Marle {
                 }
                 if (touches.size() > MaxLines) out << "  ... and " << (touches.size() - MaxLines) << " more\n";
             }
-            out << "checksum " << Simulation::ChecksumText(checksum) << "\n";
+            out << "checksum " << checksumText << "\n";
 
-            int code = 0;
-            if (hasRecording && recording.HasChecksum && steps == recorded && !hasSeed) {
+            if (checksComparison) {
                 if (recording.Checksum == checksum) out << "OK    matches the checksum in the recording\n";
-                else { out << "DIFF  the recording says " << Simulation::ChecksumText(recording.Checksum) << ": this run is not the one it was made from\n"; code = 1; }
+                else out << "DIFF  the recording says " << Simulation::ChecksumText(recording.Checksum) << ": this run is not the one it was made from\n";
             }
             if (!expect.empty()) {
-                if (expect == Simulation::ChecksumText(checksum)) out << "OK    matches --expect\n";
-                else { out << "DIFF  expected " << expect << "\n"; code = 1; }
+                if (expect == checksumText) out << "OK    matches --expect\n";
+                else out << "DIFF  expected " << expect << "\n";
             }
             return code;
         }
