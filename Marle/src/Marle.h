@@ -1,18 +1,6 @@
 #pragma once
 
-/*
- * #include
- * Source file inclusion
- * Includes other source file into current source file at the line immediately after the directive.
- * https://en.cppreference.com/w/cpp/preprocessor/include
- * 
- * Many compilers also implement the non-standard pragma: #pragma once with similar effects: 
- * it disables processing of a file if the same file (where file identity is determined in OS-specific way) has already been included.
- *
- * A __has_include result of 1 only means that a header or source file with the specified name exists. 
- * It does not mean that the header or source file, when included, would not cause an error or would contain anything useful.
- */
-
+// The single include for Marle clients: the engine's public surface.
 // For use by Marle applications
 #include "Marle/Application.h"
 #include "Marle/CommandLine.h"
