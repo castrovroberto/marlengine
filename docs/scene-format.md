@@ -317,12 +317,30 @@ A successful reload keeps what the simulation had worked out. That state lives i
 | `marle-scene validate [--json] <file\|dir>...` | Loads each scene file and prints every problem as `file /pointer: message`, then `OK` or `FAIL` with counts. A directory means every `.json` file in it and below, except `*.schema.json`. `--json` prints one JSON object instead (see below). |
 | `marle-scene format [--check] [--drop-comments] [--schema <path>] <file\|dir>...` | Rewrites files in canonical form and keeps an existing `$schema` key. It refuses a file that has problems (writing it would drop what failed to load) and leaves a file with comments alone unless you pass `--drop-comments`. `--check` only reports what would change. `--schema` adds a `$schema` key. |
 | `marle-scene schema [--output <file> \| --check <file>]` | Prints the JSON Schema, writes it to a file, or checks that a file is up to date. |
-| `marle-scene simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>] [--json]` | Runs a scene headless, with no window or GL context, and prints what changed (field by field, first 40 lines) and the final checksum. A scene with any problem is refused first, as `validate` would report. `--steps` defaults to the recording's length, else 600; input comes from `--recording` (see `docs/input-recording.md`; one made for another version of the scene or another seed is refused), else there is none. `--seed` replaces the scene's seed, and then the recording's seed is not compared. `--expect` makes it a CI check: exit 1 if the checksum differs. A recording that carries a checksum must reproduce it when played whole. The checksum is the same on every run and equals the one the Sandbox reaches replaying the same recording. `--json` prints one JSON object instead (see below). |
+| `marle-scene simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>] [--report <file\|->] [--json]` | Runs a scene headless, with no window or GL context, and prints what changed (field by field, first 40 lines) and the final checksum. A scene with any problem is refused first, as `validate` would report. `--steps` defaults to the recording's length, else 600; input comes from `--recording` (see `docs/input-recording.md`; one made for another version of the scene or another seed is refused), else there is none. `--seed` replaces the scene's seed, and then the recording's seed is not compared. `--expect` makes it a CI check: exit 1 if the checksum differs. A recording that carries a checksum must reproduce it when played whole. The checksum is the same on every run and equals the one the Sandbox reaches replaying the same recording. `--report` lists what happened during the run as events (see below). `--json` prints one JSON object instead (see below). |
 | `marle-scene describe [--json] [<component>]` | Shows what a component is and each of its fields: type, default, range, whether it is required, and whether it is an asset path or an entity reference (names are exact case). It reads the registry, so a game's own tool describes its own components too. Without a name it lists every component. An unknown name gets a did-you-mean, and exit 1. `--json` gives `{ "version", "ok", "name", "description", "behavior", "fields": [ { "name", "description", "type", "default", "required", "asset_path", "entity_reference", "min", "max", "one_of" } ] }` (`min`, `max` and `one_of` only when the field has them). |
 | `marle-scene reference [--check <file> \| --update <file>]` | Prints the Markdown table of every component and field (the one in this document), or replaces the table between its `components:begin` and `components:end` marker lines in a file, or checks that it is up to date (exit 1 if not). `MARLE_UPDATE_GOLDEN=1` on `SceneTests` does the update for this document. |
 | `marle-scene help` | Shows the usage. |
 
 Exit status: `0` everything is fine, `1` problems were found (or, with `--check`, files differ), `2` the command line is wrong. That makes `validate` and the `--check` modes usable in CI, and as the feedback loop for an AI: edit, validate, fix the reported paths, repeat.
+
+#### Events
+
+`marle-scene simulate --report <file>` writes, and `--report -` prints to stdout instead of the text (with `--json` they are the `events` field of the object), a JSON array of what the engine saw happen, in step order (steps count from 0, like a recording's). They are for asserting on what a run did, not only on its checksum. Collecting them reads what the step already worked out: it changes no component and no checksum.
+
+```json
+[ { "step": 52,  "kind": "solid_stopped",   "entity": "player", "axis": "x" },
+  { "step": 246, "kind": "trigger_entered", "entity": "zone", "other": "player" },
+  { "step": 317, "kind": "trigger_left",    "entity": "zone", "other": "player" } ]
+```
+
+| `kind` | Meaning |
+|---|---|
+| `trigger_entered` | `entity` is a trigger and `other` started touching it this step. |
+| `trigger_left` | `entity` is a trigger and `other` stopped touching it this step. The stretch between the two is the time it was inside (a trigger that keeps touching is not an event on every step). |
+| `solid_stopped` | `entity` moved and a solid collider or solid tile cut the move short on `axis` (`"x"`, `"y"` or `"xy"`). It repeats on every step the entity keeps pushing against the wall. |
+
+Not events yet: a behavior changing its own state, and a target being reached; neither has a definition in the engine.
 
 #### JSON output
 

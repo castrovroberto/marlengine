@@ -28,11 +28,13 @@ namespace Marle {
             "                                     left alone unless --drop-comments says to lose the comments\n"
             "  schema [--output <file> | --check <file>]\n"
             "                                     print the JSON Schema for scene files, write it, or check a file\n"
-            "  simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>] [--json]\n"
+            "  simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>] [--report <file|->] [--json]\n"
             "                                     run a scene headless for N fixed steps (default: the recording's length,\n"
             "                                     else 600), print what changed, which triggers touched what (step\n"
             "                                     numbers count from 0) and the final checksum; --expect makes it a\n"
-            "                                     check (exit 1 on a different checksum)\n"
+            "                                     check (exit 1 on a different checksum); --report writes what happened\n"
+            "                                     (triggers entered and left, movers stopped by solids) as a JSON array of\n"
+            "                                     events with their step, to a file or, with -, to stdout instead of the text\n"
             "  describe [--json] [<component>]    show what a component is and each of its fields (type, default, range,\n"
             "                                     required, flags); without a name, list the components\n"
             "  reference [--check <file> | --update <file>]\n"
@@ -392,7 +394,7 @@ namespace Marle {
         int Simulate(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
         {
             const bool asJson = TakeFlag(args, "--json");
-            std::string file, recordingFile, expect;
+            std::string file, recordingFile, expect, reportFile;
             long long steps = -1, seed = 0;
             bool hasSeed = false;
             for (size_t i = 0; i < args.size(); i++) {
@@ -406,6 +408,7 @@ namespace Marle {
                 }
                 else if (args[i] == "--recording" && hasValue) recordingFile = args[++i];
                 else if (args[i] == "--expect" && hasValue) expect = args[++i];
+                else if (args[i] == "--report" && hasValue) reportFile = args[++i];
                 else if (args[i].rfind("--", 0) == 0) { err << "marle-scene simulate: unknown or incomplete option '" << args[i] << "'\n\n" << Usage; return 2; }
                 else if (file.empty()) file = args[i];
                 else { err << "marle-scene simulate: one scene file at a time\n\n" << Usage; return 2; }
@@ -471,12 +474,17 @@ namespace Marle {
             // Which triggers touched what, in the order the pairs first touched; steps count from 0, like a recording's
             struct Touch { Overlap Pair; long long First = 0, Last = 0, Steps = 0, Entered = 0; };
             std::vector<Touch> touches;
+            struct Event { long long Step; SimulationEvent What; };
+            std::vector<Event> events;
+            std::vector<SimulationEvent> stepEvents;
 
             const Snapshot before = TakeSnapshot(scene, registry);
             for (long long step = 0; step < steps; step++) {
                 static const InputFrame none;
-                Simulation::Step(registry, scene, step < recorded ? recording.Frames[(size_t)step] : none, dt);
+                stepEvents.clear();
+                Simulation::Step(registry, scene, step < recorded ? recording.Frames[(size_t)step] : none, dt, reportFile.empty() ? nullptr : &stepEvents);
                 scene.ClearRestartRequest();
+                for (SimulationEvent& event : stepEvents) events.push_back({ step, std::move(event) });
 
                 const SceneOverlaps& overlaps = scene.GetOverlaps();
                 for (const Overlap& pair : overlaps.Touching) {
@@ -499,6 +507,22 @@ namespace Marle {
             if (checksComparison && recording.Checksum != checksum) code = 1;
             if (!expect.empty() && expect != checksumText) code = 1;
 
+            Json eventList = Json::array();
+            for (const Event& event : events) {
+                Json json = { { "step", event.Step }, { "kind", SimulationEventKindName(event.What.What) }, { "entity", event.What.Entity } };
+                if (!event.What.Other.empty()) json["other"] = event.What.Other;
+                if (!event.What.Axis.empty()) json["axis"] = event.What.Axis;
+                eventList.push_back(std::move(json));
+            }
+            if (!reportFile.empty() && reportFile != "-") {
+                std::string problem;
+                if (!WriteTextFile(reportFile, eventList.dump(2) + "\n", &problem)) {
+                    if (asJson) PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "file", file }, { "error", "cannot write the report: " + problem } });
+                    else out << "FAIL  " << reportFile << ": cannot write the report: " << problem << "\n";
+                    return 1;
+                }
+            }
+
             if (asJson) {
                 Json changeList = Json::array();
                 for (const Change& change : changes) changeList.push_back(change.ToJson());
@@ -509,11 +533,14 @@ namespace Marle {
                 Json result = { { "version", JsonVersion }, { "ok", code == 0 }, { "file", file }, { "steps_run", steps }, { "seed", scene.GetSeed() },
                                 { "input", hasRecording ? Json({ { "recording", recordingFile }, { "steps", recorded } }) : Json(nullptr) },
                                 { "checksum", checksumText }, { "changes", std::move(changeList) }, { "overlaps", std::move(overlapList) } };
+                if (!reportFile.empty()) result["events"] = eventList;
                 if (checksComparison) result["recording_checksum"] = Simulation::ChecksumText(recording.Checksum), result["matches_recording"] = recording.Checksum == checksum;
                 if (!expect.empty()) result["expected_checksum"] = expect, result["matches_expected"] = expect == checksumText;
                 PrintJson(out, result);
                 return code;
             }
+
+            if (reportFile == "-") { out << eventList.dump(2) << "\n"; return code; }
 
             out << "SIM   " << file << ": " << Plural((size_t)steps, "step") << ", seed " << scene.GetSeed();
             if (hasRecording) out << ", input from " << recordingFile << " (" << Plural((size_t)recorded, "step") << (steps > recorded ? "; no input after that" : steps < recorded ? "; stopped early" : "") << ")";

@@ -3758,6 +3758,52 @@ int main(int argc, char** argv)
 
             CHECK(RunTool(registry, { "simulate", world, "--steps", "5", "--json", "--bogus" }).Code == 2, "a bad option is still a usage error with --json");
             CHECK(Contains(text.Out, "SIM   ") && !Contains(text.Out, "\"version\""), "simulate without --json is still the text");
+
+            // --report: what happened, step by step, from the engine and not from the behaviors
+            ToolRun toStdout = RunTool(registry, { "simulate", world, "--recording", golden, "--report", "-" });
+            Json events = Json::parse(toStdout.Out, nullptr, false);
+            size_t stops = 0, entered = 0, left = 0;
+            bool shaped = !events.is_discarded() && events.is_array();
+            long long lastStep = -1;
+            if (shaped) for (const Json& event : events) {
+                shaped = shaped && event["step"].get<long long>() >= lastStep && event.contains("entity");
+                lastStep = event["step"].get<long long>();
+                if (event["kind"] == "solid_stopped") { stops++; shaped = shaped && !event.contains("other") && (event["axis"] == "x" || event["axis"] == "y" || event["axis"] == "xy"); }
+                else if (event["kind"] == "trigger_entered") { entered++; shaped = shaped && event["entity"] == "zone" && event["other"] == "player" && event["step"] == 246; }
+                else if (event["kind"] == "trigger_left") { left++; shaped = shaped && event["entity"] == "zone" && event["other"] == "player" && event["step"] == 317; }
+                else shaped = false;
+            }
+            CHECK(toStdout.Code == 0 && shaped && entered == 1 && left == 1 && stops > 0 && !Contains(toStdout.Out, "SIM   "), "--report - prints only the events, in step order: the player stopped by solids, and entering and leaving the zone");
+
+            // the events say what the player ran into: the pillar first (x), and the border's corner at the end
+            bool firstStopIsX = false;
+            for (const Json& event : events) if (event["kind"] == "solid_stopped") { firstStopIsX = event["entity"] == "player" && event["step"] == 52 && event["axis"] == "x"; break; }
+            CHECK(firstStopIsX, "the first solid stop is the player's, on x");
+
+            const std::string reportFile = "scene_tool_report.json";
+            std::filesystem::remove(reportFile);
+            ToolRun toFile = RunTool(registry, { "simulate", world, "--recording", golden, "--report", reportFile });
+            CHECK(toFile.Code == 0 && Contains(toFile.Out, "SIM   ") && Json::parse(ReadFile(reportFile), nullptr, false) == events, "--report <file> writes the same events and leaves the text output alone");
+            std::filesystem::remove(reportFile);
+
+            Json withEvents = Json::parse(RunTool(registry, { "simulate", world, "--recording", golden, "--report", "-", "--json" }).Out, nullptr, false);
+            CHECK(!withEvents.is_discarded() && withEvents["events"] == events && withEvents["checksum"] == doc["checksum"], "with --json the events are a field of the object, and the checksum is the same as without them");
+            CHECK(!Json::parse(RunTool(registry, { "simulate", world, "--recording", golden, "--json" }).Out, nullptr, false).contains("events"), "and there are none without --report");
+
+            ToolRun cannotWrite = RunTool(registry, { "simulate", world, "--steps", "2", "--report", "no/such/dir/report.json" });
+            CHECK(cannotWrite.Code == 1 && Contains(cannotWrite.Out, "cannot write the report"), "a report that cannot be written is a failure");
+
+            // collecting events changes nothing: same checksum, stepping by hand with and without a sink
+            {
+                SceneLoadResult a = LoadScene(world, registry), b = LoadScene(world, registry);
+                std::vector<SimulationEvent> sink;
+                for (int i = 0; i < 400; i++) {
+                    Simulation::Step(registry, *a.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+                    Simulation::Step(registry, *b.Scene, read.Recording.Frames[i], 1.0 / 60.0, &sink);
+                }
+                CHECK(Simulation::Checksum(registry, *a.Scene) == Simulation::Checksum(registry, *b.Scene) && !sink.empty(), "collecting events does not change the run");
+                CHECK(std::string(SimulationEventKindName(SimulationEvent::Kind::TriggerEntered)) == "trigger_entered" && std::string(SimulationEventKindName(SimulationEvent::Kind::SolidStopped)) == "solid_stopped", "event kinds have their names");
+            }
         }
 
         // hot reload: the file moves a wall while the player is in the zone. The player (and everything the file

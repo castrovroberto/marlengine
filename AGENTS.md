@@ -32,6 +32,7 @@ Add `--json` to either command for one JSON object on stdout instead of text (sa
 
 1. `validate` prints every problem with a JSON Pointer and exits 1 if there is any. Fix them all; the loader skips the offending component or entity and hot reload refuses the whole file.
 2. `simulate` runs the scene headless and prints what changed, which triggers touched what and the final checksum. It refuses a scene with problems.
+   `simulate --report -` prints what happened as events (triggers entered and left, movers stopped by solids) so you can assert on behavior, not only on the checksum.
 3. If a recording exists for the scene, check against it: `simulate <scene> --recording <file>` exits 1 if the checksum differs from the recording's. `--expect <checksum>` does the same for a known value.
 4. A changed checksum is not automatically a bug. If you meant to change how the scene plays, regenerate the goldens (below) and say so; if you did not, you broke something.
 5. After touching `world.json` or anything that changes how it plays, run `SceneTests` (below).

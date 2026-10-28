@@ -16,7 +16,17 @@ namespace Marle {
         return hash;
     }
 
-    void Simulation::Step(const ComponentRegistry& registry, Scene& scene, const InputFrame& input, double dt)
+    const char* SimulationEventKindName(SimulationEvent::Kind kind)
+    {
+        switch (kind) {
+            case SimulationEvent::Kind::TriggerEntered: return "trigger_entered";
+            case SimulationEvent::Kind::TriggerLeft:    return "trigger_left";
+            case SimulationEvent::Kind::SolidStopped:   return "solid_stopped";
+        }
+        return "unknown";
+    }
+
+    void Simulation::Step(const ComponentRegistry& registry, Scene& scene, const InputFrame& input, double dt, std::vector<SimulationEvent>* events)
     {
         // The entities as they are now; ones made during the step wait for the next
         std::vector<Entity> entities = scene.GetEntities();
@@ -38,10 +48,17 @@ namespace Marle {
             if (!entity.IsValid()) continue;   // destroyed by an earlier behavior
             context.Self = entity;
             registry.RunBehaviors(entity, context);
-            ResolveSolidMove(scene, entity);   // right after the entity's own behaviors, so what follows sees where it ended up
+            const SolidMove stopped = ResolveSolidMove(scene, entity);   // right after the entity's own behaviors, so what follows sees where it ended up
+            if (events && (stopped.StoppedX || stopped.StoppedY))
+                events->push_back({ SimulationEvent::Kind::SolidStopped, entity.GetName(), "", std::string(stopped.StoppedX ? "x" : "") + (stopped.StoppedY ? "y" : "") });
         }
 
         FindOverlaps(scene);   // once every entity is where it ends up; behaviors see this on the next step
+
+        if (events) {
+            for (const Overlap& pair : scene.GetOverlaps().Entered) events->push_back({ SimulationEvent::Kind::TriggerEntered, pair.Trigger, pair.Other, "" });
+            for (const Overlap& pair : scene.GetOverlaps().Left) events->push_back({ SimulationEvent::Kind::TriggerLeft, pair.Trigger, pair.Other, "" });
+        }
     }
 
     uint64_t Simulation::Checksum(const ComponentRegistry& registry, const Scene& scene)

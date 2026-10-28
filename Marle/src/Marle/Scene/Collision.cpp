@@ -118,13 +118,13 @@ namespace Marle {
         scene.UpdateOverlaps(std::move(touching));
     }
 
-    void ResolveSolidMove(Scene& scene, Entity entity)
+    SolidMove ResolveSolidMove(Scene& scene, Entity entity)
     {
         const Collider* collider = entity.TryGet<Collider>();
         Transform* transform = entity.TryGet<Transform>();
         const PreviousTransform* previous = entity.TryGet<PreviousTransform>();
-        if (!collider || !transform || !previous || collider->Kind != "solid") return;
-        if (transform->Position == previous->Position) return;
+        if (!collider || !transform || !previous || collider->Kind != "solid") return {};
+        if (transform->Position == previous->Position) return {};
 
         const glm::vec2 from = previous->Position, to = transform->Position;
         CollisionShape mover = ShapeOfCollider(*collider, from);
@@ -159,6 +159,7 @@ namespace Marle {
             result[axis] = end;
         }
         transform->Position = result;
+        return { result.x != to.x, result.y != to.y };
     }
 
 }
