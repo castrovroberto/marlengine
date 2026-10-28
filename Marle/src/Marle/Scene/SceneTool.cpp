@@ -4,6 +4,7 @@
 #include "SceneSchema.h"
 #include "ComponentReference.h"
 #include "SceneWriter.h"
+#include "SceneReloader.h"
 #include "Simulation.h"
 #include "InputRecording.h"
 #include "Components.h"
@@ -35,11 +36,13 @@ namespace Marle {
             "                                     check (exit 1 on a different checksum); --report writes what happened\n"
             "                                     (triggers entered and left, movers stopped by solids) as a JSON array of\n"
             "                                     events with their step, to a file or, with -, to stdout instead of the text\n"
-            "  diff --base <file> --proposed <file|-> [--steps N] [--json]\n"
+            "  diff --base <file> --proposed <file|-> [--steps N] [--carry-over] [--json]\n"
             "                                     check a proposed version of a scene as a hot reload would (strictly: any\n"
             "                                     problem refuses it), then say what it changes in the file and how a run of\n"
             "                                     N steps (default 600, no input) differs from the base's; - reads the\n"
-            "                                     proposed text from stdin. Exit 1 if either has problems, else 0\n"
+            "                                     proposed text from stdin; --carry-over also says which of the state the\n"
+            "                                     base's run built up a hot reload would keep and which the file would\n"
+            "                                     replace. Exit 1 if either has problems, else 0\n"
             "  describe [--json] [<component>]    show what a component is and each of its fields (type, default, range,\n"
             "                                     required, flags); without a name, list the components\n"
             "  reference [--check <file> | --update <file>]\n"
@@ -623,9 +626,60 @@ namespace Marle {
             return true;
         }
 
+        // What a hot reload does with the state a run built up (CarryOverState), field by field: only fields
+        // the run changed, and what became of each
+        struct CarryEntry {
+            std::string Entity, Component, Field;
+            Json Baseline, Running, Result;   // Result is null for a field whose entity or component the file removed
+            enum class Fate { Kept, ReplacedByFile, RemovedByFile } What;
+        };
+
+        const char* CarryFateName(CarryEntry::Fate fate)
+        {
+            switch (fate) {
+                case CarryEntry::Fate::Kept: return "kept";
+                case CarryEntry::Fate::ReplacedByFile: return "replaced_by_file";
+                case CarryEntry::Fate::RemovedByFile: return "removed_by_file";
+            }
+            return "";
+        }
+
+        std::vector<CarryEntry> ClassifyCarryOver(const Snapshot& baseline, const Snapshot& running, const Snapshot& proposed, const Snapshot& after)
+        {
+            auto find = [](const auto& list, const std::string& name) -> const typename std::decay_t<decltype(list)>::value_type* {
+                for (const auto& item : list) if (item.first == name) return &item;
+                return nullptr;
+            };
+
+            std::vector<CarryEntry> entries;
+            for (const auto& entity : baseline) {
+                const auto* runningEntity = find(running, entity.first);
+                const auto* proposedEntity = find(proposed, entity.first);
+                const auto* afterEntity = find(after, entity.first);
+                if (!runningEntity) continue;
+                for (const auto& component : entity.second) {
+                    const auto* runningComponent = find(runningEntity->second, component.first);
+                    if (!runningComponent) continue;
+                    const auto* proposedComponent = proposedEntity ? find(proposedEntity->second, component.first) : nullptr;
+                    const auto* afterComponent = afterEntity ? find(afterEntity->second, component.first) : nullptr;
+                    for (auto it = component.second.begin(); it != component.second.end(); ++it) {
+                        if (!runningComponent->second.contains(it.key()) || runningComponent->second[it.key()] == it.value()) continue;   // the run did not change it
+                        CarryEntry entry{ entity.first, component.first, it.key(), it.value(), runningComponent->second[it.key()], nullptr, CarryEntry::Fate::RemovedByFile };
+                        if (proposedComponent && afterComponent && afterComponent->second.contains(it.key())) {
+                            entry.Result = afterComponent->second[it.key()];
+                            entry.What = entry.Result == entry.Running ? CarryEntry::Fate::Kept : CarryEntry::Fate::ReplacedByFile;
+                        }
+                        entries.push_back(std::move(entry));
+                    }
+                }
+            }
+            return entries;
+        }
+
         int Diff(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
         {
             const bool asJson = TakeFlag(args, "--json");
+            const bool carryOver = TakeFlag(args, "--carry-over");
             std::string baseFile, proposedArg;
             long long steps = 600;
             for (size_t i = 0; i < args.size(); i++) {
@@ -688,6 +742,10 @@ namespace Marle {
                     for (SimulationEvent& event : stepEvents) events.push_back({ step, std::move(event) });
                 }
             };
+            // For --carry-over: the base and the proposal as they would be loaded again, before anything runs
+            SceneLoadResult baseline, fresh;
+            if (carryOver) { baseline = LoadScene(baseFile, registry); fresh = LoadSceneFromText(proposedText, proposedName, registry); }
+
             std::vector<StampedEvent> baseEvents, proposedEvents;
             run(*base.Scene, baseEvents);
             run(*proposed.Scene, proposedEvents);
@@ -696,15 +754,32 @@ namespace Marle {
             const std::vector<Change> stateChanges = Describe(TakeSnapshot(*base.Scene, registry), TakeSnapshot(*proposed.Scene, registry));
             const bool sameEvents = SameEvents(baseEvents, proposedEvents);
 
+            // What a reload would do right now to the world the base run built up: the same call the Sandbox makes
+            std::vector<CarryEntry> carried;
+            bool randomCarried = false;
+            if (carryOver) {
+                CarryOverState(registry, *baseline.Scene, *base.Scene, *fresh.Scene);
+                carried = ClassifyCarryOver(baseStart, TakeSnapshot(*base.Scene, registry), proposedStart, TakeSnapshot(*fresh.Scene, registry));
+                randomCarried = registry.Write(baseline.Scene->GetSceneEntity(), "Random") == registry.Write(proposed.Scene->GetSceneEntity(), "Random");   // the rule CarryOverState follows
+            }
+
             if (asJson) {
                 Json fileList = Json::array(), stateList = Json::array();
                 for (const Change& change : fileChanges) fileList.push_back(change.ToJson());
                 for (const Change& change : stateChanges) stateList.push_back(change.ToJson());
-                PrintJson(out, { { "version", JsonVersion }, { "ok", true }, { "base", baseFile }, { "proposed", proposedName }, { "reload_accepted", true },
-                                 { "entities_added", added }, { "entities_removed", removed }, { "file_changes", std::move(fileList) },
-                                 { "steps_run", steps }, { "base_checksum", baseSum }, { "proposed_checksum", proposedSum }, { "same_checksum", baseSum == proposedSum },
-                                 { "state_changes", std::move(stateList) },
-                                 { "events", { { "base", EventCounts(baseEvents) }, { "proposed", EventCounts(proposedEvents) }, { "same", sameEvents } } } });
+                Json result = { { "version", JsonVersion }, { "ok", true }, { "base", baseFile }, { "proposed", proposedName }, { "reload_accepted", true },
+                                { "entities_added", added }, { "entities_removed", removed }, { "file_changes", std::move(fileList) },
+                                { "steps_run", steps }, { "base_checksum", baseSum }, { "proposed_checksum", proposedSum }, { "same_checksum", baseSum == proposedSum },
+                                { "state_changes", std::move(stateList) },
+                                { "events", { { "base", EventCounts(baseEvents) }, { "proposed", EventCounts(proposedEvents) }, { "same", sameEvents } } } };
+                if (carryOver) {
+                    Json fields = Json::array();
+                    for (const CarryEntry& entry : carried)
+                        fields.push_back({ { "entity", entry.Entity }, { "component", entry.Component }, { "field", entry.Field }, { "fate", CarryFateName(entry.What) },
+                                           { "baseline", entry.Baseline }, { "running", entry.Running }, { "result", entry.Result } });
+                    result["carry_over"] = { { "steps", steps }, { "fields", std::move(fields) }, { "random", randomCarried ? "carried" : "restarted" } };
+                }
+                PrintJson(out, result);
                 return 0;
             }
 
@@ -726,6 +801,27 @@ namespace Marle {
             out << "  events " << (sameEvents ? "are the same: " + counts(baseEvents) : "differ: base " + counts(baseEvents) + "; proposed " + counts(proposedEvents)) << "\n";
             if (stateChanges.empty()) out << "  the final state is the same\n";
             else { out << "  the final state differs (" << stateChanges.size() << "), base -> proposed:\n"; list(stateChanges); }
+
+            if (carryOver) {
+                out << "a reload now, after the base's " << Plural((size_t)steps, "step") << ", would:\n";
+                if (carried.empty()) out << "  find no state built up by the run (nothing the run changed)\n";
+                const CarryEntry::Fate order[] = { CarryEntry::Fate::Kept, CarryEntry::Fate::ReplacedByFile, CarryEntry::Fate::RemovedByFile };
+                const char* heading[] = { "keep the running value", "replace the running value with the file's", "drop (the file removed the entity or component)" };
+                for (int f = 0; f < 3; f++) {
+                    size_t shown = 0, total = 0;
+                    for (const CarryEntry& entry : carried) if (entry.What == order[f]) total++;
+                    if (!total) continue;
+                    out << "  " << heading[f] << " (" << total << "):\n";
+                    for (const CarryEntry& entry : carried) {
+                        if (entry.What != order[f]) continue;
+                        if (shown++ == MaxLines) { out << "    ... and " << (total - MaxLines) << " more\n"; break; }
+                        out << "    " << entry.Entity << "." << entry.Component << "." << entry.Field << ": " << entry.Running.dump();
+                        if (order[f] == CarryEntry::Fate::ReplacedByFile) out << " -> " << entry.Result.dump();
+                        out << "\n";
+                    }
+                }
+                out << "  " << (randomCarried ? "carry on the random sequence (the seed is unchanged)" : "start the random sequence again (the seed changed)") << "\n";
+            }
             return 0;
         }
 

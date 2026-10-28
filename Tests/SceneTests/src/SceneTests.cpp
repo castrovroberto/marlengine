@@ -1108,6 +1108,61 @@ int main(int argc, char** argv)
             CHECK(badBase.Code == 1 && Contains(badBase.Out, "(base)") && Contains(badBase.Out, "base has to be clean"), "a base with problems is refused too");
 
             CHECK(RunTool(registry, { "diff", "--base", world }).Code == 2 && RunTool(registry, { "diff" }).Code == 2 && RunTool(registry, { "diff", "--base", world, "--proposed", "no/such.json" }).Code == 2 && RunTool(registry, { "diff", "--base", world, "--proposed", world, "--steps", "x" }).Code == 2 && RunTool(registry, { "diff", "--base", world, "--proposed", world, "--wrong" }).Code == 2, "diff needs both scenes, a readable proposal and good options");
+            // --carry-over: what a reload would keep of the state the base's run built up
+            {
+                auto carryFields = [&](const std::string& proposedText, const std::string& steps) {
+                    WriteFile(proposedFile, proposedText);
+                    return Json::parse(RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile, "--steps", steps, "--carry-over", "--json" }).Out, nullptr, false);
+                };
+                auto fate = [](const Json& doc, const std::string& entity, const std::string& component, const std::string& field) -> std::string {
+                    for (const Json& item : doc["carry_over"]["fields"])
+                        if (item["entity"] == entity && item["component"] == component && item["field"] == field) return item["fate"].get<std::string>();
+                    return "";
+                };
+
+                CHECK(!Json::parse(RunTool(registry, { "diff", "--base", world, "--proposed", world, "--steps", "5", "--json" }).Out, nullptr, false).contains("carry_over"), "without --carry-over there is no carry-over report");
+
+                // a wall moved in the file: the wall is not something the run changed, everything the run built up is kept
+                auto replaceOnce = [](std::string& where, const std::string& from, const std::string& to) {
+                    const size_t at = where.find(from);
+                    CHECK(at != std::string::npos, ("(the scene has '" + from + "')").c_str());
+                    if (at != std::string::npos) where.replace(at, from.size(), to);
+                };
+                std::string wall = text;
+                replaceOnce(wall, "[1500, 600]", "[1500, 300]");
+                Json kept = carryFields(wall, "120");
+                CHECK(!kept.is_discarded() && kept["carry_over"]["steps"] == 120 && fate(kept, "satellite", "Orbit", "angle") == "kept" && fate(kept, "satellite", "Transform", "position") == "kept" && fate(kept, "spinner_0", "Transform", "rotation") == "kept" && fate(kept, "wall_a", "Transform", "position") == "", "state the run built up is kept, and a field the run did not change is not listed");
+                CHECK(kept["carry_over"]["random"] == "carried", "the random sequence is carried when the seed did not change");
+                bool allKept = true;
+                for (const Json& item : kept["carry_over"]["fields"]) allKept = allKept && item["fate"] == "kept" && item["result"] == item["running"] && item["baseline"] != item["running"];
+                CHECK(allKept && !kept["carry_over"]["fields"].empty(), "each entry has the baseline, the running value and the result, and the run did change it");
+
+                // the file changes a component the run had been moving: that whole component comes from the file
+                std::string faster = text;
+                replaceOnce(faster, "\"speed\": 2, \"angle\": 0", "\"speed\": 3, \"angle\": 0");
+                Json replaced = carryFields(faster, "120");
+                CHECK(fate(replaced, "satellite", "Orbit", "angle") == "replaced_by_file" && fate(replaced, "satellite", "Transform", "position") == "kept", "a component the file changed takes the file's value for the fields the run had moved");
+                for (const Json& item : replaced["carry_over"]["fields"]) if (item["entity"] == "satellite" && item["component"] == "Orbit" && item["field"] == "angle") CHECK(item["result"] == 0.0 && item["running"] != 0.0, "and the entry shows what was lost");
+
+                // an entity the file removes, and a seed that changes
+                std::string renamed = text;
+                replaceOnce(renamed, "\"name\": \"satellite\"", "\"name\": \"moon\"");
+                Json dropped = carryFields(renamed, "120");
+                CHECK(fate(dropped, "satellite", "Orbit", "angle") == "removed_by_file" && dropped["carry_over"]["fields"][0].contains("result"), "an entity the file removes loses its state");
+
+                std::string seeded = text;
+                replaceOnce(seeded, "\"RestartOnKey\": { \"key\": \"R\" }", "\"RestartOnKey\": { \"key\": \"R\" }, \"Random\": { \"seed\": 7 }");
+                Json reseeded = carryFields(seeded, "10");
+                CHECK(!reseeded.is_discarded() && reseeded["carry_over"]["random"] == "restarted", "the random sequence starts again when the seed changes");
+
+                // the text form
+                WriteFile(proposedFile, faster);
+                ToolRun carryText = RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile, "--steps", "120", "--carry-over" });
+                CHECK(carryText.Code == 0 && Contains(carryText.Out, "would:") && Contains(carryText.Out, "keep the running value") && Contains(carryText.Out, "replace the running value with the file's") && Contains(carryText.Out, "satellite.Orbit.angle: 3.9999976 -> 0.0") && Contains(carryText.Out, "carry on the random sequence"), "the text says what is kept and what is replaced");
+                ToolRun idle = RunTool(registry, { "diff", "--base", world, "--proposed", world, "--steps", "0", "--carry-over" });
+                CHECK(idle.Code == 0 && Contains(idle.Out, "find no state built up by the run"), "with no steps there is nothing built up");
+            }
+
             std::filesystem::remove(proposedFile);
         }
 

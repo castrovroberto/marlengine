@@ -28,7 +28,7 @@ Build once (`./r.sh`, or `make config=debug`), then from the repo root:
 ./bin/Debug-linux-x86_64/SceneTool/marle-scene simulate Assets/Scenes/world.json --steps 600
 ```
 
-Before saving a risky edit, `marle-scene diff --base <file> --proposed <file|-> [--json]` checks it as a hot reload would (strictly) and shows what it changes and how a 600-step run differs; `-` reads the proposal from stdin.
+Before saving a risky edit, `marle-scene diff --base <file> --proposed <file|-> [--json]` checks it as a hot reload would (strictly) and shows what it changes and how a 600-step run differs; `-` reads the proposal from stdin; add `--carry-over` to see which of a running world's state the reload would keep or lose.
 
 Add `--json` to either command for one JSON object on stdout instead of text (same exit codes; fields in `docs/scene-format.md`, "JSON output"). Prefer it when you parse the result.
 
