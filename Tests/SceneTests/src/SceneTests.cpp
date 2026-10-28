@@ -1027,6 +1027,43 @@ int main(int argc, char** argv)
         CHECK(jsonUsage.Code == 2 && jsonUsage.Out.empty() && Contains(jsonUsage.Err, "no files given"), "a bad command line is text on stderr even with --json");
         CHECK(RunTool(registry, { "validate", "Assets/Scenes/example.json" }).Out == "OK    Assets/Scenes/example.json: 8 entities, 15 components\n", "validate without --json is unchanged");
 
+        // describe: what the registry knows about a component
+        {
+            ComponentRegistry game;
+            RegisterBuiltinComponents(game);
+            struct Door { std::string Key; int Hits = 3; glm::vec2 Pos{ 1.0f, 2.0f }; };
+            game.Register<Door>("Door", "A door.")
+                .Field(&Door::Key, "key", "The entity that opens it.").EntityReference()
+                .Field(&Door::Hits, "hits", "How many hits it takes.").Range(1, 9).Required()
+                .Field(&Door::Pos, "pos", "Where.");
+
+            ToolRun orbit = RunTool(game, { "describe", "Orbit" });
+            CHECK(orbit.Code == 0 && Contains(orbit.Out, "Orbit (behavior)") && Contains(orbit.Out, "radius: float, default 100.0, range 0.0 to 1000000.0") && Contains(orbit.Out, "target: string, default \"\", entity reference"), "describe shows a behavior with each field's type, default, range and flags");
+
+            Json doc = Json::parse(RunTool(game, { "describe", "Door", "--json" }).Out, nullptr, false);
+            CHECK(!doc.is_discarded() && doc["version"] == 1 && doc["ok"] == true && doc["name"] == "Door" && doc["behavior"] == false && doc["fields"].size() == 3, "describe --json gives a custom component's name and fields");
+            CHECK(!doc.is_discarded() && doc["fields"][0]["entity_reference"] == true && doc["fields"][0]["required"] == false && !doc["fields"][0].contains("min") && doc["fields"][1]["required"] == true && doc["fields"][1]["min"] == 1 && doc["fields"][1]["max"] == 9 && doc["fields"][1]["default"] == 3 && doc["fields"][2]["type"] == "vec2" && doc["fields"][2]["default"] == Json::array({ 1.0, 2.0 }), "its fields carry type, default, required, range and flags, in declaration order");
+            CHECK(RunTool(registry, { "describe", "Door" }).Code == 1, "a component the registry does not have is not described");
+
+            ToolRun typo = RunTool(registry, { "describe", "Colider" });
+            CHECK(typo.Code == 1 && typo.Out.empty() && Contains(typo.Err, "unknown component 'Colider' (did you mean 'Collider'?)") && Contains(typo.Err, "known components: Transform"), "an unknown component gets a did-you-mean and the list, on stderr");
+            Json typoDoc = Json::parse(RunTool(registry, { "describe", "--json", "Colider" }).Out, nullptr, false);
+            CHECK(!typoDoc.is_discarded() && typoDoc["ok"] == false && Contains(typoDoc["error"].get<std::string>(), "did you mean 'Collider'?"), "with --json it is ok false and an error on stdout");
+
+            ToolRun list = RunTool(registry, { "describe" });
+            Json listDoc = Json::parse(RunTool(registry, { "describe", "--json" }).Out, nullptr, false);
+            CHECK(list.Code == 0 && Contains(list.Out, "Orbit (behavior): ") && Contains(list.Out, "Transform: ") && !listDoc.is_discarded() && listDoc["components"].size() == registry.GetComponents().size() && listDoc["components"][0]["name"] == "Transform", "without a name it lists every component");
+
+            bool sameAsRegistry = true;
+            for (const ComponentInfo* info : registry.GetComponents()) {
+                Json one = Json::parse(RunTool(registry, { "describe", info->Name, "--json" }).Out, nullptr, false);
+                if (one.is_discarded() || one["fields"].size() != info->Fields.size() || one["behavior"] != info->IsBehavior) sameAsRegistry = false;
+                if (RunTool(registry, { "describe", info->Name }).Code != 0) sameAsRegistry = false;
+            }
+            CHECK(sameAsRegistry, "every registered component can be described, with all its fields");
+            CHECK(RunTool(registry, { "describe", "Orbit", "Spin" }).Code == 2 && RunTool(registry, { "describe", "--nope" }).Code == 2, "describe takes one component and known options only");
+        }
+
         std::filesystem::remove_all(work);
     }
 

@@ -2,6 +2,7 @@
 #include "SceneTool.h"
 #include "SceneLoader.h"
 #include "SceneSchema.h"
+#include "ComponentReference.h"
 #include "SceneWriter.h"
 #include "Simulation.h"
 #include "InputRecording.h"
@@ -32,9 +33,11 @@ namespace Marle {
             "                                     else 600), print what changed, which triggers touched what (step\n"
             "                                     numbers count from 0) and the final checksum; --expect makes it a\n"
             "                                     check (exit 1 on a different checksum)\n"
+            "  describe [--json] [<component>]    show what a component is and each of its fields (type, default, range,\n"
+            "                                     required, flags); without a name, list the components\n"
             "  help                               show this text\n"
             "\n"
-            "--json (validate, simulate) prints one JSON object instead of text; see docs/scene-format.md. A bad\n"
+            "--json (validate, simulate, describe) prints one JSON object instead of text; see docs/scene-format.md. A bad\n"
             "command line is still reported as text on stderr.\n"
             "\n"
             "A directory means every .json file in it, except *.schema.json.\n"
@@ -142,6 +145,41 @@ namespace Marle {
 
             if (files.size() > 1) out << Plural(files.size(), "file") << ", " << failing << " with problems\n";
             return failing ? 1 : 0;
+        }
+
+        int DescribeCommand(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        {
+            const bool asJson = TakeFlag(args, "--json");
+            for (const std::string& arg : args)
+                if (arg.rfind("--", 0) == 0) { err << "marle-scene describe: unknown option '" << arg << "'\n\n" << Usage; return 2; }
+            if (args.size() > 1) { err << "marle-scene describe: one component at a time\n\n" << Usage; return 2; }
+
+            const std::vector<const ComponentInfo*> all = registry.GetComponents();
+            if (args.empty()) {
+                if (asJson) {
+                    Json list = Json::array();
+                    for (const ComponentInfo* info : all) list.push_back({ { "name", info->Name }, { "description", info->Description }, { "behavior", info->IsBehavior } });
+                    PrintJson(out, { { "version", JsonVersion }, { "ok", true }, { "components", std::move(list) } });
+                    return 0;
+                }
+                for (const ComponentInfo* info : all) out << info->Name << (info->IsBehavior ? " (behavior)" : "") << ": " << info->Description << "\n";
+                return 0;
+            }
+
+            for (const ComponentInfo* info : all) {
+                if (info->Name != args[0]) continue;
+                if (asJson) { Json json = DescribeComponent(*info); Json result = { { "version", JsonVersion }, { "ok", true } }; result.update(json); PrintJson(out, result); }
+                else out << DescribeComponentText(*info);
+                return 0;
+            }
+
+            std::vector<std::string> names;
+            for (const ComponentInfo* info : all) names.push_back(info->Name);
+            const std::string suggestion = detail::SuggestionFor(args[0], names);
+            const std::string message = "unknown component '" + args[0] + "'" + (suggestion.empty() ? "" : " (" + suggestion + ")") + "; known components: " + detail::Join(names);
+            if (asJson) PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "error", message } });
+            else err << "marle-scene describe: " << message << "\n";
+            return 1;
         }
 
         int Format(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
@@ -492,6 +530,7 @@ namespace Marle {
         if (command == "format") return Format(rest, registry, out, err);
         if (command == "schema") return Schema(rest, registry, out, err);
         if (command == "simulate") return Simulate(rest, registry, out, err);
+        if (command == "describe") return DescribeCommand(rest, registry, out, err);
 
         err << "marle-scene: unknown command '" << command << "'\n\n" << Usage;
         return 2;
