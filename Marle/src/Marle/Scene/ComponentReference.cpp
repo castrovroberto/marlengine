@@ -45,4 +45,66 @@ namespace Marle {
         return text;
     }
 
+    namespace {
+
+        // A table cell: no line breaks, and a pipe would end the cell
+        std::string Cell(std::string text)
+        {
+            std::string out;
+            for (char c : text) {
+                if (c == '|') out += "\\|";
+                else if (c == '\n') out += ' ';
+                else out += c;
+            }
+            return out;
+        }
+
+        std::string Number(const Json& value) { return value.dump(); }
+
+        std::string Meaning(const Json& field)
+        {
+            std::string text = field["description"].get<std::string>();
+            if (field["required"]) text += " Required.";
+            if (field.contains("min") || field.contains("max")) {
+                text += " Range ";
+                text += field.contains("min") ? Number(field["min"]) : std::string("any");
+                text += " to ";
+                text += field.contains("max") ? Number(field["max"]) : std::string("any");
+                text += ".";
+            }
+            if (field.contains("one_of")) {
+                std::vector<std::string> values = field["one_of"].get<std::vector<std::string>>();
+                if (values.size() <= 12) text += " One of: " + detail::Join(values) + ".";
+                else text += " One of " + std::to_string(values.size()) + " values (see the schema).";
+            }
+            if (field["asset_path"]) text += " An asset file path.";
+            if (field["entity_reference"]) text += " The name of an entity.";
+            return text;
+        }
+
+    }
+
+    std::string ComponentTableMarkdown(const ComponentRegistry& registry)
+    {
+        std::string table = "| Component | Field | Type | Default | Meaning |\n|---|---|---|---|---|\n";
+        for (const ComponentInfo* info : registry.GetComponents()) {
+            const Json json = DescribeComponent(*info);
+            table += "| `" + info->Name + "` | | | | " + Cell(info->Description) + " |\n";
+            for (const Json& field : json["fields"])
+                table += "| | `" + field["name"].get<std::string>() + "` | " + field["type"].get<std::string>() + " | `" + Cell(field["default"].dump()) + "` | " + Cell(Meaning(field)) + " |\n";
+        }
+        return table;
+    }
+
+    bool ReplaceComponentTable(std::string& document, const std::string& table)
+    {
+        const std::string begin = ComponentTableBegin, end = ComponentTableEnd;
+        const size_t b = document.find(begin);
+        if (b == std::string::npos || document.find(begin, b + 1) != std::string::npos) return false;
+        const size_t e = document.find(end, b);
+        if (e == std::string::npos || document.find(end, e + 1) != std::string::npos) return false;
+        document.replace(b + begin.size(), e - (b + begin.size()), "\n" + table);
+        return true;
+    }
+
 }

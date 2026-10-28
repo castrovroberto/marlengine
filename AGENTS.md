@@ -54,6 +54,7 @@ Each test is its own executable, run from the repo root as `./bin/Debug-linux-x8
 These files are generated and compared byte for byte:
 
 - `Assets/Scenes/scene.schema.json`
+- the component table in `docs/scene-format.md`, between its `components:begin` and `components:end` lines (never edit between them by hand)
 - `Tests/SceneTests/fixtures/canonical.json` (the example scene without comments)
 - `Tests/SceneTests/fixtures/world_run.recording.json` and `world_collide.recording.json` (the determinism goldens: scripted runs of `world.json` with their final checksums)
 

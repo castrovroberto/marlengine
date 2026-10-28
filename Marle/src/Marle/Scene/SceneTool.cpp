@@ -35,6 +35,10 @@ namespace Marle {
             "                                     check (exit 1 on a different checksum)\n"
             "  describe [--json] [<component>]    show what a component is and each of its fields (type, default, range,\n"
             "                                     required, flags); without a name, list the components\n"
+            "  reference [--check <file> | --update <file>]\n"
+            "                                     print the Markdown table of every component and field, or replace\n"
+            "                                     the table between the markers in a document, or check that it is\n"
+            "                                     up to date (exit 1 if not)\n"
             "  help                               show this text\n"
             "\n"
             "--json (validate, simulate, describe) prints one JSON object instead of text; see docs/scene-format.md. A bad\n"
@@ -180,6 +184,30 @@ namespace Marle {
             if (asJson) PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "error", message } });
             else err << "marle-scene describe: " << message << "\n";
             return 1;
+        }
+
+        int Reference(const std::vector<std::string>& args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        {
+            const std::string table = ComponentTableMarkdown(registry);
+            if (args.empty()) { out << table; return 0; }
+            if (args.size() != 2 || (args[0] != "--check" && args[0] != "--update")) { err << "marle-scene reference: expected --check <file> or --update <file>\n\n" << Usage; return 2; }
+
+            bool readable = false;
+            const std::string text = ReadWholeFile(args[1], readable);
+            if (!readable) { out << "FAIL  " << args[1] << ": cannot open the file\n"; return 1; }
+            std::string updated = text;
+            if (!ReplaceComponentTable(updated, table)) { out << "FAIL  " << args[1] << ": it needs the lines " << ComponentTableBegin << " and " << ComponentTableEnd << ", once each, in that order\n"; return 1; }
+
+            if (args[0] == "--check") {
+                if (updated == text) { out << "OK    " << args[1] << ": the component table is up to date\n"; return 0; }
+                out << "DIFF  " << args[1] << ": the component table is out of date; run marle-scene reference --update " << args[1] << "\n";
+                return 1;
+            }
+            if (updated == text) { out << "OK    " << args[1] << ": already up to date\n"; return 0; }
+            std::string problem;
+            if (!WriteTextFile(args[1], updated, &problem)) { out << "FAIL  " << args[1] << ": " << problem << "\n"; return 1; }
+            out << "WROTE " << args[1] << "\n";
+            return 0;
         }
 
         int Format(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
@@ -531,6 +559,7 @@ namespace Marle {
         if (command == "schema") return Schema(rest, registry, out, err);
         if (command == "simulate") return Simulate(rest, registry, out, err);
         if (command == "describe") return DescribeCommand(rest, registry, out, err);
+        if (command == "reference") return Reference(rest, registry, out, err);
 
         err << "marle-scene: unknown command '" << command << "'\n\n" << Usage;
         return 2;

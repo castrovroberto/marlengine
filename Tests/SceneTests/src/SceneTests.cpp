@@ -6,6 +6,7 @@
 #include "Marle/Scene/SceneLoader.h"
 #include "Marle/Scene/SceneWriter.h"
 #include "Marle/Scene/SceneSchema.h"
+#include "Marle/Scene/ComponentReference.h"
 #include "Marle/Scene/SceneTool.h"
 #include "Marle/Scene/SceneReloader.h"
 #include "Marle/Scene/RandomGenerator.h"
@@ -530,16 +531,6 @@ int main(int argc, char** argv)
         walk = LoadSceneFromText(all.substr(all.rfind("```jsonc\n", walkAt) + 9, all.find("\n```", walkAt) - all.rfind("```jsonc\n", walkAt) - 9), "docs/scene-format.md", registry);
         CHECK(walk.Ok() && walk.Scene->FindEntity("player").Has<KeyboardMove>() && walk.Scene->FindEntity("camera").Has<WheelZoom>(), "and the walking example has its behaviors");
 
-        // the spec's component table lists every built-in component and field, in order
-        bool tableComplete = true;
-        for (const ComponentInfo* info : registry.GetComponents()) {
-            for (size_t i = 0; i < info->Fields.size(); i++) {
-                const std::string row = i == 0 ? "| `" + info->Name + "` | `" + info->Fields[0].Name + "` |" : "| | `" + info->Fields[i].Name + "` |";
-                if (all.find(row) == std::string::npos) { printf("      the spec's table has no row '%s'\n", row.c_str()); tableComplete = false; }
-            }
-        }
-        CHECK(tableComplete, "the spec's component table has a row for every field of every built-in component");
-
         // the key names the spec lists are the ones the engine has
         size_t namesAt = all.find("```keynames\n");
         std::set<std::string> listed;
@@ -872,6 +863,54 @@ int main(int argc, char** argv)
         RegisterBuiltinComponents(builtins);
         if (UpdateGolden()) WriteFile("Assets/Scenes/scene.schema.json", SceneSchemaToText(builtins));
         CHECK(ReadFile("Assets/Scenes/scene.schema.json") == SceneSchemaToText(builtins), "Assets/Scenes/scene.schema.json is up to date (MARLE_UPDATE_GOLDEN=1 regenerates it)");
+    }
+
+    // the component table in docs/scene-format.md is generated from the registry
+    {
+        ComponentRegistry builtins;
+        RegisterBuiltinComponents(builtins);
+        const std::string table = ComponentTableMarkdown(builtins);
+
+        std::string document = ReadFile("docs/scene-format.md");
+        std::string regenerated = document;
+        CHECK(ReplaceComponentTable(regenerated, table), "docs/scene-format.md has the markers around its component table");
+        if (UpdateGolden() && regenerated != document) { WriteFile("docs/scene-format.md", regenerated); document = regenerated; }
+        CHECK(document == regenerated, "the component table in docs/scene-format.md is up to date (MARLE_UPDATE_GOLDEN=1 regenerates it)");
+
+        bool everyFieldListed = true;
+        for (const ComponentInfo* info : builtins.GetComponents()) {
+            if (!Contains(table, "| `" + info->Name + "` |")) everyFieldListed = false;
+            for (const FieldInfo& field : info->Fields) if (!Contains(table, "| | `" + field.Name + "` | " + FieldTypeName(field.Type) + " |")) everyFieldListed = false;
+        }
+        CHECK(everyFieldListed, "the table has a row for every component and every field");
+
+        ComponentRegistry game;
+        struct Gate { std::string Mode = "open"; float Hold = 1.0f; };
+        game.Register<Gate>("Gate", "A gate | with a pipe.").Field(&Gate::Mode, "mode", "How it acts.").OneOf({ "open", "shut" }).Field(&Gate::Hold, "hold", "Seconds.").Range(0, 5);
+        const std::string gate = ComponentTableMarkdown(game);
+        CHECK(Contains(gate, "| `Gate` | | | | A gate \\| with a pipe. |") && Contains(gate, "| | `mode` | string | `\"open\"` | How it acts. One of: open, shut. |") && Contains(gate, "| | `hold` | float | `1.0` | Seconds. Range 0.0 to 5.0. |"), "a client's components are in the table, with pipes escaped and ranges and sets spelled out");
+
+        std::string twice = std::string("a\n") + ComponentTableBegin + "\nold\n" + ComponentTableEnd + "\nb\n";
+        CHECK(ReplaceComponentTable(twice, "T\n") && twice == std::string("a\n") + ComponentTableBegin + "\nT\n" + ComponentTableEnd + "\nb\n", "replacing the table keeps the text and the markers around it");
+        std::string none = "no markers", reversed = std::string(ComponentTableEnd) + "\n" + ComponentTableBegin, doubled = std::string(ComponentTableBegin) + ComponentTableEnd + ComponentTableBegin + ComponentTableEnd;
+        CHECK(!ReplaceComponentTable(none, "T") && none == "no markers" && !ReplaceComponentTable(reversed, "T") && !ReplaceComponentTable(doubled, "T"), "a document without the markers once each, in order, is refused and left alone");
+
+        const std::string work = "scene_tool_reference";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work);
+        const std::string file = work + "/doc.md";
+        WriteFile(file, std::string("# doc\n") + ComponentTableBegin + "\nstale\n" + ComponentTableEnd + "\n");
+        ToolRun check = RunTool(builtins, { "reference", "--check", file });
+        CHECK(check.Code == 1 && Contains(check.Out, "out of date") && ReadFile(file).find("stale") != std::string::npos, "reference --check finds a stale table and changes nothing");
+        ToolRun update = RunTool(builtins, { "reference", "--update", file });
+        CHECK(update.Code == 0 && Contains(update.Out, "WROTE") && ReadFile(file) == std::string("# doc\n") + ComponentTableBegin + "\n" + table + ComponentTableEnd + "\n", "reference --update writes the table between the markers");
+        CHECK(RunTool(builtins, { "reference", "--check", file }).Code == 0 && RunTool(builtins, { "reference", "--update", file }).Out.find("already up to date") != std::string::npos, "and then it is up to date");
+        CHECK(RunTool(builtins, { "reference" }).Out == table, "reference alone prints the table");
+        WriteFile(file, "no markers here");
+        ToolRun bare = RunTool(builtins, { "reference", "--update", file });
+        CHECK(bare.Code == 1 && Contains(bare.Out, "components:begin") && ReadFile(file) == "no markers here", "a file without the markers is refused");
+        CHECK(RunTool(builtins, { "reference", "--update" }).Code == 2 && RunTool(builtins, { "reference", "--bogus", file }).Code == 2 && RunTool(builtins, { "reference", "--check", "no/such.md" }).Code == 1, "reference needs a mode and a file");
+        std::filesystem::remove_all(work);
     }
 
     // scene schema: validating scene files
