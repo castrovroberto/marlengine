@@ -17,6 +17,7 @@
 #include "Marle/Scene/SceneLoader.h"
 #include "Marle/Scene/SceneWriter.h"
 #include "Marle/Scene/SceneSchema.h"
+#include "Marle/Scene/ComponentReference.h"
 #include "Marle/Scene/SceneTool.h"
 #include "Marle/Scene/SceneRenderer.h"
 #include "Marle/Scene/SceneReloader.h"

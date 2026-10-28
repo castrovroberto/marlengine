@@ -34,13 +34,20 @@ namespace Marle {
     // Simulation::Step once every entity has run.
     EXPORT void FindOverlaps(Scene& scene);
 
+    // Which axes ResolveSolidMove cut short: the entity ended up short of where its behaviors put it.
+    struct SolidMove {
+        bool StoppedX = false;
+        bool StoppedY = false;
+    };
+
     // Stops an entity that moved this step at the solid things in its way. An entity is stopped when it
     // has a solid Collider and a Transform whose position differs from its PreviousTransform; it is moved
     // from there along x, then along y, and stops flush against any other solid collider or solid tile it
     // would enter, so it slides along a wall instead of sticking to it. A solid it already overlapped where
     // the step began does not stop it, so it can walk out. Each axis is a sweep from the old coordinate to
     // the new one, so a fast mover cannot jump over a thin wall along an axis. It never moves another
-    // entity. Called by Simulation::Step right after the entity's behaviors.
-    EXPORT void ResolveSolidMove(Scene& scene, Entity entity);
+    // entity. Called by Simulation::Step right after the entity's behaviors. Says which axes were cut
+    // short (neither for an entity that was not stopped or did not move).
+    EXPORT SolidMove ResolveSolidMove(Scene& scene, Entity entity);
 
 }

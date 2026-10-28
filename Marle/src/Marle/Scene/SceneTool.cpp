@@ -2,7 +2,9 @@
 #include "SceneTool.h"
 #include "SceneLoader.h"
 #include "SceneSchema.h"
+#include "ComponentReference.h"
 #include "SceneWriter.h"
+#include "SceneReloader.h"
 #include "Simulation.h"
 #include "InputRecording.h"
 #include "Components.h"
@@ -21,18 +23,36 @@ namespace Marle {
             "usage: marle-scene <command> [options]\n"
             "\n"
             "commands:\n"
-            "  validate <file|dir>...             check scene files and report every problem\n"
+            "  validate [--json] <file|dir>...    check scene files and report every problem\n"
             "  format [--check] [--drop-comments] [--schema <path>] <file|dir>...\n"
             "                                     rewrite scene files in canonical form; a file with comments is\n"
             "                                     left alone unless --drop-comments says to lose the comments\n"
             "  schema [--output <file> | --check <file>]\n"
             "                                     print the JSON Schema for scene files, write it, or check a file\n"
-            "  simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>]\n"
+            "  simulate <file> [--steps N] [--recording <file>] [--seed N] [--expect <checksum>] [--report <file|->] [--json]\n"
             "                                     run a scene headless for N fixed steps (default: the recording's length,\n"
             "                                     else 600), print what changed, which triggers touched what (step\n"
             "                                     numbers count from 0) and the final checksum; --expect makes it a\n"
-            "                                     check (exit 1 on a different checksum)\n"
+            "                                     check (exit 1 on a different checksum); --report writes what happened\n"
+            "                                     (triggers entered and left, movers stopped by solids) as a JSON array of\n"
+            "                                     events with their step, to a file or, with -, to stdout instead of the text\n"
+            "  diff --base <file> --proposed <file|-> [--steps N] [--carry-over] [--json]\n"
+            "                                     check a proposed version of a scene as a hot reload would (strictly: any\n"
+            "                                     problem refuses it), then say what it changes in the file and how a run of\n"
+            "                                     N steps (default 600, no input) differs from the base's; - reads the\n"
+            "                                     proposed text from stdin; --carry-over also says which of the state the\n"
+            "                                     base's run built up a hot reload would keep and which the file would\n"
+            "                                     replace. Exit 1 if either has problems, else 0\n"
+            "  describe [--json] [<component>]    show what a component is and each of its fields (type, default, range,\n"
+            "                                     required, flags); without a name, list the components\n"
+            "  reference [--check <file> | --update <file>]\n"
+            "                                     print the Markdown table of every component and field, or replace\n"
+            "                                     the table between the markers in a document, or check that it is\n"
+            "                                     up to date (exit 1 if not)\n"
             "  help                               show this text\n"
+            "\n"
+            "--json (validate, simulate, describe, diff) prints one JSON object instead of text; see docs/scene-format.md. A bad\n"
+            "command line is still reported as text on stderr.\n"
             "\n"
             "A directory means every .json file in it, except *.schema.json.\n"
             "Exit status: 0 all fine, 1 problems found (or files differ with --check), 2 bad command line.\n";
@@ -80,22 +100,50 @@ namespace Marle {
             return count;
         }
 
-        int Validate(const std::vector<std::string>& paths, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        // Removes `flag` from args and says whether it was there
+        bool TakeFlag(std::vector<std::string>& args, const std::string& flag)
         {
+            auto it = std::remove(args.begin(), args.end(), flag);
+            bool found = it != args.end();
+            args.erase(it, args.end());
+            return found;
+        }
+
+        // The version of the --json output; bump it when a field is renamed or removed
+        constexpr int JsonVersion = 1;
+
+        void PrintJson(std::ostream& out, const Json& json) { out << json.dump(2) << "\n"; }
+
+        int Validate(std::vector<std::string> paths, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        {
+            const bool asJson = TakeFlag(paths, "--json");
             if (paths.empty()) { err << "marle-scene validate: no files given\n\n" << Usage; return 2; }
 
             std::vector<std::string> files = ExpandPaths(paths);
-            if (files.empty()) { out << "no scene files found\n"; return 0; }
+            if (files.empty() && !asJson) { out << "no scene files found\n"; return 0; }
 
-            size_t failing = 0;
+            Json fileList = Json::array();
+            size_t failing = 0, problemCount = 0;
             for (const std::string& file : files) {
                 SceneLoadResult result = LoadScene(file, registry);
+                problemCount += result.Problems.size();
+                if (!result.Ok()) failing++;
+
+                if (asJson) {
+                    Json problems = Json::array();
+                    for (const SceneProblem& problem : result.Problems) problems.push_back({ { "pointer", problem.Path }, { "message", problem.Message } });
+                    Json entry = { { "file", file }, { "ok", result.Ok() } };
+                    if (result.Scene) { entry["entities"] = result.Scene->GetEntityCount(); entry["components"] = CountComponents(*result.Scene, registry); }
+                    entry["problems"] = std::move(problems);
+                    fileList.push_back(std::move(entry));
+                    continue;
+                }
+
                 if (result.Ok()) {
                     out << "OK    " << file << ": " << Plural(result.Scene->GetEntityCount(), "entity") << ", " << Plural(CountComponents(*result.Scene, registry), "component") << "\n";
                     continue;
                 }
 
-                failing++;
                 for (const SceneProblem& problem : result.Problems) out << problem.ToString() << "\n";
                 out << "FAIL  " << file << ": " << Plural(result.Problems.size(), "problem");
                 if (result.Scene) out << " (loaded " << Plural(result.Scene->GetEntityCount(), "entity") << ", " << Plural(CountComponents(*result.Scene, registry), "component") << ")";
@@ -103,8 +151,73 @@ namespace Marle {
                 out << "\n";
             }
 
+            if (asJson) {
+                PrintJson(out, { { "version", JsonVersion }, { "ok", failing == 0 }, { "files", std::move(fileList) },
+                                 { "summary", { { "files", files.size() }, { "failing", failing }, { "problems", problemCount } } } });
+                return failing ? 1 : 0;
+            }
+
             if (files.size() > 1) out << Plural(files.size(), "file") << ", " << failing << " with problems\n";
             return failing ? 1 : 0;
+        }
+
+        int DescribeCommand(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        {
+            const bool asJson = TakeFlag(args, "--json");
+            for (const std::string& arg : args)
+                if (arg.rfind("--", 0) == 0) { err << "marle-scene describe: unknown option '" << arg << "'\n\n" << Usage; return 2; }
+            if (args.size() > 1) { err << "marle-scene describe: one component at a time\n\n" << Usage; return 2; }
+
+            const std::vector<const ComponentInfo*> all = registry.GetComponents();
+            if (args.empty()) {
+                if (asJson) {
+                    Json list = Json::array();
+                    for (const ComponentInfo* info : all) list.push_back({ { "name", info->Name }, { "description", info->Description }, { "behavior", info->IsBehavior } });
+                    PrintJson(out, { { "version", JsonVersion }, { "ok", true }, { "components", std::move(list) } });
+                    return 0;
+                }
+                for (const ComponentInfo* info : all) out << info->Name << (info->IsBehavior ? " (behavior)" : "") << ": " << info->Description << "\n";
+                return 0;
+            }
+
+            for (const ComponentInfo* info : all) {
+                if (info->Name != args[0]) continue;
+                if (asJson) { Json json = DescribeComponent(*info); Json result = { { "version", JsonVersion }, { "ok", true } }; result.update(json); PrintJson(out, result); }
+                else out << DescribeComponentText(*info);
+                return 0;
+            }
+
+            std::vector<std::string> names;
+            for (const ComponentInfo* info : all) names.push_back(info->Name);
+            const std::string suggestion = detail::SuggestionFor(args[0], names);
+            const std::string message = "unknown component '" + args[0] + "'" + (suggestion.empty() ? "" : " (" + suggestion + ")") + "; known components: " + detail::Join(names);
+            if (asJson) PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "error", message } });
+            else err << "marle-scene describe: " << message << "\n";
+            return 1;
+        }
+
+        int Reference(const std::vector<std::string>& args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        {
+            const std::string table = ComponentTableMarkdown(registry);
+            if (args.empty()) { out << table; return 0; }
+            if (args.size() != 2 || (args[0] != "--check" && args[0] != "--update")) { err << "marle-scene reference: expected --check <file> or --update <file>\n\n" << Usage; return 2; }
+
+            bool readable = false;
+            const std::string text = ReadWholeFile(args[1], readable);
+            if (!readable) { out << "FAIL  " << args[1] << ": cannot open the file\n"; return 1; }
+            std::string updated = text;
+            if (!ReplaceComponentTable(updated, table)) { out << "FAIL  " << args[1] << ": it needs the lines " << ComponentTableBegin << " and " << ComponentTableEnd << ", once each, in that order\n"; return 1; }
+
+            if (args[0] == "--check") {
+                if (updated == text) { out << "OK    " << args[1] << ": the component table is up to date\n"; return 0; }
+                out << "DIFF  " << args[1] << ": the component table is out of date; run marle-scene reference --update " << args[1] << "\n";
+                return 1;
+            }
+            if (updated == text) { out << "OK    " << args[1] << ": already up to date\n"; return 0; }
+            std::string problem;
+            if (!WriteTextFile(args[1], updated, &problem)) { out << "FAIL  " << args[1] << ": " << problem << "\n"; return 1; }
+            out << "WROTE " << args[1] << "\n";
+            return 0;
         }
 
         int Format(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
@@ -220,10 +333,38 @@ namespace Marle {
             return snapshot;
         }
 
-        // One line per field that differs, plus added and removed entities and components
-        std::vector<std::string> Describe(const Snapshot& before, const Snapshot& after)
+        // One field that differs, or an entity or component that was added or removed
+        struct Change {
+            enum class Kind { EntityAdded, EntityRemoved, ComponentAdded, ComponentRemoved, FieldChanged } What;
+            std::string Entity, Component, Field;
+            Json Before, After;   // FieldChanged only; After is null when the field is gone
+            bool FieldGone = false;
+
+            std::string ToString() const
+            {
+                switch (What) {
+                    case Kind::EntityAdded:      return "added entity " + Entity;
+                    case Kind::EntityRemoved:    return "removed entity " + Entity;
+                    case Kind::ComponentAdded:   return Entity + "." + Component + ": added";
+                    case Kind::ComponentRemoved: return Entity + "." + Component + ": removed";
+                    case Kind::FieldChanged:     break;
+                }
+                return Entity + "." + Component + "." + Field + ": " + Before.dump() + " -> " + (FieldGone ? "(gone)" : After.dump());
+            }
+
+            Json ToJson() const
+            {
+                static const char* kinds[] = { "entity_added", "entity_removed", "component_added", "component_removed", "field_changed" };
+                Json json = { { "kind", kinds[(int)What] }, { "entity", Entity } };
+                if (What != Kind::EntityAdded && What != Kind::EntityRemoved) json["component"] = Component;
+                if (What == Kind::FieldChanged) { json["field"] = Field; json["before"] = Before; json["after"] = FieldGone ? Json(nullptr) : After; json["field_gone"] = FieldGone; }
+                return json;
+            }
+        };
+
+        std::vector<Change> Describe(const Snapshot& before, const Snapshot& after)
         {
-            std::vector<std::string> lines;
+            std::vector<Change> changes;
             auto find = [](const auto& list, const std::string& name) -> const typename std::decay_t<decltype(list)>::value_type* {
                 for (const auto& item : list) if (item.first == name) return &item;
                 return nullptr;
@@ -231,21 +372,23 @@ namespace Marle {
 
             for (const auto& entity : before) {
                 const auto* now = find(after, entity.first);
-                if (!now) { lines.push_back("removed entity " + entity.first); continue; }
+                if (!now) { changes.push_back({ Change::Kind::EntityRemoved, entity.first }); continue; }
                 for (const auto& component : entity.second) {
                     const auto* then = find(now->second, component.first);
-                    if (!then) { lines.push_back(entity.first + "." + component.first + ": removed"); continue; }
+                    if (!then) { changes.push_back({ Change::Kind::ComponentRemoved, entity.first, component.first }); continue; }
                     if (component.second == then->second) continue;
                     for (auto it = component.second.begin(); it != component.second.end(); ++it)
-                        if (!then->second.contains(it.key()) || then->second[it.key()] != it.value())
-                            lines.push_back(entity.first + "." + component.first + "." + it.key() + ": " + it.value().dump() + " -> " + (then->second.contains(it.key()) ? then->second[it.key()].dump() : "(gone)"));
+                        if (!then->second.contains(it.key()) || then->second[it.key()] != it.value()) {
+                            const bool gone = !then->second.contains(it.key());
+                            changes.push_back({ Change::Kind::FieldChanged, entity.first, component.first, it.key(), it.value(), gone ? Json(nullptr) : then->second[it.key()], gone });
+                        }
                 }
                 for (const auto& component : now->second)
-                    if (!find(entity.second, component.first)) lines.push_back(entity.first + "." + component.first + ": added");
+                    if (!find(entity.second, component.first)) changes.push_back({ Change::Kind::ComponentAdded, entity.first, component.first });
             }
             for (const auto& entity : after)
-                if (!find(before, entity.first)) lines.push_back("added entity " + entity.first);
-            return lines;
+                if (!find(before, entity.first)) changes.push_back({ Change::Kind::EntityAdded, entity.first });
+            return changes;
         }
 
         bool ParseCount(const std::string& text, long long& value)
@@ -256,9 +399,10 @@ namespace Marle {
             return used == text.size();
         }
 
-        int Simulate(const std::vector<std::string>& args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        int Simulate(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
         {
-            std::string file, recordingFile, expect;
+            const bool asJson = TakeFlag(args, "--json");
+            std::string file, recordingFile, expect, reportFile;
             long long steps = -1, seed = 0;
             bool hasSeed = false;
             for (size_t i = 0; i < args.size(); i++) {
@@ -272,6 +416,7 @@ namespace Marle {
                 }
                 else if (args[i] == "--recording" && hasValue) recordingFile = args[++i];
                 else if (args[i] == "--expect" && hasValue) expect = args[++i];
+                else if (args[i] == "--report" && hasValue) reportFile = args[++i];
                 else if (args[i].rfind("--", 0) == 0) { err << "marle-scene simulate: unknown or incomplete option '" << args[i] << "'\n\n" << Usage; return 2; }
                 else if (file.empty()) file = args[i];
                 else { err << "marle-scene simulate: one scene file at a time\n\n" << Usage; return 2; }
@@ -285,6 +430,12 @@ namespace Marle {
             // The scene has to be clean first: a run of a scene with problems would not be the scene in the file
             SceneLoadResult loaded = LoadScene(file, registry);
             if (!loaded.Ok()) {
+                if (asJson) {
+                    Json problems = Json::array();
+                    for (const SceneProblem& problem : loaded.Problems) problems.push_back({ { "pointer", problem.Path }, { "message", problem.Message } });
+                    PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "file", file }, { "error", "the scene has problems; fix them before simulating" }, { "scene_problems", std::move(problems) } });
+                    return 1;
+                }
                 for (const SceneProblem& problem : loaded.Problems) out << problem.ToString() << "\n";
                 out << "FAIL  " << file << ": " << Plural(loaded.Problems.size(), "problem") << "; fix them before simulating\n";
                 return 1;
@@ -299,38 +450,54 @@ namespace Marle {
                 scene.ResetRandom();
             }
 
+            // A run that cannot start for a reason other than the scene's problems
+            auto fail = [&](const std::string& what, const std::vector<std::string>& details) {
+                if (asJson) PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "file", file }, { "error", what }, { "recording_problems", details } });
+                else {
+                    for (const std::string& detail : details) out << recordingFile << ": " << detail << "\n";
+                    out << "FAIL  " << recordingFile << ": " << what << "\n";
+                }
+                return 1;
+            };
+
             InputRecording recording;
             const bool hasRecording = !recordingFile.empty();
             if (hasRecording) {
                 bool readable = false;
                 std::string text = ReadWholeFile(recordingFile, readable);
-                if (!readable) { out << "FAIL  " << recordingFile << ": cannot open the file\n"; return 1; }
+                if (!readable) return fail("cannot open the file", {});
                 RecordingReadResult read = ReadRecording(text);
-                if (!read.Ok()) {
-                    for (const std::string& problem : read.Problems) out << recordingFile << ": " << problem << "\n";
-                    out << "FAIL  " << recordingFile << ": " << Plural(read.Problems.size(), "problem") << "\n";
-                    return 1;
-                }
+                if (!read.Ok()) return fail(Plural(read.Problems.size(), "problem"), read.Problems);
                 recording = std::move(read.Recording);
 
                 // With --seed the point is to try the same input on another seed, so the recording's own is not compared
                 std::string mismatch = RecordingMismatch(recording, scene.GetName(), loaded.TextHash, hasSeed ? recording.Seed : scene.GetSeed(), recording.StepsPerSecond);
-                if (!mismatch.empty()) { out << "FAIL  " << recordingFile << ": " << mismatch << "\n"; return 1; }
+                if (!mismatch.empty()) return fail(mismatch, {});
             }
 
             const long long recorded = hasRecording ? (long long)recording.GetStepCount() : 0;
             if (steps < 0) steps = hasRecording ? recorded : 600;
             const double dt = 1.0 / (hasRecording ? (double)recording.StepsPerSecond : 60.0);
 
+            // A recording that lists events is checked against them when the whole run is played with its own seed
+            // (as its checksum is), so the events are collected then too
+            const bool eventsChecked = hasRecording && !recording.ExpectedEvents.empty() && steps == recorded && !hasSeed;
+            const bool collectEvents = !reportFile.empty() || eventsChecked;
+
             // Which triggers touched what, in the order the pairs first touched; steps count from 0, like a recording's
             struct Touch { Overlap Pair; long long First = 0, Last = 0, Steps = 0, Entered = 0; };
             std::vector<Touch> touches;
+            using Event = StampedEvent;
+            std::vector<Event> events;
+            std::vector<SimulationEvent> stepEvents;
 
             const Snapshot before = TakeSnapshot(scene, registry);
             for (long long step = 0; step < steps; step++) {
                 static const InputFrame none;
-                Simulation::Step(registry, scene, step < recorded ? recording.Frames[(size_t)step] : none, dt);
+                stepEvents.clear();
+                Simulation::Step(registry, scene, step < recorded ? recording.Frames[(size_t)step] : none, dt, collectEvents ? &stepEvents : nullptr);
                 scene.ClearRestartRequest();
+                for (SimulationEvent& event : stepEvents) events.push_back({ step, std::move(event) });
 
                 const SceneOverlaps& overlaps = scene.GetOverlaps();
                 for (const Overlap& pair : overlaps.Touching) {
@@ -345,15 +512,77 @@ namespace Marle {
             const Snapshot after = TakeSnapshot(scene, registry);
             const uint64_t checksum = Simulation::Checksum(registry, scene);
 
+            const std::vector<Change> changes = Describe(before, after);
+            const bool checksComparison = hasRecording && recording.HasChecksum && steps == recorded && !hasSeed;
+            const std::string checksumText = Simulation::ChecksumText(checksum);
+
+            int code = 0;
+            const std::vector<ExpectedEvent> missingEvents = eventsChecked ? MissingExpectedEvents(recording.ExpectedEvents, events) : std::vector<ExpectedEvent>();
+            if (checksComparison && recording.Checksum != checksum) code = 1;
+            if (!missingEvents.empty()) code = 1;
+            if (!expect.empty() && expect != checksumText) code = 1;
+
+            Json eventList = Json::array();
+            for (const Event& event : events) {
+                Json json = { { "step", event.Step }, { "kind", SimulationEventKindName(event.What.What) }, { "entity", event.What.Entity } };
+                if (!event.What.Other.empty()) json["other"] = event.What.Other;
+                if (!event.What.Axis.empty()) json["axis"] = event.What.Axis;
+                eventList.push_back(std::move(json));
+            }
+            if (!reportFile.empty() && reportFile != "-") {
+                std::string problem;
+                if (!WriteTextFile(reportFile, eventList.dump(2) + "\n", &problem)) {
+                    if (asJson) PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "file", file }, { "error", "cannot write the report: " + problem } });
+                    else out << "FAIL  " << reportFile << ": cannot write the report: " << problem << "\n";
+                    return 1;
+                }
+            }
+
+            if (asJson) {
+                Json changeList = Json::array();
+                for (const Change& change : changes) changeList.push_back(change.ToJson());
+                Json overlapList = Json::array();
+                for (const Touch& t : touches)
+                    overlapList.push_back({ { "trigger", t.Pair.Trigger }, { "other", t.Pair.Other }, { "first_step", t.First }, { "last_step", t.Last }, { "steps_touching", t.Steps }, { "times_entered", t.Entered } });
+
+                Json input = nullptr;
+                if (hasRecording) {
+                    input = { { "recording", recordingFile }, { "steps", recorded } };
+                    if (!recording.SceneFile.empty()) input["scene_file"] = recording.SceneFile;
+                    if (!recording.Description.empty()) input["description"] = recording.Description;
+                }
+                Json result = { { "version", JsonVersion }, { "ok", code == 0 }, { "file", file }, { "steps_run", steps }, { "seed", scene.GetSeed() },
+                                { "input", input },
+                                { "checksum", checksumText }, { "changes", std::move(changeList) }, { "overlaps", std::move(overlapList) } };
+                if (!reportFile.empty()) result["events"] = eventList;
+                if (eventsChecked) {
+                    Json missing = Json::array();
+                    for (const ExpectedEvent& event : missingEvents) {
+                        Json item = { { "step", event.Step }, { "kind", event.Kind }, { "entity", event.Entity } };
+                        if (!event.Other.empty()) item["other"] = event.Other;
+                        if (!event.Axis.empty()) item["axis"] = event.Axis;
+                        missing.push_back(std::move(item));
+                    }
+                    result["expected_events"] = { { "count", recording.ExpectedEvents.size() }, { "missing", std::move(missing) } };
+                    result["matches_events"] = missingEvents.empty();
+                }
+                if (checksComparison) result["recording_checksum"] = Simulation::ChecksumText(recording.Checksum), result["matches_recording"] = recording.Checksum == checksum;
+                if (!expect.empty()) result["expected_checksum"] = expect, result["matches_expected"] = expect == checksumText;
+                PrintJson(out, result);
+                return code;
+            }
+
+            if (reportFile == "-") { out << eventList.dump(2) << "\n"; return code; }
+
             out << "SIM   " << file << ": " << Plural((size_t)steps, "step") << ", seed " << scene.GetSeed();
             if (hasRecording) out << ", input from " << recordingFile << " (" << Plural((size_t)recorded, "step") << (steps > recorded ? "; no input after that" : steps < recorded ? "; stopped early" : "") << ")";
             else out << ", no input";
             out << "\n";
+            if (hasRecording && !recording.Description.empty()) out << "recording: " << recording.Description << "\n";
 
-            const std::vector<std::string> changes = Describe(before, after);
             constexpr size_t MaxLines = 40;
             if (changes.empty()) out << "nothing changed\n";
-            for (size_t i = 0; i < changes.size() && i < MaxLines; i++) out << "  " << changes[i] << "\n";
+            for (size_t i = 0; i < changes.size() && i < MaxLines; i++) out << "  " << changes[i].ToString() << "\n";
             if (changes.size() > MaxLines) out << "  ... and " << (changes.size() - MaxLines) << " more\n";
             if (!touches.empty()) {
                 out << "overlaps (trigger > what it touched):\n";
@@ -363,18 +592,237 @@ namespace Marle {
                 }
                 if (touches.size() > MaxLines) out << "  ... and " << (touches.size() - MaxLines) << " more\n";
             }
-            out << "checksum " << Simulation::ChecksumText(checksum) << "\n";
+            out << "checksum " << checksumText << "\n";
 
-            int code = 0;
-            if (hasRecording && recording.HasChecksum && steps == recorded && !hasSeed) {
+            if (checksComparison) {
                 if (recording.Checksum == checksum) out << "OK    matches the checksum in the recording\n";
-                else { out << "DIFF  the recording says " << Simulation::ChecksumText(recording.Checksum) << ": this run is not the one it was made from\n"; code = 1; }
+                else out << "DIFF  the recording says " << Simulation::ChecksumText(recording.Checksum) << ": this run is not the one it was made from\n";
+            }
+            if (eventsChecked) {
+                if (missingEvents.empty()) out << "OK    the " << Plural(recording.ExpectedEvents.size(), "expected event") << " all happened\n";
+                for (const ExpectedEvent& event : missingEvents) out << "DIFF  expected event did not happen: " << ExpectedEventText(event) << "\n";
             }
             if (!expect.empty()) {
-                if (expect == Simulation::ChecksumText(checksum)) out << "OK    matches --expect\n";
-                else { out << "DIFF  expected " << expect << "\n"; code = 1; }
+                if (expect == checksumText) out << "OK    matches --expect\n";
+                else out << "DIFF  expected " << expect << "\n";
             }
             return code;
+        }
+
+
+        // Counts of each kind of event in a run
+        Json EventCounts(const std::vector<StampedEvent>& events)
+        {
+            Json counts = Json::object({ { "trigger_entered", 0 }, { "trigger_left", 0 }, { "solid_stopped", 0 } });
+            for (const StampedEvent& event : events) counts[SimulationEventKindName(event.What.What)] = counts[SimulationEventKindName(event.What.What)].get<int>() + 1;
+            return counts;
+        }
+
+        bool SameEvents(const std::vector<StampedEvent>& a, const std::vector<StampedEvent>& b)
+        {
+            if (a.size() != b.size()) return false;
+            for (size_t i = 0; i < a.size(); i++)
+                if (a[i].Step != b[i].Step || a[i].What.What != b[i].What.What || a[i].What.Entity != b[i].What.Entity || a[i].What.Other != b[i].What.Other || a[i].What.Axis != b[i].What.Axis) return false;
+            return true;
+        }
+
+        // What a hot reload does with the state a run built up (CarryOverState), field by field: only fields
+        // the run changed, and what became of each
+        struct CarryEntry {
+            std::string Entity, Component, Field;
+            Json Baseline, Running, Result;   // Result is null for a field whose entity or component the file removed
+            enum class Fate { Kept, ReplacedByFile, RemovedByFile } What;
+        };
+
+        const char* CarryFateName(CarryEntry::Fate fate)
+        {
+            switch (fate) {
+                case CarryEntry::Fate::Kept: return "kept";
+                case CarryEntry::Fate::ReplacedByFile: return "replaced_by_file";
+                case CarryEntry::Fate::RemovedByFile: return "removed_by_file";
+            }
+            return "";
+        }
+
+        std::vector<CarryEntry> ClassifyCarryOver(const Snapshot& baseline, const Snapshot& running, const Snapshot& proposed, const Snapshot& after)
+        {
+            auto find = [](const auto& list, const std::string& name) -> const typename std::decay_t<decltype(list)>::value_type* {
+                for (const auto& item : list) if (item.first == name) return &item;
+                return nullptr;
+            };
+
+            std::vector<CarryEntry> entries;
+            for (const auto& entity : baseline) {
+                const auto* runningEntity = find(running, entity.first);
+                const auto* proposedEntity = find(proposed, entity.first);
+                const auto* afterEntity = find(after, entity.first);
+                if (!runningEntity) continue;
+                for (const auto& component : entity.second) {
+                    const auto* runningComponent = find(runningEntity->second, component.first);
+                    if (!runningComponent) continue;
+                    const auto* proposedComponent = proposedEntity ? find(proposedEntity->second, component.first) : nullptr;
+                    const auto* afterComponent = afterEntity ? find(afterEntity->second, component.first) : nullptr;
+                    for (auto it = component.second.begin(); it != component.second.end(); ++it) {
+                        if (!runningComponent->second.contains(it.key()) || runningComponent->second[it.key()] == it.value()) continue;   // the run did not change it
+                        CarryEntry entry{ entity.first, component.first, it.key(), it.value(), runningComponent->second[it.key()], nullptr, CarryEntry::Fate::RemovedByFile };
+                        if (proposedComponent && afterComponent && afterComponent->second.contains(it.key())) {
+                            entry.Result = afterComponent->second[it.key()];
+                            entry.What = entry.Result == entry.Running ? CarryEntry::Fate::Kept : CarryEntry::Fate::ReplacedByFile;
+                        }
+                        entries.push_back(std::move(entry));
+                    }
+                }
+            }
+            return entries;
+        }
+
+        int Diff(std::vector<std::string> args, const ComponentRegistry& registry, std::ostream& out, std::ostream& err)
+        {
+            const bool asJson = TakeFlag(args, "--json");
+            const bool carryOver = TakeFlag(args, "--carry-over");
+            std::string baseFile, proposedArg;
+            long long steps = 600;
+            for (size_t i = 0; i < args.size(); i++) {
+                const bool hasValue = i + 1 < args.size();
+                if (args[i] == "--base" && hasValue) baseFile = args[++i];
+                else if (args[i] == "--proposed" && hasValue) proposedArg = args[++i];
+                else if (args[i] == "--steps" && hasValue) {
+                    if (!ParseCount(args[++i], steps) || steps < 0 || steps > MaxRecordingSteps) { err << "marle-scene diff: --steps needs a whole number from 0 to " << MaxRecordingSteps << "\n"; return 2; }
+                }
+                else { err << "marle-scene diff: unknown or incomplete option '" << args[i] << "'\n\n" << Usage; return 2; }
+            }
+            if (baseFile.empty() || proposedArg.empty()) { err << "marle-scene diff: both --base <file> and --proposed <file|-> are needed\n\n" << Usage; return 2; }
+
+            const std::string proposedName = proposedArg == "-" ? "<stdin>" : proposedArg;
+            std::string proposedText;
+            if (proposedArg == "-") { std::stringstream text; text << std::cin.rdbuf(); proposedText = text.str(); }
+            else {
+                bool readable = false;
+                proposedText = ReadWholeFile(proposedArg, readable);
+                if (!readable) { err << "marle-scene diff: cannot open " << proposedArg << "\n"; return 2; }
+            }
+
+            SceneLoadResult base = LoadScene(baseFile, registry);
+            SceneLoadResult proposed = LoadSceneFromText(proposedText, proposedName, registry);
+            auto problemsJson = [](const SceneLoadResult& result) {
+                Json list = Json::array();
+                for (const SceneProblem& problem : result.Problems) list.push_back({ { "pointer", problem.Path }, { "message", problem.Message } });
+                return list;
+            };
+
+            // A hot reload takes a scene only if it has no problem at all, so that is the test here too
+            if (!base.Ok() || !proposed.Ok()) {
+                if (asJson) {
+                    PrintJson(out, { { "version", JsonVersion }, { "ok", false }, { "base", baseFile }, { "proposed", proposedName },
+                                     { "base_problems", problemsJson(base) }, { "proposed_problems", problemsJson(proposed) }, { "reload_accepted", proposed.Ok() } });
+                    return 1;
+                }
+                for (const SceneProblem& problem : base.Problems) out << problem.ToString() << "\n";
+                for (const SceneProblem& problem : proposed.Problems) out << problem.ToString() << "\n";
+                if (!base.Ok()) out << "FAIL  " << baseFile << " (base): " << Plural(base.Problems.size(), "problem") << "; the base has to be clean to compare against\n";
+                if (!proposed.Ok()) out << "FAIL  " << proposedName << " (proposed): " << Plural(proposed.Problems.size(), "problem") << "; a hot reload would refuse it and keep the running scene\n";
+                return 1;
+            }
+
+            const Snapshot baseStart = TakeSnapshot(*base.Scene, registry), proposedStart = TakeSnapshot(*proposed.Scene, registry);
+            const std::vector<Change> fileChanges = Describe(baseStart, proposedStart);
+            auto names = [](const Snapshot& snapshot) { std::vector<std::string> list; for (size_t i = 1; i < snapshot.size(); i++) list.push_back(snapshot[i].first); return list; };   // [0] is the scene's own
+            const std::vector<std::string> baseNames = names(baseStart), proposedNames = names(proposedStart);
+            std::vector<std::string> added, removed;
+            for (const std::string& name : proposedNames) if (std::find(baseNames.begin(), baseNames.end(), name) == baseNames.end()) added.push_back(name);
+            for (const std::string& name : baseNames) if (std::find(proposedNames.begin(), proposedNames.end(), name) == proposedNames.end()) removed.push_back(name);
+
+            auto run = [&](Scene& scene, std::vector<StampedEvent>& events) {
+                static const InputFrame none;
+                std::vector<SimulationEvent> stepEvents;
+                for (long long step = 0; step < steps; step++) {
+                    stepEvents.clear();
+                    Simulation::Step(registry, scene, none, 1.0 / 60.0, &stepEvents);
+                    scene.ClearRestartRequest();
+                    for (SimulationEvent& event : stepEvents) events.push_back({ step, std::move(event) });
+                }
+            };
+            // For --carry-over: the base and the proposal as they would be loaded again, before anything runs
+            SceneLoadResult baseline, fresh;
+            if (carryOver) { baseline = LoadScene(baseFile, registry); fresh = LoadSceneFromText(proposedText, proposedName, registry); }
+
+            std::vector<StampedEvent> baseEvents, proposedEvents;
+            run(*base.Scene, baseEvents);
+            run(*proposed.Scene, proposedEvents);
+
+            const std::string baseSum = Simulation::ChecksumText(Simulation::Checksum(registry, *base.Scene)), proposedSum = Simulation::ChecksumText(Simulation::Checksum(registry, *proposed.Scene));
+            const std::vector<Change> stateChanges = Describe(TakeSnapshot(*base.Scene, registry), TakeSnapshot(*proposed.Scene, registry));
+            const bool sameEvents = SameEvents(baseEvents, proposedEvents);
+
+            // What a reload would do right now to the world the base run built up: the same call the Sandbox makes
+            std::vector<CarryEntry> carried;
+            bool randomCarried = false;
+            if (carryOver) {
+                CarryOverState(registry, *baseline.Scene, *base.Scene, *fresh.Scene);
+                carried = ClassifyCarryOver(baseStart, TakeSnapshot(*base.Scene, registry), proposedStart, TakeSnapshot(*fresh.Scene, registry));
+                randomCarried = registry.Write(baseline.Scene->GetSceneEntity(), "Random") == registry.Write(proposed.Scene->GetSceneEntity(), "Random");   // the rule CarryOverState follows
+            }
+
+            if (asJson) {
+                Json fileList = Json::array(), stateList = Json::array();
+                for (const Change& change : fileChanges) fileList.push_back(change.ToJson());
+                for (const Change& change : stateChanges) stateList.push_back(change.ToJson());
+                Json result = { { "version", JsonVersion }, { "ok", true }, { "base", baseFile }, { "proposed", proposedName }, { "reload_accepted", true },
+                                { "entities_added", added }, { "entities_removed", removed }, { "file_changes", std::move(fileList) },
+                                { "steps_run", steps }, { "base_checksum", baseSum }, { "proposed_checksum", proposedSum }, { "same_checksum", baseSum == proposedSum },
+                                { "state_changes", std::move(stateList) },
+                                { "events", { { "base", EventCounts(baseEvents) }, { "proposed", EventCounts(proposedEvents) }, { "same", sameEvents } } } };
+                if (carryOver) {
+                    Json fields = Json::array();
+                    for (const CarryEntry& entry : carried)
+                        fields.push_back({ { "entity", entry.Entity }, { "component", entry.Component }, { "field", entry.Field }, { "fate", CarryFateName(entry.What) },
+                                           { "baseline", entry.Baseline }, { "running", entry.Running }, { "result", entry.Result } });
+                    result["carry_over"] = { { "steps", steps }, { "fields", std::move(fields) }, { "random", randomCarried ? "carried" : "restarted" } };
+                }
+                PrintJson(out, result);
+                return 0;
+            }
+
+            constexpr size_t MaxLines = 40;
+            auto list = [&](const std::vector<Change>& changes) {
+                for (size_t i = 0; i < changes.size() && i < MaxLines; i++) out << "  " << changes[i].ToString() << "\n";
+                if (changes.size() > MaxLines) out << "  ... and " << (changes.size() - MaxLines) << " more\n";
+            };
+            auto counts = [](const std::vector<StampedEvent>& events) {
+                const Json c = EventCounts(events);
+                return Plural(c["trigger_entered"].get<size_t>(), "trigger entry") + ", " + Plural(c["trigger_left"].get<size_t>(), "trigger exit") + ", " + Plural(c["solid_stopped"].get<size_t>(), "solid stop");
+            };
+            out << "DIFF  " << baseFile << " (base) -> " << proposedName << " (proposed): a hot reload would accept it\n";
+            if (fileChanges.empty()) out << "the files describe the same scene\n";
+            else { out << "what the edit changes in the file (" << fileChanges.size() << "):\n"; list(fileChanges); }
+            if (!added.empty() || !removed.empty()) out << "entities: added " << (added.empty() ? "none" : detail::Join(added)) << "; removed " << (removed.empty() ? "none" : detail::Join(removed)) << "\n";
+            out << "after " << Plural((size_t)steps, "step") << " with no input:\n";
+            out << "  checksum base " << baseSum << ", proposed " << proposedSum << (baseSum == proposedSum ? " (same)" : " (different)") << "\n";
+            out << "  events " << (sameEvents ? "are the same: " + counts(baseEvents) : "differ: base " + counts(baseEvents) + "; proposed " + counts(proposedEvents)) << "\n";
+            if (stateChanges.empty()) out << "  the final state is the same\n";
+            else { out << "  the final state differs (" << stateChanges.size() << "), base -> proposed:\n"; list(stateChanges); }
+
+            if (carryOver) {
+                out << "a reload now, after the base's " << Plural((size_t)steps, "step") << ", would:\n";
+                if (carried.empty()) out << "  find no state built up by the run (nothing the run changed)\n";
+                const CarryEntry::Fate order[] = { CarryEntry::Fate::Kept, CarryEntry::Fate::ReplacedByFile, CarryEntry::Fate::RemovedByFile };
+                const char* heading[] = { "keep the running value", "replace the running value with the file's", "drop (the file removed the entity or component)" };
+                for (int f = 0; f < 3; f++) {
+                    size_t shown = 0, total = 0;
+                    for (const CarryEntry& entry : carried) if (entry.What == order[f]) total++;
+                    if (!total) continue;
+                    out << "  " << heading[f] << " (" << total << "):\n";
+                    for (const CarryEntry& entry : carried) {
+                        if (entry.What != order[f]) continue;
+                        if (shown++ == MaxLines) { out << "    ... and " << (total - MaxLines) << " more\n"; break; }
+                        out << "    " << entry.Entity << "." << entry.Component << "." << entry.Field << ": " << entry.Running.dump();
+                        if (order[f] == CarryEntry::Fate::ReplacedByFile) out << " -> " << entry.Result.dump();
+                        out << "\n";
+                    }
+                }
+                out << "  " << (randomCarried ? "carry on the random sequence (the seed is unchanged)" : "start the random sequence again (the seed changed)") << "\n";
+            }
+            return 0;
         }
 
     }
@@ -390,6 +838,9 @@ namespace Marle {
         if (command == "format") return Format(rest, registry, out, err);
         if (command == "schema") return Schema(rest, registry, out, err);
         if (command == "simulate") return Simulate(rest, registry, out, err);
+        if (command == "diff") return Diff(rest, registry, out, err);
+        if (command == "describe") return DescribeCommand(rest, registry, out, err);
+        if (command == "reference") return Reference(rest, registry, out, err);
 
         err << "marle-scene: unknown command '" << command << "'\n\n" << Usage;
         return 2;

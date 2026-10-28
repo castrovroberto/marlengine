@@ -6,6 +6,7 @@
 #include "Marle/Scene/SceneLoader.h"
 #include "Marle/Scene/SceneWriter.h"
 #include "Marle/Scene/SceneSchema.h"
+#include "Marle/Scene/ComponentReference.h"
 #include "Marle/Scene/SceneTool.h"
 #include "Marle/Scene/SceneReloader.h"
 #include "Marle/Scene/RandomGenerator.h"
@@ -530,16 +531,6 @@ int main(int argc, char** argv)
         walk = LoadSceneFromText(all.substr(all.rfind("```jsonc\n", walkAt) + 9, all.find("\n```", walkAt) - all.rfind("```jsonc\n", walkAt) - 9), "docs/scene-format.md", registry);
         CHECK(walk.Ok() && walk.Scene->FindEntity("player").Has<KeyboardMove>() && walk.Scene->FindEntity("camera").Has<WheelZoom>(), "and the walking example has its behaviors");
 
-        // the spec's component table lists every built-in component and field, in order
-        bool tableComplete = true;
-        for (const ComponentInfo* info : registry.GetComponents()) {
-            for (size_t i = 0; i < info->Fields.size(); i++) {
-                const std::string row = i == 0 ? "| `" + info->Name + "` | `" + info->Fields[0].Name + "` |" : "| | `" + info->Fields[i].Name + "` |";
-                if (all.find(row) == std::string::npos) { printf("      the spec's table has no row '%s'\n", row.c_str()); tableComplete = false; }
-            }
-        }
-        CHECK(tableComplete, "the spec's component table has a row for every field of every built-in component");
-
         // the key names the spec lists are the ones the engine has
         size_t namesAt = all.find("```keynames\n");
         std::set<std::string> listed;
@@ -874,6 +865,54 @@ int main(int argc, char** argv)
         CHECK(ReadFile("Assets/Scenes/scene.schema.json") == SceneSchemaToText(builtins), "Assets/Scenes/scene.schema.json is up to date (MARLE_UPDATE_GOLDEN=1 regenerates it)");
     }
 
+    // the component table in docs/scene-format.md is generated from the registry
+    {
+        ComponentRegistry builtins;
+        RegisterBuiltinComponents(builtins);
+        const std::string table = ComponentTableMarkdown(builtins);
+
+        std::string document = ReadFile("docs/scene-format.md");
+        std::string regenerated = document;
+        CHECK(ReplaceComponentTable(regenerated, table), "docs/scene-format.md has the markers around its component table");
+        if (UpdateGolden() && regenerated != document) { WriteFile("docs/scene-format.md", regenerated); document = regenerated; }
+        CHECK(document == regenerated, "the component table in docs/scene-format.md is up to date (MARLE_UPDATE_GOLDEN=1 regenerates it)");
+
+        bool everyFieldListed = true;
+        for (const ComponentInfo* info : builtins.GetComponents()) {
+            if (!Contains(table, "| `" + info->Name + "` |")) everyFieldListed = false;
+            for (const FieldInfo& field : info->Fields) if (!Contains(table, "| | `" + field.Name + "` | " + FieldTypeName(field.Type) + " |")) everyFieldListed = false;
+        }
+        CHECK(everyFieldListed, "the table has a row for every component and every field");
+
+        ComponentRegistry game;
+        struct Gate { std::string Mode = "open"; float Hold = 1.0f; };
+        game.Register<Gate>("Gate", "A gate | with a pipe.").Field(&Gate::Mode, "mode", "How it acts.").OneOf({ "open", "shut" }).Field(&Gate::Hold, "hold", "Seconds.").Range(0, 5);
+        const std::string gate = ComponentTableMarkdown(game);
+        CHECK(Contains(gate, "| `Gate` | | | | A gate \\| with a pipe. |") && Contains(gate, "| | `mode` | string | `\"open\"` | How it acts. One of: open, shut. |") && Contains(gate, "| | `hold` | float | `1.0` | Seconds. Range 0.0 to 5.0. |"), "a client's components are in the table, with pipes escaped and ranges and sets spelled out");
+
+        std::string twice = std::string("a\n") + ComponentTableBegin + "\nold\n" + ComponentTableEnd + "\nb\n";
+        CHECK(ReplaceComponentTable(twice, "T\n") && twice == std::string("a\n") + ComponentTableBegin + "\nT\n" + ComponentTableEnd + "\nb\n", "replacing the table keeps the text and the markers around it");
+        std::string none = "no markers", reversed = std::string(ComponentTableEnd) + "\n" + ComponentTableBegin, doubled = std::string(ComponentTableBegin) + ComponentTableEnd + ComponentTableBegin + ComponentTableEnd;
+        CHECK(!ReplaceComponentTable(none, "T") && none == "no markers" && !ReplaceComponentTable(reversed, "T") && !ReplaceComponentTable(doubled, "T"), "a document without the markers once each, in order, is refused and left alone");
+
+        const std::string work = "scene_tool_reference";
+        std::filesystem::remove_all(work);
+        std::filesystem::create_directories(work);
+        const std::string file = work + "/doc.md";
+        WriteFile(file, std::string("# doc\n") + ComponentTableBegin + "\nstale\n" + ComponentTableEnd + "\n");
+        ToolRun check = RunTool(builtins, { "reference", "--check", file });
+        CHECK(check.Code == 1 && Contains(check.Out, "out of date") && ReadFile(file).find("stale") != std::string::npos, "reference --check finds a stale table and changes nothing");
+        ToolRun update = RunTool(builtins, { "reference", "--update", file });
+        CHECK(update.Code == 0 && Contains(update.Out, "WROTE") && ReadFile(file) == std::string("# doc\n") + ComponentTableBegin + "\n" + table + ComponentTableEnd + "\n", "reference --update writes the table between the markers");
+        CHECK(RunTool(builtins, { "reference", "--check", file }).Code == 0 && RunTool(builtins, { "reference", "--update", file }).Out.find("already up to date") != std::string::npos, "and then it is up to date");
+        CHECK(RunTool(builtins, { "reference" }).Out == table, "reference alone prints the table");
+        WriteFile(file, "no markers here");
+        ToolRun bare = RunTool(builtins, { "reference", "--update", file });
+        CHECK(bare.Code == 1 && Contains(bare.Out, "components:begin") && ReadFile(file) == "no markers here", "a file without the markers is refused");
+        CHECK(RunTool(builtins, { "reference", "--update" }).Code == 2 && RunTool(builtins, { "reference", "--bogus", file }).Code == 2 && RunTool(builtins, { "reference", "--check", "no/such.md" }).Code == 1, "reference needs a mode and a file");
+        std::filesystem::remove_all(work);
+    }
+
     // scene schema: validating scene files
     {
         ComponentRegistry registry;
@@ -1008,6 +1047,162 @@ int main(int argc, char** argv)
         ToolRun help = RunTool(registry, { "help" });
         CHECK(help.Code == 0 && Contains(help.Out, "validate") && Contains(help.Out, "format") && Contains(help.Out, "schema") && RunTool(registry, { "--help" }).Out == help.Out, "help lists the commands");
 
+        // --json: one JSON object, version 1, same exit codes as the text
+        ToolRun jsonOk = RunTool(registry, { "validate", "--json", "Assets/Scenes/example.json" });
+        Json okDoc = Json::parse(jsonOk.Out, nullptr, false);
+        CHECK(jsonOk.Code == 0 && !okDoc.is_discarded() && okDoc["version"] == 1 && okDoc["ok"] == true && okDoc["files"].size() == 1 && okDoc["files"][0]["file"] == "Assets/Scenes/example.json" && okDoc["files"][0]["entities"] == 8 && okDoc["files"][0]["problems"].empty() && okDoc["summary"]["files"] == 1 && okDoc["summary"]["failing"] == 0, "validate --json describes a clean file");
+        ToolRun jsonBad = RunTool(registry, { "validate", dir + "mixed_errors.json", "--json" });
+        Json badDoc = Json::parse(jsonBad.Out, nullptr, false);
+        CHECK(jsonBad.Code == 1 && !badDoc.is_discarded() && badDoc["ok"] == false && badDoc["files"][0]["ok"] == false && badDoc["summary"]["failing"] == 1, "validate --json fails with exit 1 and ok false, with the flag anywhere");
+        bool problemsMatchText = !badDoc.is_discarded() && badDoc["files"][0]["problems"].size() == badDoc["summary"]["problems"].get<size_t>() && badDoc["summary"]["problems"].get<size_t>() > 0;
+        for (const Json& problem : badDoc["files"][0]["problems"])
+            if (!problem.contains("pointer") || !problem.contains("message") || problem.size() != 2 || !Contains(RunTool(registry, { "validate", dir + "mixed_errors.json" }).Out, problem["pointer"].get<std::string>() + ": " + problem["message"].get<std::string>())) problemsMatchText = false;
+        CHECK(problemsMatchText, "validate --json problems are the text's problems, as pointer and message");
+        Json unloadable = Json::parse(RunTool(registry, { "validate", "--json", dir + "bad_syntax.json" }).Out, nullptr, false);
+        CHECK(!unloadable.is_discarded() && unloadable["files"][0]["ok"] == false && !unloadable["files"][0].contains("entities"), "validate --json leaves out the counts of a file that could not load at all");
+        Json noneDoc = Json::parse(RunTool(registry, { "validate", "--json", w + "/empty" }).Out, nullptr, false);
+        CHECK(!noneDoc.is_discarded() && noneDoc["ok"] == true && noneDoc["files"].empty(), "validate --json on a directory with no scenes is ok with no files");
+        ToolRun jsonUsage = RunTool(registry, { "validate", "--json" });
+        CHECK(jsonUsage.Code == 2 && jsonUsage.Out.empty() && Contains(jsonUsage.Err, "no files given"), "a bad command line is text on stderr even with --json");
+        CHECK(RunTool(registry, { "validate", "Assets/Scenes/example.json" }).Out == "OK    Assets/Scenes/example.json: 8 entities, 15 components\n", "validate without --json is unchanged");
+
+        // diff: what a proposed scene would change, checked the way a hot reload checks it
+        {
+            const std::string world = "Assets/Scenes/world.json";
+            const std::string proposedFile = "scene_tool_diff_proposed.json";
+            std::string text = ReadFile(world);
+
+            // moving a wall changes one field, and only the wall's final position differs
+            std::string moved = text;
+            moved.replace(moved.find("[1500, 600]"), 11, "[1500, 300]");
+            WriteFile(proposedFile, moved);
+            ToolRun same = RunTool(registry, { "diff", "--base", world, "--proposed", world, "--steps", "20" });
+            CHECK(same.Code == 0 && Contains(same.Out, "the files describe the same scene") && Contains(same.Out, "(same)") && Contains(same.Out, "the final state is the same"), "diff of a scene with itself says nothing changed");
+            ToolRun edit = RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile, "--steps", "20" });
+            CHECK(edit.Code == 0 && Contains(edit.Out, "a hot reload would accept it") && Contains(edit.Out, "wall_a.Transform.position: [1500.0,600.0] -> [1500.0,300.0]") && Contains(edit.Out, "(different)"), "diff says what an edit changes in the file and that the runs differ");
+
+            Json doc = Json::parse(RunTool(registry, { "diff", "--proposed", proposedFile, "--base", world, "--steps", "20", "--json" }).Out, nullptr, false);
+            CHECK(!doc.is_discarded() && doc["version"] == 1 && doc["ok"] == true && doc["reload_accepted"] == true && doc["steps_run"] == 20 && doc["same_checksum"] == false && doc["base_checksum"] != doc["proposed_checksum"] && doc["file_changes"].size() == 1 && doc["file_changes"][0]["kind"] == "field_changed" && doc["file_changes"][0]["entity"] == "wall_a" && doc["state_changes"].size() == 1 && doc["events"]["same"] == true && doc["events"]["base"]["solid_stopped"] == 0, "diff --json gives the changes, both checksums and the event counts");
+            CHECK(doc["base_checksum"] == Json(Simulation::ChecksumText([&] { SceneLoadResult r = LoadScene(world, registry); for (int i = 0; i < 20; i++) Simulation::Step(registry, *r.Scene, InputFrame(), 1.0 / 60.0); return Simulation::Checksum(registry, *r.Scene); }())), "its base checksum is that of stepping the base 20 times with no input");
+
+            // adding and removing entities
+            std::string grown = text;
+            const size_t entities = grown.find("\"entities\"");
+            const size_t bracket = grown.find('[', entities);
+            grown.insert(bracket + 1, "{ \"name\": \"extra\", \"components\": { \"Transform\": { \"position\": [1, 2], \"rotation\": 0, \"scale\": [1, 1] } } },");
+            WriteFile(proposedFile, grown);
+            Json added = Json::parse(RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile, "--steps", "0", "--json" }).Out, nullptr, false);
+            CHECK(!added.is_discarded() && added["entities_added"] == Json::array({ "extra" }) && added["entities_removed"].empty(), "an added entity is listed");
+            Json removed = Json::parse(RunTool(registry, { "diff", "--base", proposedFile, "--proposed", world, "--steps", "0", "--json" }).Out, nullptr, false);
+            CHECK(!removed.is_discarded() && removed["entities_removed"] == Json::array({ "extra" }) && Contains(RunTool(registry, { "diff", "--base", proposedFile, "--proposed", world, "--steps", "0" }).Out, "removed extra"), "and a removed one");
+
+            // a proposal with a problem is refused as a reload would, and nothing is run
+            std::string broken = text;
+            broken.replace(broken.find("\"zoom\": 1"), 9, "\"zoom\": 9999");
+            WriteFile(proposedFile, broken);
+            ToolRun refused = RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile });
+            CHECK(refused.Code == 1 && Contains(refused.Out, "/Camera/zoom") && Contains(refused.Out, "(proposed): 1 problem") && Contains(refused.Out, "would refuse it") && !Contains(refused.Out, "checksum"), "a proposal with a problem fails with its problems and is not run");
+            Json refusedDoc = Json::parse(RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile, "--json" }).Out, nullptr, false);
+            CHECK(!refusedDoc.is_discarded() && refusedDoc["ok"] == false && refusedDoc["reload_accepted"] == false && refusedDoc["proposed_problems"].size() == 1 && refusedDoc["proposed_problems"][0]["pointer"].get<std::string>().find("zoom") != std::string::npos && refusedDoc["base_problems"].empty() && !refusedDoc.contains("base_checksum"), "the JSON lists the proposal's problems and no run");
+            ToolRun badBase = RunTool(registry, { "diff", "--base", proposedFile, "--proposed", world });
+            CHECK(badBase.Code == 1 && Contains(badBase.Out, "(base)") && Contains(badBase.Out, "base has to be clean"), "a base with problems is refused too");
+
+            CHECK(RunTool(registry, { "diff", "--base", world }).Code == 2 && RunTool(registry, { "diff" }).Code == 2 && RunTool(registry, { "diff", "--base", world, "--proposed", "no/such.json" }).Code == 2 && RunTool(registry, { "diff", "--base", world, "--proposed", world, "--steps", "x" }).Code == 2 && RunTool(registry, { "diff", "--base", world, "--proposed", world, "--wrong" }).Code == 2, "diff needs both scenes, a readable proposal and good options");
+            // --carry-over: what a reload would keep of the state the base's run built up
+            {
+                auto carryFields = [&](const std::string& proposedText, const std::string& steps) {
+                    WriteFile(proposedFile, proposedText);
+                    return Json::parse(RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile, "--steps", steps, "--carry-over", "--json" }).Out, nullptr, false);
+                };
+                auto fate = [](const Json& doc, const std::string& entity, const std::string& component, const std::string& field) -> std::string {
+                    for (const Json& item : doc["carry_over"]["fields"])
+                        if (item["entity"] == entity && item["component"] == component && item["field"] == field) return item["fate"].get<std::string>();
+                    return "";
+                };
+
+                CHECK(!Json::parse(RunTool(registry, { "diff", "--base", world, "--proposed", world, "--steps", "5", "--json" }).Out, nullptr, false).contains("carry_over"), "without --carry-over there is no carry-over report");
+
+                // a wall moved in the file: the wall is not something the run changed, everything the run built up is kept
+                auto replaceOnce = [](std::string& where, const std::string& from, const std::string& to) {
+                    const size_t at = where.find(from);
+                    CHECK(at != std::string::npos, ("(the scene has '" + from + "')").c_str());
+                    if (at != std::string::npos) where.replace(at, from.size(), to);
+                };
+                std::string wall = text;
+                replaceOnce(wall, "[1500, 600]", "[1500, 300]");
+                Json kept = carryFields(wall, "120");
+                CHECK(!kept.is_discarded() && kept["carry_over"]["steps"] == 120 && fate(kept, "satellite", "Orbit", "angle") == "kept" && fate(kept, "satellite", "Transform", "position") == "kept" && fate(kept, "spinner_0", "Transform", "rotation") == "kept" && fate(kept, "wall_a", "Transform", "position") == "", "state the run built up is kept, and a field the run did not change is not listed");
+                CHECK(kept["carry_over"]["random"] == "carried", "the random sequence is carried when the seed did not change");
+                bool allKept = true;
+                for (const Json& item : kept["carry_over"]["fields"]) allKept = allKept && item["fate"] == "kept" && item["result"] == item["running"] && item["baseline"] != item["running"];
+                CHECK(allKept && !kept["carry_over"]["fields"].empty(), "each entry has the baseline, the running value and the result, and the run did change it");
+
+                // the file changes a component the run had been moving: that whole component comes from the file
+                std::string faster = text;
+                replaceOnce(faster, "\"speed\": 2, \"angle\": 0", "\"speed\": 3, \"angle\": 0");
+                Json replaced = carryFields(faster, "120");
+                CHECK(fate(replaced, "satellite", "Orbit", "angle") == "replaced_by_file" && fate(replaced, "satellite", "Transform", "position") == "kept", "a component the file changed takes the file's value for the fields the run had moved");
+                for (const Json& item : replaced["carry_over"]["fields"]) if (item["entity"] == "satellite" && item["component"] == "Orbit" && item["field"] == "angle") CHECK(item["result"] == 0.0 && item["running"] != 0.0, "and the entry shows what was lost");
+
+                // an entity the file removes, and a seed that changes
+                std::string renamed = text;
+                replaceOnce(renamed, "\"name\": \"satellite\"", "\"name\": \"moon\"");
+                Json dropped = carryFields(renamed, "120");
+                CHECK(fate(dropped, "satellite", "Orbit", "angle") == "removed_by_file" && dropped["carry_over"]["fields"][0].contains("result"), "an entity the file removes loses its state");
+
+                std::string seeded = text;
+                replaceOnce(seeded, "\"RestartOnKey\": { \"key\": \"R\" }", "\"RestartOnKey\": { \"key\": \"R\" }, \"Random\": { \"seed\": 7 }");
+                Json reseeded = carryFields(seeded, "10");
+                CHECK(!reseeded.is_discarded() && reseeded["carry_over"]["random"] == "restarted", "the random sequence starts again when the seed changes");
+
+                // the text form
+                WriteFile(proposedFile, faster);
+                ToolRun carryText = RunTool(registry, { "diff", "--base", world, "--proposed", proposedFile, "--steps", "120", "--carry-over" });
+                CHECK(carryText.Code == 0 && Contains(carryText.Out, "would:") && Contains(carryText.Out, "keep the running value") && Contains(carryText.Out, "replace the running value with the file's") && Contains(carryText.Out, "satellite.Orbit.angle: 3.9999976 -> 0.0") && Contains(carryText.Out, "carry on the random sequence"), "the text says what is kept and what is replaced");
+                ToolRun idle = RunTool(registry, { "diff", "--base", world, "--proposed", world, "--steps", "0", "--carry-over" });
+                CHECK(idle.Code == 0 && Contains(idle.Out, "find no state built up by the run"), "with no steps there is nothing built up");
+            }
+
+            std::filesystem::remove(proposedFile);
+        }
+
+        // describe: what the registry knows about a component
+        {
+            ComponentRegistry game;
+            RegisterBuiltinComponents(game);
+            struct Door { std::string Key; int Hits = 3; glm::vec2 Pos{ 1.0f, 2.0f }; };
+            game.Register<Door>("Door", "A door.")
+                .Field(&Door::Key, "key", "The entity that opens it.").EntityReference()
+                .Field(&Door::Hits, "hits", "How many hits it takes.").Range(1, 9).Required()
+                .Field(&Door::Pos, "pos", "Where.");
+
+            ToolRun orbit = RunTool(game, { "describe", "Orbit" });
+            CHECK(orbit.Code == 0 && Contains(orbit.Out, "Orbit (behavior)") && Contains(orbit.Out, "radius: float, default 100.0, range 0.0 to 1000000.0") && Contains(orbit.Out, "target: string, default \"\", entity reference"), "describe shows a behavior with each field's type, default, range and flags");
+
+            Json doc = Json::parse(RunTool(game, { "describe", "Door", "--json" }).Out, nullptr, false);
+            CHECK(!doc.is_discarded() && doc["version"] == 1 && doc["ok"] == true && doc["name"] == "Door" && doc["behavior"] == false && doc["fields"].size() == 3, "describe --json gives a custom component's name and fields");
+            CHECK(!doc.is_discarded() && doc["fields"][0]["entity_reference"] == true && doc["fields"][0]["required"] == false && !doc["fields"][0].contains("min") && doc["fields"][1]["required"] == true && doc["fields"][1]["min"] == 1 && doc["fields"][1]["max"] == 9 && doc["fields"][1]["default"] == 3 && doc["fields"][2]["type"] == "vec2" && doc["fields"][2]["default"] == Json::array({ 1.0, 2.0 }), "its fields carry type, default, required, range and flags, in declaration order");
+            CHECK(RunTool(registry, { "describe", "Door" }).Code == 1, "a component the registry does not have is not described");
+
+            ToolRun typo = RunTool(registry, { "describe", "Colider" });
+            CHECK(typo.Code == 1 && typo.Out.empty() && Contains(typo.Err, "unknown component 'Colider' (did you mean 'Collider'?)") && Contains(typo.Err, "known components: Transform"), "an unknown component gets a did-you-mean and the list, on stderr");
+            Json typoDoc = Json::parse(RunTool(registry, { "describe", "--json", "Colider" }).Out, nullptr, false);
+            CHECK(!typoDoc.is_discarded() && typoDoc["ok"] == false && Contains(typoDoc["error"].get<std::string>(), "did you mean 'Collider'?"), "with --json it is ok false and an error on stdout");
+
+            ToolRun list = RunTool(registry, { "describe" });
+            Json listDoc = Json::parse(RunTool(registry, { "describe", "--json" }).Out, nullptr, false);
+            CHECK(list.Code == 0 && Contains(list.Out, "Orbit (behavior): ") && Contains(list.Out, "Transform: ") && !listDoc.is_discarded() && listDoc["components"].size() == registry.GetComponents().size() && listDoc["components"][0]["name"] == "Transform", "without a name it lists every component");
+
+            bool sameAsRegistry = true;
+            for (const ComponentInfo* info : registry.GetComponents()) {
+                Json one = Json::parse(RunTool(registry, { "describe", info->Name, "--json" }).Out, nullptr, false);
+                if (one.is_discarded() || one["fields"].size() != info->Fields.size() || one["behavior"] != info->IsBehavior) sameAsRegistry = false;
+                if (RunTool(registry, { "describe", info->Name }).Code != 0) sameAsRegistry = false;
+            }
+            CHECK(sameAsRegistry, "every registered component can be described, with all its fields");
+            CHECK(RunTool(registry, { "describe", "Orbit", "Spin" }).Code == 2 && RunTool(registry, { "describe", "--nope" }).Code == 2, "describe takes one component and known options only");
+        }
+
         std::filesystem::remove_all(work);
     }
 
@@ -1123,6 +1318,18 @@ int main(int argc, char** argv)
         ToolRun broken = RunProcess(tool + " validate Tests/SceneTests/fixtures/mixed_errors.json");
         CHECK(broken.Code == 1 && Contains(broken.Out, "FAIL  Tests/SceneTests/fixtures/mixed_errors.json: 14 problems"), "marle-scene validate exits 1 on a bad scene");
         CHECK(RunProcess(tool + " bogus").Code == 2 && RunProcess(tool).Code == 2, "marle-scene exits 2 on a bad command line");
+
+        // diff reads the proposed scene from stdin with -
+        {
+            std::string moved = ReadFile("Assets/Scenes/world.json");
+            const size_t at = moved.find("[1500, 600]");
+            moved.replace(at, 11, "[1500, 300]");
+            WriteFile("scene_tool_proposed.json", moved);
+            ToolRun piped = RunProcess("cat scene_tool_proposed.json | " + tool + " diff --base Assets/Scenes/world.json --proposed - --steps 5 --json");
+            Json pipedDoc = Json::parse(piped.Out, nullptr, false);
+            CHECK(piped.Code == 0 && !pipedDoc.is_discarded() && pipedDoc["proposed"] == "<stdin>" && pipedDoc["file_changes"].size() == 1, "marle-scene diff --proposed - reads the proposed scene from stdin");
+            std::filesystem::remove("scene_tool_proposed.json");
+        }
         ToolRun schema = RunProcess(tool + " schema");
         CHECK(schema.Code == 0 && schema.Out == ReadFile("Assets/Scenes/scene.schema.json"), "marle-scene schema prints the committed schema");
         CHECK(RunProcess(tool + " format --check Assets/Scenes").Code == 0 && RunProcess(tool + " schema --check Assets/Scenes/scene.schema.json").Code == 0, "marle-scene format --check and schema --check pass on the repository's scenes");
@@ -3457,7 +3664,10 @@ int main(int argc, char** argv)
             Simulation::Step(registry, *live.Scene, frame, 1.0 / 60.0);
         }
         const uint64_t liveChecksum = Simulation::Checksum(registry, *live.Scene);
-        const std::string recordingText = WriteRecording(recorder.Finish(liveChecksum)).Text;
+        InputRecording scripted = recorder.Finish(liveChecksum);
+        scripted.SceneFile = world;
+        scripted.Description = "1200 steps of scripted random input (seed 2024) on the whole world";
+        const std::string recordingText = WriteRecording(scripted).Text;
 
         // the committed copy is this run: if world.json, a behavior or the generator changes the run, this
         // fails, and MARLE_UPDATE_GOLDEN=1 rewrites it once the change is meant
@@ -3552,16 +3762,28 @@ int main(int argc, char** argv)
             text += "|";
             digest = digest * 1099511628211ull ^ Fnv1a64(text.data(), text.size());
         };
+        std::vector<StampedEvent> runEvents;
         for (int i = 0; i < steps; i++) {
             recorder.Record(frames[i]);
-            Simulation::Step(registry, *live.Scene, frames[i], 1.0 / 60.0);
+            std::vector<SimulationEvent> stepEvents;
+            Simulation::Step(registry, *live.Scene, frames[i], 1.0 / 60.0, &stepEvents);
+            for (SimulationEvent& event : stepEvents) runEvents.push_back({ i, std::move(event) });
             mixOverlaps(*live.Scene, overlapDigest);
             entered += (int)live.Scene->GetOverlaps().Entered.size();
             left += (int)live.Scene->GetOverlaps().Left.size();
             if (std::find(legEnd.begin(), legEnd.end(), i + 1) != legEnd.end()) atLegEnd.push_back(live.Scene->FindEntity("player").Get<Transform>().Position);
         }
         const uint64_t checksum = Simulation::Checksum(registry, *live.Scene);
-        const std::string recordingText = WriteRecording(recorder.Finish(checksum)).Text;
+        InputRecording made = recorder.Finish(checksum);
+        made.SceneFile = world;
+        made.Description = "into the pillar, past it, through the trigger zone, along wall_b and into the border's corner";
+        bool firstStop = true;
+        for (const StampedEvent& event : runEvents) {   // what the route must keep doing: the first stop, and entering and leaving the zone
+            if (event.What.What == SimulationEvent::Kind::SolidStopped && !firstStop) continue;
+            firstStop = firstStop && event.What.What != SimulationEvent::Kind::SolidStopped;
+            made.ExpectedEvents.push_back({ (unsigned)event.Step, SimulationEventKindName(event.What.What), event.What.Entity, event.What.Other, event.What.Axis });
+        }
+        const std::string recordingText = WriteRecording(made).Text;
 
         // it ran into what it should have
         auto at = [&](size_t leg, glm::vec2 expected) { return fabsf(atLegEnd[leg].x - expected.x) < 0.1f && fabsf(atLegEnd[leg].y - expected.y) < 0.1f; };
@@ -3632,6 +3854,139 @@ int main(int argc, char** argv)
         // the tool agrees, and says what the route touched
         std::ostringstream out, err;
         CHECK(RunSceneTool({ "simulate", world, "--recording", golden, "--expect", Simulation::ChecksumText(read.Recording.Checksum) }, registry, out, err) == 0 && out.str().find("zone > player: steps 246 to 316") != std::string::npos && out.str().find("entered once") != std::string::npos, "marle-scene simulate reaches the golden checksum and reports the zone");
+
+        // simulate --json: the same run as the text, as one object
+        {
+            ToolRun text = RunTool(registry, { "simulate", world, "--recording", golden });
+            ToolRun json = RunTool(registry, { "simulate", "--json", world, "--recording", golden });
+            Json doc = Json::parse(json.Out, nullptr, false);
+            CHECK(json.Code == 0 && !doc.is_discarded() && doc["version"] == 1 && doc["ok"] == true && doc["steps_run"] == steps && doc["seed"] == 1 && doc["input"]["recording"] == golden && doc["input"]["steps"] == steps, "simulate --json reports the run and its input");
+            CHECK(!doc.is_discarded() && doc["checksum"] == Simulation::ChecksumText(read.Recording.Checksum) && doc["matches_recording"] == true && doc["recording_checksum"] == doc["checksum"] && Contains(text.Out, "checksum " + doc["checksum"].get<std::string>()), "its checksum is the text's and the recording's");
+            CHECK(!doc.is_discarded() && doc["overlaps"].size() == 1 && doc["overlaps"][0]["trigger"] == "zone" && doc["overlaps"][0]["other"] == "player" && doc["overlaps"][0]["first_step"] == 246 && doc["overlaps"][0]["last_step"] == 316 && doc["overlaps"][0]["steps_touching"] == 71 && doc["overlaps"][0]["times_entered"] == 1, "its overlaps carry the trigger summary");
+            bool fieldsOk = !doc.is_discarded() && !doc["changes"].empty();
+            for (const Json& change : doc["changes"])
+                if (change["kind"] == "field_changed" && !Contains(text.Out, change["entity"].get<std::string>() + "." + change["component"].get<std::string>() + "." + change["field"].get<std::string>() + ": ")) fieldsOk = false;
+            CHECK(fieldsOk, "every field change in the JSON is a line of the text");
+
+            Json wrong = Json::parse(RunTool(registry, { "simulate", world, "--recording", golden, "--expect", "0000000000000000", "--json" }).Out, nullptr, false);
+            CHECK(RunTool(registry, { "simulate", world, "--expect", "0000000000000000", "--json" }).Code == 1 && !wrong.is_discarded() && wrong["ok"] == false && wrong["matches_expected"] == false && wrong["expected_checksum"] == "0000000000000000", "a wrong --expect is ok false and exit 1 in the JSON");
+
+            ToolRun noRecording = RunTool(registry, { "simulate", world, "--steps", "5", "--json" });
+            Json plain = Json::parse(noRecording.Out, nullptr, false);
+            CHECK(noRecording.Code == 0 && !plain.is_discarded() && plain["input"].is_null() && plain["steps_run"] == 5 && !plain.contains("matches_recording"), "without a recording the input is null and nothing is compared");
+
+            ToolRun missing = RunTool(registry, { "simulate", world, "--recording", "no/such/file.json", "--json" });
+            Json missingDoc = Json::parse(missing.Out, nullptr, false);
+            CHECK(missing.Code == 1 && !missingDoc.is_discarded() && missingDoc["ok"] == false && missingDoc["error"] == "cannot open the file", "an unreadable recording is ok false with an error");
+
+            ToolRun badScene = RunTool(registry, { "simulate", "--json", "Tests/SceneTests/fixtures/mixed_errors.json" });
+            Json badDoc = Json::parse(badScene.Out, nullptr, false);
+            CHECK(badScene.Code == 1 && !badDoc.is_discarded() && badDoc["ok"] == false && !badDoc["scene_problems"].empty() && badDoc["scene_problems"][0].contains("pointer") && !badDoc.contains("checksum"), "a scene with problems is refused with its problems and no checksum");
+
+            CHECK(RunTool(registry, { "simulate", world, "--steps", "5", "--json", "--bogus" }).Code == 2, "a bad option is still a usage error with --json");
+            CHECK(Contains(text.Out, "SIM   ") && !Contains(text.Out, "\"version\""), "simulate without --json is still the text");
+
+            // --report: what happened, step by step, from the engine and not from the behaviors
+            ToolRun toStdout = RunTool(registry, { "simulate", world, "--recording", golden, "--report", "-" });
+            Json events = Json::parse(toStdout.Out, nullptr, false);
+            size_t stops = 0, entered = 0, left = 0;
+            bool shaped = !events.is_discarded() && events.is_array();
+            long long lastStep = -1;
+            if (shaped) for (const Json& event : events) {
+                shaped = shaped && event["step"].get<long long>() >= lastStep && event.contains("entity");
+                lastStep = event["step"].get<long long>();
+                if (event["kind"] == "solid_stopped") { stops++; shaped = shaped && !event.contains("other") && (event["axis"] == "x" || event["axis"] == "y" || event["axis"] == "xy"); }
+                else if (event["kind"] == "trigger_entered") { entered++; shaped = shaped && event["entity"] == "zone" && event["other"] == "player" && event["step"] == 246; }
+                else if (event["kind"] == "trigger_left") { left++; shaped = shaped && event["entity"] == "zone" && event["other"] == "player" && event["step"] == 317; }
+                else shaped = false;
+            }
+            CHECK(toStdout.Code == 0 && shaped && entered == 1 && left == 1 && stops > 0 && !Contains(toStdout.Out, "SIM   "), "--report - prints only the events, in step order: the player stopped by solids, and entering and leaving the zone");
+
+            // the events say what the player ran into: the pillar first (x), and the border's corner at the end
+            bool firstStopIsX = false;
+            for (const Json& event : events) if (event["kind"] == "solid_stopped") { firstStopIsX = event["entity"] == "player" && event["step"] == 52 && event["axis"] == "x"; break; }
+            CHECK(firstStopIsX, "the first solid stop is the player's, on x");
+
+            const std::string reportFile = "scene_tool_report.json";
+            std::filesystem::remove(reportFile);
+            ToolRun toFile = RunTool(registry, { "simulate", world, "--recording", golden, "--report", reportFile });
+            CHECK(toFile.Code == 0 && Contains(toFile.Out, "SIM   ") && Json::parse(ReadFile(reportFile), nullptr, false) == events, "--report <file> writes the same events and leaves the text output alone");
+            std::filesystem::remove(reportFile);
+
+            Json withEvents = Json::parse(RunTool(registry, { "simulate", world, "--recording", golden, "--report", "-", "--json" }).Out, nullptr, false);
+            CHECK(!withEvents.is_discarded() && withEvents["events"] == events && withEvents["checksum"] == doc["checksum"], "with --json the events are a field of the object, and the checksum is the same as without them");
+            CHECK(!Json::parse(RunTool(registry, { "simulate", world, "--recording", golden, "--json" }).Out, nullptr, false).contains("events"), "and there are none without --report");
+
+            ToolRun cannotWrite = RunTool(registry, { "simulate", world, "--steps", "2", "--report", "no/such/dir/report.json" });
+            CHECK(cannotWrite.Code == 1 && Contains(cannotWrite.Out, "cannot write the report"), "a report that cannot be written is a failure");
+
+            // collecting events changes nothing: same checksum, stepping by hand with and without a sink
+            {
+                SceneLoadResult a = LoadScene(world, registry), b = LoadScene(world, registry);
+                std::vector<SimulationEvent> sink;
+                for (int i = 0; i < 400; i++) {
+                    Simulation::Step(registry, *a.Scene, read.Recording.Frames[i], 1.0 / 60.0);
+                    Simulation::Step(registry, *b.Scene, read.Recording.Frames[i], 1.0 / 60.0, &sink);
+                }
+                CHECK(Simulation::Checksum(registry, *a.Scene) == Simulation::Checksum(registry, *b.Scene) && !sink.empty(), "collecting events does not change the run");
+                CHECK(std::string(SimulationEventKindName(SimulationEvent::Kind::TriggerEntered)) == "trigger_entered" && std::string(SimulationEventKindName(SimulationEvent::Kind::SolidStopped)) == "solid_stopped", "event kinds have their names");
+            }
+
+            // a golden recording says what it stands for, and simulate checks it
+            {
+                CHECK(read.Recording.SceneFile == world && !read.Recording.Description.empty() && read.Recording.ExpectedEvents.size() == 3, "the committed route carries its scene file, description and three expected events");
+                CHECK(Contains(text.Out, "recording: into the pillar") && Contains(text.Out, "OK    the 3 expected events all happened"), "simulate prints the description and that the expected events happened");
+                CHECK(!doc.is_discarded() && doc["matches_events"] == true && doc["expected_events"]["count"] == 3 && doc["expected_events"]["missing"].empty() && doc["input"]["scene_file"] == world && doc["input"].contains("description"), "and so does its JSON");
+
+                // an event the run does not have: one step off, as if a change moved the zone
+                InputRecording off = read.Recording;
+                off.ExpectedEvents[1].Step += 1;
+                const std::string offFile = "scene_tool_events_off.recording.json";
+                WriteFile(offFile, WriteRecording(off).Text);
+                ToolRun missingRun = RunTool(registry, { "simulate", world, "--recording", offFile });
+                CHECK(missingRun.Code == 1 && Contains(missingRun.Out, "DIFF  expected event did not happen: step 247 trigger_entered zone > player") && Contains(missingRun.Out, "OK    matches the checksum in the recording") && !Contains(missingRun.Out, "step 52 solid_stopped player on x\n"), "a missing event fails the run, says which, and leaves the checksum check on its own");
+                Json missingJson = Json::parse(RunTool(registry, { "simulate", world, "--recording", offFile, "--json" }).Out, nullptr, false);
+                CHECK(!missingJson.is_discarded() && missingJson["ok"] == false && missingJson["matches_events"] == false && missingJson["matches_recording"] == true && missingJson["expected_events"]["missing"].size() == 1 && missingJson["expected_events"]["missing"][0]["step"] == 247, "the JSON lists the missing events");
+                CHECK(RunTool(registry, { "simulate", world, "--recording", offFile, "--steps", "300" }).Code == 0, "events are only checked when the whole run is played, like the checksum");
+                std::filesystem::remove(offFile);
+
+                // they are looked for in order, and extra events in between are fine
+                const std::vector<StampedEvent> run = { { 5, { SimulationEvent::Kind::SolidStopped, "p", "", "x" } }, { 7, { SimulationEvent::Kind::TriggerEntered, "z", "p", "" } }, { 9, { SimulationEvent::Kind::TriggerLeft, "z", "p", "" } } };
+                CHECK(MissingExpectedEvents({ { 7, "trigger_entered", "z", "p", "" }, { 9, "trigger_left", "z", "p", "" } }, run).empty(), "expected events may skip events of the run");
+                std::vector<ExpectedEvent> wrongOrder = MissingExpectedEvents({ { 9, "trigger_left", "z", "p", "" }, { 7, "trigger_entered", "z", "p", "" } }, run);
+                CHECK(wrongOrder.size() == 1 && wrongOrder[0].Step == 7 && ExpectedEventText(wrongOrder[0]) == "step 7 trigger_entered z > p", "but must come in the order listed");
+                CHECK(MissingExpectedEvents({ { 5, "solid_stopped", "p", "", "y" } }, run).size() == 1 && MissingExpectedEvents({ { 5, "solid_stopped", "p", "", "x" } }, run).empty(), "the axis has to match too");
+            }
+
+            // reading and writing the manifest
+            {
+                InputRecording made;
+                made.SceneName = "m"; made.SceneHash = 1; made.Frames.resize(10);
+                made.SceneFile = "Assets/Scenes/m.json"; made.Description = "walks \"left\"";
+                made.ExpectedEvents = { { 2, "solid_stopped", "p", "", "xy" }, { 4, "trigger_entered", "z", "p", "" } };
+                RecordingWriteResult written = WriteRecording(made);
+                RecordingReadResult back = ReadRecording(written.Text);
+                CHECK(written.Ok() && back.Ok() && back.Recording.SceneFile == made.SceneFile && back.Recording.Description == made.Description && back.Recording.ExpectedEvents.size() == 2 && back.Recording.ExpectedEvents[0].Axis == "xy" && WriteRecording(back.Recording).Text == written.Text, "scene file, description and expected events survive being written and read");
+
+                InputRecording plain = made;
+                plain.SceneFile.clear(); plain.Description.clear(); plain.ExpectedEvents.clear();
+                CHECK(!Contains(WriteRecording(plain).Text, "sceneFile") && !Contains(WriteRecording(plain).Text, "expectedEvents"), "without them none of the keys are written");
+
+                InputRecording late = made;
+                late.ExpectedEvents[1].Step = 10;
+                late.ExpectedEvents[0].Kind = "exploded";
+                RecordingWriteResult refused = WriteRecording(late);
+                CHECK(!refused.Ok() && refused.Problems.size() == 2, "an event past the end or of an unknown kind cannot be written");
+
+                auto readWith = [&](const std::string& events) { return ReadRecording("{ \"version\": 1, \"scene\": \"m\", \"sceneHash\": \"0000000000000001\", \"seed\": 1, \"stepsPerSecond\": 60, \"steps\": 10, \"expectedEvents\": " + events + ", \"changes\": [] }"); };
+                auto hasProblem = [&](const RecordingReadResult& r, const std::string& part) { for (const std::string& p : r.Problems) if (Contains(p, part)) return true; return false; };
+                CHECK(hasProblem(readWith("{}"), "/expectedEvents: expected an array") && hasProblem(readWith("[3]"), "/expectedEvents/0: an event must be an object"), "expectedEvents has to be an array of objects");
+                CHECK(hasProblem(readWith("[{ \"step\": 3, \"kind\": \"trigger_entred\", \"entity\": \"z\", \"other\": \"p\" }]"), "(did you mean 'trigger_entered'?)"), "a misspelled kind gets a suggestion");
+                CHECK(hasProblem(readWith("[{ \"step\": 30, \"kind\": \"trigger_left\", \"entity\": \"z\", \"other\": \"p\" }]"), "outside the recording") && hasProblem(readWith("[{ \"step\": 4, \"kind\": \"trigger_left\", \"entity\": \"z\", \"other\": \"p\" }, { \"step\": 3, \"kind\": \"trigger_left\", \"entity\": \"z\", \"other\": \"p\" }]"), "step order"), "steps must be inside the recording and in order");
+                CHECK(hasProblem(readWith("[{ \"step\": 3, \"kind\": \"solid_stopped\", \"entity\": \"p\" }]"), "has an axis") && hasProblem(readWith("[{ \"step\": 3, \"kind\": \"trigger_left\", \"entity\": \"z\" }]"), "has an 'other' entity") && hasProblem(readWith("[{ \"step\": 3, \"kind\": \"trigger_left\", \"entity\": \"z\", \"other\": \"p\", \"colour\": 1 }]"), "unknown key 'colour'"), "each kind has the fields it needs, and no others");
+                CHECK(readWith("[]").Ok() && ReadRecording("{ \"version\": 1, \"scene\": \"m\", \"sceneHash\": \"0000000000000001\", \"seed\": 1, \"stepsPerSecond\": 60, \"steps\": 0, \"description\": \"\", \"changes\": [] }").Problems.size() == 1, "an empty list is fine, an empty description is not");
+            }
+        }
 
         // hot reload: the file moves a wall while the player is in the zone. The player (and everything the file
         // did not change) carries on, the wall is the file's, and the overlap is worked out again
