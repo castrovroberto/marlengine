@@ -340,6 +340,8 @@ Exit status: `0` everything is fine, `1` problems were found (or, with `--check`
 | `trigger_left` | `entity` is a trigger and `other` stopped touching it this step. The stretch between the two is the time it was inside (a trigger that keeps touching is not an event on every step). |
 | `solid_stopped` | `entity` moved and a solid collider or solid tile cut the move short on `axis` (`"x"`, `"y"` or `"xy"`). It repeats on every step the entity keeps pushing against the wall. |
 
+A recording can list events it expects (`expectedEvents`, see `docs/input-recording.md`); `simulate --recording` then checks them.
+
 Not events yet: a behavior changing its own state, and a target being reached; neither has a definition in the engine.
 
 #### JSON output

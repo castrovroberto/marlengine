@@ -39,6 +39,9 @@ JSON, with comments allowed when reading. Unknown keys are errors.
 | `stepsPerSecond` | Required, 1 to 1000. The fixed step is `1 / stepsPerSecond` seconds. The engine runs at 60. |
 | `steps` | Required, 0 to 1,000,000. How many fixed steps were recorded. |
 | `checksum` | Optional, 16 hex digits. The scene's checksum after the last step; a replay compares its own to it. |
+| `sceneFile` | Optional. The path of the scene file the recording was made on, so a reader knows what it stands for. Not used to play it (the hash is). |
+| `description` | Optional. What the route does, in a sentence. |
+| `expectedEvents` | Optional. Events the run must produce, in step order (see "Expected events"). |
 | `changes` | Required. The steps where the input changed, in order, once each. |
 
 **Changes.** A step is listed only when something about its input differs from the step before; every step not listed holds the same keys down and has nothing newly pressed and no scroll. A change has `step` and any of:
@@ -49,6 +52,22 @@ JSON, with comments allowed when reading. Unknown keys are errors.
 - `scroll`: the wheel movement in this step.
 
 Keys are named as in scene files (`W`, `Space`, `LeftShift`, ... see the key names in `docs/scene-format.md`), in the order that list has them. A key cannot go down while it is down, go up while it is not, be listed twice, or go down and up in one step, and a change that changes nothing is an error. This describes every input frame exactly.
+
+## Expected events
+
+A checksum says that a run changed, not why. A golden recording can also list the events the run must produce (`Simulation` events, the ones `marle-scene simulate --report` prints; kinds and fields are in `docs/scene-format.md`), so a change that breaks the route shows up as "the player no longer enters the zone at step 246" and not only as a different checksum:
+
+```jsonc
+"expectedEvents": [
+  { "step": 52,  "kind": "solid_stopped",   "entity": "player", "axis": "x" },
+  { "step": 246, "kind": "trigger_entered", "entity": "zone", "other": "player" },
+  { "step": 317, "kind": "trigger_left",    "entity": "zone", "other": "player" }
+]
+```
+
+Every listed event must appear in the run with exactly these fields, in the order listed; the run may have other events between them, so list only what the route is about. `solid_stopped` has an `axis` (`"x"`, `"y"` or `"xy"`) and no `other`; the trigger kinds have `other` and no axis. Steps are inside the recording and not decreasing.
+
+`marle-scene simulate --recording` checks them when the whole recording is played with its own seed (as it does the checksum): it prints which expected events did not happen and exits 1; with `--json` the object has `expected_events` (`count`, `missing`) and `matches_events`. The checksum and the events are separate checks, so when a checksum changes, the events tell you whether the route still does what it was for. The Sandbox does not record or check them; add them to a recording by hand or from `simulate --report`, and keep `sceneFile` and `description` with them.
 
 ## Starting point
 

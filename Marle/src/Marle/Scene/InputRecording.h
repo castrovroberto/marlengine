@@ -4,6 +4,7 @@
 #include "Marle/InputFrame.h"
 #include "ComponentRegistry.h"
 #include "Scene.h"
+#include "Simulation.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -13,6 +14,21 @@ namespace Marle {
     // The input of a run, one InputFrame per fixed step, for playing it back (ADR-0002). Replaying a
     // recording on the scene it was made for (same text, so same seed) gives the same run, which the
     // checksum at its end can prove. A recording starts from the scene as it is loaded from its file.
+    // An event a run is expected to produce (see SimulationEvent): the same fields, with the kind by name
+    struct ExpectedEvent {
+        unsigned Step = 0;
+        std::string Kind;       // SimulationEventKindName
+        std::string Entity;
+        std::string Other;      // empty for a solid stop
+        std::string Axis;       // "x", "y" or "xy" for a solid stop, else empty
+    };
+
+    // An event of a real run, with the step it happened in (steps count from 0)
+    struct StampedEvent {
+        long long Step = 0;
+        SimulationEvent What;
+    };
+
     struct InputRecording {
         std::string SceneName;
         uint64_t SceneHash = 0;         // of the scene file's text (SceneLoadResult::TextHash)
@@ -21,6 +37,11 @@ namespace Marle {
         bool HasChecksum = false;
         uint64_t Checksum = 0;          // of the scene after the last step (Simulation::Checksum)
         std::vector<InputFrame> Frames; // one per step
+
+        // Optional, for whoever reads a golden recording to see what it stands for (none are used to play it)
+        std::string SceneFile;                      // the path of the scene file it was made on
+        std::string Description;                    // what the route does
+        std::vector<ExpectedEvent> ExpectedEvents;  // events the run must produce, in order (MissingExpectedEvents)
 
         unsigned GetStepCount() const { return (unsigned)Frames.size(); }
     };
@@ -38,6 +59,8 @@ namespace Marle {
     //
     //   { "version": 1, "scene": "...", "sceneHash": "16 hex digits", "seed": 1, "stepsPerSecond": 60,
     //     "steps": 600, "checksum": "16 hex digits",
+    //     ["sceneFile": "...", "description": "...",
+    //      "expectedEvents": [ { "step": 246, "kind": "trigger_entered", "entity": "zone", "other": "player" }, ... ],]
     //     "changes": [ { "step": 0, "down": ["W"], "pressed": ["W"] }, { "step": 12, "up": ["W"] }, ... ] }
     //
     // A step is listed only if something changed. `down` and `up` are the keys that went down or up since
@@ -57,6 +80,14 @@ namespace Marle {
     // types, key names that are not keys (with a suggestion), steps out of order or past the end, a key that
     // goes down while it is down or up while it is not. A recording with problems must not be replayed.
     EXPORT RecordingReadResult ReadRecording(const std::string& text);
+
+    // The expected events that the events of a run do not contain. Each expected event must appear in the
+    // run (same step, kind, entity, other and axis), and in the order listed; the run may have more events
+    // between them. An empty result means the run did what the recording says it should.
+    EXPORT std::vector<ExpectedEvent> MissingExpectedEvents(const std::vector<ExpectedEvent>& expected, const std::vector<StampedEvent>& run);
+
+    // An expected event as one line of text: "step 246 trigger_entered zone > player"
+    EXPORT std::string ExpectedEventText(const ExpectedEvent& event);
 
     // Why a recording cannot be replayed on this scene, or an empty string if it can. A recording made on a
     // different version of the scene (a different hash of its text) is refused, since the same input would

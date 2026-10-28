@@ -6,6 +6,8 @@
   "stepsPerSecond": 60,
   "steps": 1200,
   "checksum": "e894bb11b48e8f1e",
+  "sceneFile": "Assets/Scenes/world.json",
+  "description": "1200 steps of scripted random input (seed 2024) on the whole world",
   "changes": [
     { "step": 0, "down": ["D", "W"] },
     { "step": 1, "down": ["Q", "Right"], "scroll": -1 },

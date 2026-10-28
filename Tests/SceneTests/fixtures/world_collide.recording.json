@@ -6,6 +6,13 @@
   "stepsPerSecond": 60,
   "steps": 890,
   "checksum": "831d51694e824a58",
+  "sceneFile": "Assets/Scenes/world.json",
+  "description": "into the pillar, past it, through the trigger zone, along wall_b and into the border's corner",
+  "expectedEvents": [
+    { "step": 52, "kind": "solid_stopped", "entity": "player", "axis": "x" },
+    { "step": 246, "kind": "trigger_entered", "entity": "zone", "other": "player" },
+    { "step": 317, "kind": "trigger_left", "entity": "zone", "other": "player" }
+  ],
   "changes": [
     { "step": 0, "down": ["A"] },
     { "step": 100, "down": ["W"], "up": ["A"] },

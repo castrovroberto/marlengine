@@ -36,6 +36,10 @@ namespace Marle {
             return out + "]";
         }
 
+        const std::vector<std::string> EventKinds = { "trigger_entered", "trigger_left", "solid_stopped" };
+
+        bool IsEventKind(const std::string& kind) { return std::find(EventKinds.begin(), EventKinds.end(), kind) != EventKinds.end(); }
+
         bool ParseHex16(const std::string& text, uint64_t& value)
         {
             if (text.size() != 16) return false;
@@ -70,6 +74,11 @@ namespace Marle {
         try { sceneName = Json(recording.SceneName).dump(); }
         catch (const Json::exception&) { problem("scene", "the scene name is not valid UTF-8"); }
 
+        auto textOf = [&](const std::string& value, const std::string& where) {
+            try { return Json(value).dump(); }
+            catch (const Json::exception&) { problem(where, "the text is not valid UTF-8"); return std::string("\"\""); }
+        };
+
         std::vector<std::string> entries;
         std::bitset<MaxKeys> previous;
         for (unsigned step = 0; step < recording.Frames.size(); step++) {
@@ -98,6 +107,22 @@ namespace Marle {
         text += "  \"stepsPerSecond\": " + std::to_string(recording.StepsPerSecond) + ",\n";
         text += "  \"steps\": " + std::to_string(recording.GetStepCount()) + ",\n";
         if (recording.HasChecksum) text += "  \"checksum\": \"" + Simulation::ChecksumText(recording.Checksum) + "\",\n";
+        if (!recording.SceneFile.empty()) text += "  \"sceneFile\": " + textOf(recording.SceneFile, "sceneFile") + ",\n";
+        if (!recording.Description.empty()) text += "  \"description\": " + textOf(recording.Description, "description") + ",\n";
+        if (!recording.ExpectedEvents.empty()) {
+            text += "  \"expectedEvents\": [";
+            for (size_t i = 0; i < recording.ExpectedEvents.size(); i++) {
+                const ExpectedEvent& event = recording.ExpectedEvents[i];
+                if (event.Step >= recording.GetStepCount()) problem("expectedEvents/" + std::to_string(i), "the step is past the end of the recording");
+                if (!IsEventKind(event.Kind)) problem("expectedEvents/" + std::to_string(i), "'" + event.Kind + "' is not an event kind");
+                if (event.Entity.empty()) problem("expectedEvents/" + std::to_string(i), "the event has no entity");
+                std::string line = "{ \"step\": " + std::to_string(event.Step) + ", \"kind\": " + textOf(event.Kind, "expectedEvents/kind") + ", \"entity\": " + textOf(event.Entity, "expectedEvents/entity");
+                if (!event.Other.empty()) line += ", \"other\": " + textOf(event.Other, "expectedEvents/other");
+                if (!event.Axis.empty()) line += ", \"axis\": " + textOf(event.Axis, "expectedEvents/axis");
+                text += (i ? ",\n    " : "\n    ") + line + " }";
+            }
+            text += "\n  ],\n";
+        }
         text += "  \"changes\": [";
         for (size_t i = 0; i < entries.size(); i++) text += (i ? ",\n" : "\n") + entries[i];
         text += entries.empty() ? "]\n}\n" : "\n  ]\n}\n";
@@ -123,7 +148,7 @@ namespace Marle {
         }
         if (!root.is_object()) { problem("", std::string("the top level must be an object, got ") + detail::JsonTypeName(root)); return result; }
 
-        const std::vector<std::string> topKeys = { "version", "scene", "sceneHash", "seed", "stepsPerSecond", "steps", "checksum", "changes" };
+        const std::vector<std::string> topKeys = { "version", "scene", "sceneHash", "seed", "stepsPerSecond", "steps", "checksum", "sceneFile", "description", "expectedEvents", "changes" };
         for (auto it = root.begin(); it != root.end(); ++it) {
             if (std::find(topKeys.begin(), topKeys.end(), it.key()) != topKeys.end()) continue;
             std::string hint = detail::SuggestionFor(it.key(), topKeys);
@@ -159,6 +184,57 @@ namespace Marle {
         if (root.contains("checksum")) {
             if (!root["checksum"].is_string() || !ParseHex16(root["checksum"].get<std::string>(), recording.Checksum)) problem("/checksum", "expected 16 lower-case hex digits");
             else recording.HasChecksum = true;
+        }
+
+        for (const char* key : { "sceneFile", "description" }) {
+            if (!root.contains(key)) continue;
+            if (!root[key].is_string() || root[key].get<std::string>().empty()) problem(std::string("/") + key, "expected a non-empty string");
+            else (std::string(key) == "sceneFile" ? recording.SceneFile : recording.Description) = root[key].get<std::string>();
+        }
+
+        if (root.contains("expectedEvents")) {
+            const Json& list = root["expectedEvents"];
+            if (!list.is_array()) problem("/expectedEvents", std::string("expected an array, got ") + detail::JsonTypeName(list));
+            else {
+                const std::vector<std::string> eventKeys = { "step", "kind", "entity", "other", "axis" };
+                long long lastStep = 0;
+                for (size_t i = 0; i < list.size(); i++) {
+                    const std::string at = "/expectedEvents/" + std::to_string(i);
+                    const Json& item = list[i];
+                    if (!item.is_object()) { problem(at, std::string("an event must be an object, got ") + detail::JsonTypeName(item)); continue; }
+                    for (auto it = item.begin(); it != item.end(); ++it)
+                        if (std::find(eventKeys.begin(), eventKeys.end(), it.key()) == eventKeys.end()) {
+                            std::string hint = detail::SuggestionFor(it.key(), eventKeys);
+                            problem(at + "/" + it.key(), "unknown key '" + it.key() + "'" + (hint.empty() ? "" : " (" + hint + ")") + "; valid keys: " + detail::Join(eventKeys));
+                        }
+
+                    ExpectedEvent event;
+                    bool ok = true;
+                    if (!item.contains("step") || !item["step"].is_number_integer()) { problem(at + "/step", "expected an integer step"); ok = false; }
+                    else {
+                        long long step = item["step"].get<long long>();
+                        if (haveSteps && (step < 0 || step >= steps)) { problem(at + "/step", "step " + std::to_string(step) + " is outside the recording (0 to " + std::to_string(steps - 1) + ")"); ok = false; }
+                        else if (step < lastStep) { problem(at + "/step", "step " + std::to_string(step) + " is before the event above it; expected events are in step order"); ok = false; }
+                        else { event.Step = (unsigned)std::max(step, 0ll); lastStep = step; }
+                    }
+                    if (!item.contains("kind") || !item["kind"].is_string()) { problem(at + "/kind", "expected an event kind: " + detail::Join(EventKinds)); ok = false; }
+                    else if (!IsEventKind(item["kind"].get<std::string>())) {
+                        std::string hint = detail::SuggestionFor(item["kind"].get<std::string>(), EventKinds);
+                        problem(at + "/kind", "'" + item["kind"].get<std::string>() + "' is not an event kind" + (hint.empty() ? "" : " (" + hint + ")") + "; the kinds are " + detail::Join(EventKinds));
+                        ok = false;
+                    } else event.Kind = item["kind"].get<std::string>();
+                    if (!item.contains("entity") || !item["entity"].is_string() || item["entity"].get<std::string>().empty()) { problem(at + "/entity", "expected the name of an entity"); ok = false; }
+                    else event.Entity = item["entity"].get<std::string>();
+                    for (const char* key : { "other", "axis" }) {
+                        if (!item.contains(key)) continue;
+                        if (!item[key].is_string() || item[key].get<std::string>().empty()) { problem(at + "/" + key, "expected a non-empty string"); ok = false; }
+                        else (std::string(key) == "other" ? event.Other : event.Axis) = item[key].get<std::string>();
+                    }
+                    if (ok && event.Kind == "solid_stopped" && (!event.Other.empty() || (event.Axis != "x" && event.Axis != "y" && event.Axis != "xy"))) { problem(at, "a solid_stopped event has an axis (\"x\", \"y\" or \"xy\") and no 'other'"); ok = false; }
+                    if (ok && event.Kind != "solid_stopped" && (event.Other.empty() || !event.Axis.empty())) { problem(at, "a " + event.Kind + " event has an 'other' entity and no axis"); ok = false; }
+                    if (ok) recording.ExpectedEvents.push_back(std::move(event));
+                }
+            }
         }
 
         if (!root.contains("changes")) { problem("", "missing required key 'changes'"); return result; }
@@ -240,6 +316,28 @@ namespace Marle {
         for (long long s = nextStep; s < steps; s++) recording.Frames[(size_t)s].Down = down;
 
         return result;
+    }
+
+    std::string ExpectedEventText(const ExpectedEvent& event)
+    {
+        return "step " + std::to_string(event.Step) + " " + event.Kind + " " + event.Entity + (event.Other.empty() ? "" : " > " + event.Other) + (event.Axis.empty() ? "" : " on " + event.Axis);
+    }
+
+    std::vector<ExpectedEvent> MissingExpectedEvents(const std::vector<ExpectedEvent>& expected, const std::vector<StampedEvent>& run)
+    {
+        std::vector<ExpectedEvent> missing;
+        size_t from = 0;
+        for (const ExpectedEvent& want : expected) {
+            size_t at = from;
+            while (at < run.size()) {
+                const StampedEvent& got = run[at];
+                if (got.Step == (long long)want.Step && want.Kind == SimulationEventKindName(got.What.What) && want.Entity == got.What.Entity && want.Other == got.What.Other && want.Axis == got.What.Axis) break;
+                at++;
+            }
+            if (at < run.size()) from = at + 1;
+            else missing.push_back(want);   // a miss does not move on, so what follows is still looked for after the last match
+        }
+        return missing;
     }
 
     std::string RecordingMismatch(const InputRecording& recording, const std::string& sceneName, uint64_t sceneHash, int seed, int stepsPerSecond)

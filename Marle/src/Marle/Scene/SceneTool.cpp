@@ -471,10 +471,15 @@ namespace Marle {
             if (steps < 0) steps = hasRecording ? recorded : 600;
             const double dt = 1.0 / (hasRecording ? (double)recording.StepsPerSecond : 60.0);
 
+            // A recording that lists events is checked against them when the whole run is played with its own seed
+            // (as its checksum is), so the events are collected then too
+            const bool eventsChecked = hasRecording && !recording.ExpectedEvents.empty() && steps == recorded && !hasSeed;
+            const bool collectEvents = !reportFile.empty() || eventsChecked;
+
             // Which triggers touched what, in the order the pairs first touched; steps count from 0, like a recording's
             struct Touch { Overlap Pair; long long First = 0, Last = 0, Steps = 0, Entered = 0; };
             std::vector<Touch> touches;
-            struct Event { long long Step; SimulationEvent What; };
+            using Event = StampedEvent;
             std::vector<Event> events;
             std::vector<SimulationEvent> stepEvents;
 
@@ -482,7 +487,7 @@ namespace Marle {
             for (long long step = 0; step < steps; step++) {
                 static const InputFrame none;
                 stepEvents.clear();
-                Simulation::Step(registry, scene, step < recorded ? recording.Frames[(size_t)step] : none, dt, reportFile.empty() ? nullptr : &stepEvents);
+                Simulation::Step(registry, scene, step < recorded ? recording.Frames[(size_t)step] : none, dt, collectEvents ? &stepEvents : nullptr);
                 scene.ClearRestartRequest();
                 for (SimulationEvent& event : stepEvents) events.push_back({ step, std::move(event) });
 
@@ -504,7 +509,9 @@ namespace Marle {
             const std::string checksumText = Simulation::ChecksumText(checksum);
 
             int code = 0;
+            const std::vector<ExpectedEvent> missingEvents = eventsChecked ? MissingExpectedEvents(recording.ExpectedEvents, events) : std::vector<ExpectedEvent>();
             if (checksComparison && recording.Checksum != checksum) code = 1;
+            if (!missingEvents.empty()) code = 1;
             if (!expect.empty() && expect != checksumText) code = 1;
 
             Json eventList = Json::array();
@@ -530,10 +537,27 @@ namespace Marle {
                 for (const Touch& t : touches)
                     overlapList.push_back({ { "trigger", t.Pair.Trigger }, { "other", t.Pair.Other }, { "first_step", t.First }, { "last_step", t.Last }, { "steps_touching", t.Steps }, { "times_entered", t.Entered } });
 
+                Json input = nullptr;
+                if (hasRecording) {
+                    input = { { "recording", recordingFile }, { "steps", recorded } };
+                    if (!recording.SceneFile.empty()) input["scene_file"] = recording.SceneFile;
+                    if (!recording.Description.empty()) input["description"] = recording.Description;
+                }
                 Json result = { { "version", JsonVersion }, { "ok", code == 0 }, { "file", file }, { "steps_run", steps }, { "seed", scene.GetSeed() },
-                                { "input", hasRecording ? Json({ { "recording", recordingFile }, { "steps", recorded } }) : Json(nullptr) },
+                                { "input", input },
                                 { "checksum", checksumText }, { "changes", std::move(changeList) }, { "overlaps", std::move(overlapList) } };
                 if (!reportFile.empty()) result["events"] = eventList;
+                if (eventsChecked) {
+                    Json missing = Json::array();
+                    for (const ExpectedEvent& event : missingEvents) {
+                        Json item = { { "step", event.Step }, { "kind", event.Kind }, { "entity", event.Entity } };
+                        if (!event.Other.empty()) item["other"] = event.Other;
+                        if (!event.Axis.empty()) item["axis"] = event.Axis;
+                        missing.push_back(std::move(item));
+                    }
+                    result["expected_events"] = { { "count", recording.ExpectedEvents.size() }, { "missing", std::move(missing) } };
+                    result["matches_events"] = missingEvents.empty();
+                }
                 if (checksComparison) result["recording_checksum"] = Simulation::ChecksumText(recording.Checksum), result["matches_recording"] = recording.Checksum == checksum;
                 if (!expect.empty()) result["expected_checksum"] = expect, result["matches_expected"] = expect == checksumText;
                 PrintJson(out, result);
@@ -546,6 +570,7 @@ namespace Marle {
             if (hasRecording) out << ", input from " << recordingFile << " (" << Plural((size_t)recorded, "step") << (steps > recorded ? "; no input after that" : steps < recorded ? "; stopped early" : "") << ")";
             else out << ", no input";
             out << "\n";
+            if (hasRecording && !recording.Description.empty()) out << "recording: " << recording.Description << "\n";
 
             constexpr size_t MaxLines = 40;
             if (changes.empty()) out << "nothing changed\n";
@@ -564,6 +589,10 @@ namespace Marle {
             if (checksComparison) {
                 if (recording.Checksum == checksum) out << "OK    matches the checksum in the recording\n";
                 else out << "DIFF  the recording says " << Simulation::ChecksumText(recording.Checksum) << ": this run is not the one it was made from\n";
+            }
+            if (eventsChecked) {
+                if (missingEvents.empty()) out << "OK    the " << Plural(recording.ExpectedEvents.size(), "expected event") << " all happened\n";
+                for (const ExpectedEvent& event : missingEvents) out << "DIFF  expected event did not happen: " << ExpectedEventText(event) << "\n";
             }
             if (!expect.empty()) {
                 if (expect == checksumText) out << "OK    matches --expect\n";

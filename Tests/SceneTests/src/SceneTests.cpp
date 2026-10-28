@@ -3552,7 +3552,10 @@ int main(int argc, char** argv)
             Simulation::Step(registry, *live.Scene, frame, 1.0 / 60.0);
         }
         const uint64_t liveChecksum = Simulation::Checksum(registry, *live.Scene);
-        const std::string recordingText = WriteRecording(recorder.Finish(liveChecksum)).Text;
+        InputRecording scripted = recorder.Finish(liveChecksum);
+        scripted.SceneFile = world;
+        scripted.Description = "1200 steps of scripted random input (seed 2024) on the whole world";
+        const std::string recordingText = WriteRecording(scripted).Text;
 
         // the committed copy is this run: if world.json, a behavior or the generator changes the run, this
         // fails, and MARLE_UPDATE_GOLDEN=1 rewrites it once the change is meant
@@ -3647,16 +3650,28 @@ int main(int argc, char** argv)
             text += "|";
             digest = digest * 1099511628211ull ^ Fnv1a64(text.data(), text.size());
         };
+        std::vector<StampedEvent> runEvents;
         for (int i = 0; i < steps; i++) {
             recorder.Record(frames[i]);
-            Simulation::Step(registry, *live.Scene, frames[i], 1.0 / 60.0);
+            std::vector<SimulationEvent> stepEvents;
+            Simulation::Step(registry, *live.Scene, frames[i], 1.0 / 60.0, &stepEvents);
+            for (SimulationEvent& event : stepEvents) runEvents.push_back({ i, std::move(event) });
             mixOverlaps(*live.Scene, overlapDigest);
             entered += (int)live.Scene->GetOverlaps().Entered.size();
             left += (int)live.Scene->GetOverlaps().Left.size();
             if (std::find(legEnd.begin(), legEnd.end(), i + 1) != legEnd.end()) atLegEnd.push_back(live.Scene->FindEntity("player").Get<Transform>().Position);
         }
         const uint64_t checksum = Simulation::Checksum(registry, *live.Scene);
-        const std::string recordingText = WriteRecording(recorder.Finish(checksum)).Text;
+        InputRecording made = recorder.Finish(checksum);
+        made.SceneFile = world;
+        made.Description = "into the pillar, past it, through the trigger zone, along wall_b and into the border's corner";
+        bool firstStop = true;
+        for (const StampedEvent& event : runEvents) {   // what the route must keep doing: the first stop, and entering and leaving the zone
+            if (event.What.What == SimulationEvent::Kind::SolidStopped && !firstStop) continue;
+            firstStop = firstStop && event.What.What != SimulationEvent::Kind::SolidStopped;
+            made.ExpectedEvents.push_back({ (unsigned)event.Step, SimulationEventKindName(event.What.What), event.What.Entity, event.What.Other, event.What.Axis });
+        }
+        const std::string recordingText = WriteRecording(made).Text;
 
         // it ran into what it should have
         auto at = [&](size_t leg, glm::vec2 expected) { return fabsf(atLegEnd[leg].x - expected.x) < 0.1f && fabsf(atLegEnd[leg].y - expected.y) < 0.1f; };
@@ -3803,6 +3818,61 @@ int main(int argc, char** argv)
                 }
                 CHECK(Simulation::Checksum(registry, *a.Scene) == Simulation::Checksum(registry, *b.Scene) && !sink.empty(), "collecting events does not change the run");
                 CHECK(std::string(SimulationEventKindName(SimulationEvent::Kind::TriggerEntered)) == "trigger_entered" && std::string(SimulationEventKindName(SimulationEvent::Kind::SolidStopped)) == "solid_stopped", "event kinds have their names");
+            }
+
+            // a golden recording says what it stands for, and simulate checks it
+            {
+                CHECK(read.Recording.SceneFile == world && !read.Recording.Description.empty() && read.Recording.ExpectedEvents.size() == 3, "the committed route carries its scene file, description and three expected events");
+                CHECK(Contains(text.Out, "recording: into the pillar") && Contains(text.Out, "OK    the 3 expected events all happened"), "simulate prints the description and that the expected events happened");
+                CHECK(!doc.is_discarded() && doc["matches_events"] == true && doc["expected_events"]["count"] == 3 && doc["expected_events"]["missing"].empty() && doc["input"]["scene_file"] == world && doc["input"].contains("description"), "and so does its JSON");
+
+                // an event the run does not have: one step off, as if a change moved the zone
+                InputRecording off = read.Recording;
+                off.ExpectedEvents[1].Step += 1;
+                const std::string offFile = "scene_tool_events_off.recording.json";
+                WriteFile(offFile, WriteRecording(off).Text);
+                ToolRun missingRun = RunTool(registry, { "simulate", world, "--recording", offFile });
+                CHECK(missingRun.Code == 1 && Contains(missingRun.Out, "DIFF  expected event did not happen: step 247 trigger_entered zone > player") && Contains(missingRun.Out, "OK    matches the checksum in the recording") && !Contains(missingRun.Out, "step 52 solid_stopped player on x\n"), "a missing event fails the run, says which, and leaves the checksum check on its own");
+                Json missingJson = Json::parse(RunTool(registry, { "simulate", world, "--recording", offFile, "--json" }).Out, nullptr, false);
+                CHECK(!missingJson.is_discarded() && missingJson["ok"] == false && missingJson["matches_events"] == false && missingJson["matches_recording"] == true && missingJson["expected_events"]["missing"].size() == 1 && missingJson["expected_events"]["missing"][0]["step"] == 247, "the JSON lists the missing events");
+                CHECK(RunTool(registry, { "simulate", world, "--recording", offFile, "--steps", "300" }).Code == 0, "events are only checked when the whole run is played, like the checksum");
+                std::filesystem::remove(offFile);
+
+                // they are looked for in order, and extra events in between are fine
+                const std::vector<StampedEvent> run = { { 5, { SimulationEvent::Kind::SolidStopped, "p", "", "x" } }, { 7, { SimulationEvent::Kind::TriggerEntered, "z", "p", "" } }, { 9, { SimulationEvent::Kind::TriggerLeft, "z", "p", "" } } };
+                CHECK(MissingExpectedEvents({ { 7, "trigger_entered", "z", "p", "" }, { 9, "trigger_left", "z", "p", "" } }, run).empty(), "expected events may skip events of the run");
+                std::vector<ExpectedEvent> wrongOrder = MissingExpectedEvents({ { 9, "trigger_left", "z", "p", "" }, { 7, "trigger_entered", "z", "p", "" } }, run);
+                CHECK(wrongOrder.size() == 1 && wrongOrder[0].Step == 7 && ExpectedEventText(wrongOrder[0]) == "step 7 trigger_entered z > p", "but must come in the order listed");
+                CHECK(MissingExpectedEvents({ { 5, "solid_stopped", "p", "", "y" } }, run).size() == 1 && MissingExpectedEvents({ { 5, "solid_stopped", "p", "", "x" } }, run).empty(), "the axis has to match too");
+            }
+
+            // reading and writing the manifest
+            {
+                InputRecording made;
+                made.SceneName = "m"; made.SceneHash = 1; made.Frames.resize(10);
+                made.SceneFile = "Assets/Scenes/m.json"; made.Description = "walks \"left\"";
+                made.ExpectedEvents = { { 2, "solid_stopped", "p", "", "xy" }, { 4, "trigger_entered", "z", "p", "" } };
+                RecordingWriteResult written = WriteRecording(made);
+                RecordingReadResult back = ReadRecording(written.Text);
+                CHECK(written.Ok() && back.Ok() && back.Recording.SceneFile == made.SceneFile && back.Recording.Description == made.Description && back.Recording.ExpectedEvents.size() == 2 && back.Recording.ExpectedEvents[0].Axis == "xy" && WriteRecording(back.Recording).Text == written.Text, "scene file, description and expected events survive being written and read");
+
+                InputRecording plain = made;
+                plain.SceneFile.clear(); plain.Description.clear(); plain.ExpectedEvents.clear();
+                CHECK(!Contains(WriteRecording(plain).Text, "sceneFile") && !Contains(WriteRecording(plain).Text, "expectedEvents"), "without them none of the keys are written");
+
+                InputRecording late = made;
+                late.ExpectedEvents[1].Step = 10;
+                late.ExpectedEvents[0].Kind = "exploded";
+                RecordingWriteResult refused = WriteRecording(late);
+                CHECK(!refused.Ok() && refused.Problems.size() == 2, "an event past the end or of an unknown kind cannot be written");
+
+                auto readWith = [&](const std::string& events) { return ReadRecording("{ \"version\": 1, \"scene\": \"m\", \"sceneHash\": \"0000000000000001\", \"seed\": 1, \"stepsPerSecond\": 60, \"steps\": 10, \"expectedEvents\": " + events + ", \"changes\": [] }"); };
+                auto hasProblem = [&](const RecordingReadResult& r, const std::string& part) { for (const std::string& p : r.Problems) if (Contains(p, part)) return true; return false; };
+                CHECK(hasProblem(readWith("{}"), "/expectedEvents: expected an array") && hasProblem(readWith("[3]"), "/expectedEvents/0: an event must be an object"), "expectedEvents has to be an array of objects");
+                CHECK(hasProblem(readWith("[{ \"step\": 3, \"kind\": \"trigger_entred\", \"entity\": \"z\", \"other\": \"p\" }]"), "(did you mean 'trigger_entered'?)"), "a misspelled kind gets a suggestion");
+                CHECK(hasProblem(readWith("[{ \"step\": 30, \"kind\": \"trigger_left\", \"entity\": \"z\", \"other\": \"p\" }]"), "outside the recording") && hasProblem(readWith("[{ \"step\": 4, \"kind\": \"trigger_left\", \"entity\": \"z\", \"other\": \"p\" }, { \"step\": 3, \"kind\": \"trigger_left\", \"entity\": \"z\", \"other\": \"p\" }]"), "step order"), "steps must be inside the recording and in order");
+                CHECK(hasProblem(readWith("[{ \"step\": 3, \"kind\": \"solid_stopped\", \"entity\": \"p\" }]"), "has an axis") && hasProblem(readWith("[{ \"step\": 3, \"kind\": \"trigger_left\", \"entity\": \"z\" }]"), "has an 'other' entity") && hasProblem(readWith("[{ \"step\": 3, \"kind\": \"trigger_left\", \"entity\": \"z\", \"other\": \"p\", \"colour\": 1 }]"), "unknown key 'colour'"), "each kind has the fields it needs, and no others");
+                CHECK(readWith("[]").Ok() && ReadRecording("{ \"version\": 1, \"scene\": \"m\", \"sceneHash\": \"0000000000000001\", \"seed\": 1, \"stepsPerSecond\": 60, \"steps\": 0, \"description\": \"\", \"changes\": [] }").Problems.size() == 1, "an empty list is fine, an empty description is not");
             }
         }
 
